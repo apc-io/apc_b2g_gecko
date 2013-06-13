@@ -285,6 +285,7 @@ var shell = {
     window.addEventListener('MozApplicationManifest', this);
     window.addEventListener('mozfullscreenchange', this);
     window.addEventListener('sizemodechange', this);
+    window.addEventListener('mousemove', this, true);
     this.contentBrowser.addEventListener('mozbrowserloadstart', this, true);
 
     CustomEventManager.init();
@@ -314,6 +315,7 @@ var shell = {
   },
 
   stop: function shell_stop() {
+    window.removeEventListener('mousemove', this, true);
     window.removeEventListener('keydown', this, true);
     window.removeEventListener('keypress', this, true);
     window.removeEventListener('keyup', this, true);
@@ -498,6 +500,11 @@ var shell = {
         } catch (e) {
           dump('Error while creating offline cache: ' + e + '\n');
         }
+        break;
+      case 'mousemove':
+        var cbox = document.getElementById("cursorbox");
+        cbox.style.left = (evt.screenX + 3) + "px";
+        cbox.style.top = (evt.screenY + 3) + "px";
         break;
     }
   },
