@@ -329,6 +329,21 @@ int32_t EventHub::getKeyCodeState(int32_t deviceId, int32_t keyCode) const {
     return AKEY_STATE_UNKNOWN;
 }
 
+char16_t EventHub::getCharCode(int32_t deviceId, int32_t keyCode, int32_t metaState) const
+{
+    Device * d = mDevices.valueFor(deviceId);
+    if (d == 0) {
+        std::printf("No such device %d\n", deviceId);
+        return 0;
+    }
+
+    if (d->keyMap.haveKeyCharacterMap()) {
+        return d->keyMap.keyCharacterMap->getCharacter(keyCode, metaState);
+    }
+
+    return 0;
+}
+
 int32_t EventHub::getSwitchState(int32_t deviceId, int32_t sw) const {
     if (sw >= 0 && sw <= SW_MAX) {
         AutoMutex _l(mLock);
@@ -698,6 +713,10 @@ size_t EventHub::getEvents(int timeoutMillis, RawEvent* buffer, size_t bufferSiz
                                         &event->keyCode, &event->flags);
                             ALOGV("iev.code=%d keyCode=%d flags=0x%08x err=%d\n",
                                     iev.code, event->keyCode, event->flags, err);
+//                            if (device->keyMap.haveKeyCharacterMap()) {
+//                                char16_t charCode = device->keyMap.keyCharacterMap->getCharacter(event->keyCode, 1);
+//                                std::printf("==== the charCode with metaState == 1 is %d\n", charCode);
+//                            }
                         }
                         event += 1;
                     }

@@ -922,7 +922,7 @@ private:
     bool isKeyboardOrGamepadKey(int32_t scanCode);
 
     void processKey(nsecs_t when, bool down, int32_t keyCode, int32_t scanCode,
-            uint32_t policyFlags);
+            uint32_t policyFlags, uint32_t deviceId);
 
     ssize_t findKeyDown(int32_t scanCode);
 

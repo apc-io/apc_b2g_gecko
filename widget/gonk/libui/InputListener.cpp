@@ -45,10 +45,11 @@ void NotifyConfigurationChangedArgs::notify(const sp<InputListenerInterface>& li
 NotifyKeyArgs::NotifyKeyArgs(nsecs_t eventTime, int32_t deviceId, uint32_t source,
         uint32_t policyFlags,
         int32_t action, int32_t flags, int32_t keyCode, int32_t scanCode,
-        int32_t metaState, nsecs_t downTime) :
+        int32_t metaState, nsecs_t downTime, char16_t charCode) :
         eventTime(eventTime), deviceId(deviceId), source(source), policyFlags(policyFlags),
         action(action), flags(flags), keyCode(keyCode), scanCode(scanCode),
-        metaState(metaState), downTime(downTime) {
+        metaState(metaState), downTime(downTime), charCode(charCode) {
+//    std::printf("%s::charCode is %d\n", __PRETTY_FUNCTION__, charCode);
 }
 
 NotifyKeyArgs::NotifyKeyArgs(const NotifyKeyArgs& other) :
@@ -56,7 +57,7 @@ NotifyKeyArgs::NotifyKeyArgs(const NotifyKeyArgs& other) :
         policyFlags(other.policyFlags),
         action(other.action), flags(other.flags),
         keyCode(other.keyCode), scanCode(other.scanCode),
-        metaState(other.metaState), downTime(other.downTime) {
+        metaState(other.metaState), downTime(other.downTime), charCode(other.charCode) {
 }
 
 void NotifyKeyArgs::notify(const sp<InputListenerInterface>& listener) const {

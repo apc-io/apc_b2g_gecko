@@ -55,6 +55,11 @@
 #define INDENT4 "        "
 #define INDENT5 "          "
 
+//#include <cstdio>
+
+//#define LOG_FUNC() std::printf("%s:%d:%s\n", __FILE__, __LINE__, __PRETTY_FUNCTION__)
+#define LOG_FUNC()
+
 namespace android {
 
 // --- Constants ---
@@ -257,6 +262,7 @@ InputReader::~InputReader() {
 }
 
 void InputReader::loopOnce() {
+    LOG_FUNC();
     int32_t timeoutMillis;
     { // acquire lock
         AutoMutex _l(mLock);
@@ -303,6 +309,7 @@ void InputReader::loopOnce() {
 }
 
 void InputReader::processEventsLocked(const RawEvent* rawEvents, size_t count) {
+    LOG_FUNC();
     for (const RawEvent* rawEvent = rawEvents; count;) {
         int32_t type = rawEvent->type;
         size_t batchSize = 1;
@@ -444,6 +451,7 @@ InputDevice* InputReader::createDeviceLocked(int32_t deviceId,
 
 void InputReader::processEventsForDeviceLocked(int32_t deviceId,
         const RawEvent* rawEvents, size_t count) {
+    LOG_FUNC();
     ssize_t deviceIndex = mDevices.indexOfKey(deviceId);
     if (deviceIndex < 0) {
         ALOGW("Discarding event for unknown deviceId %d.", deviceId);
@@ -926,6 +934,7 @@ void InputDevice::reset(nsecs_t when) {
 }
 
 void InputDevice::process(const RawEvent* rawEvents, size_t count) {
+    LOG_FUNC();
     // Process all of the events in order for each mapper.
     // We cannot simply ask each mapper to process them in bulk because mappers may
     // have side-effects that must be interleaved.  For example, joystick movement events and
@@ -1840,12 +1849,16 @@ void KeyboardInputMapper::reset(nsecs_t when) {
 }
 
 void KeyboardInputMapper::process(const RawEvent* rawEvent) {
+    LOG_FUNC();
     switch (rawEvent->type) {
     case EV_KEY: {
         int32_t scanCode = rawEvent->scanCode;
         if (isKeyboardOrGamepadKey(scanCode)) {
+//            std::printf("Ok, so we can processKey here ...\n");
             processKey(rawEvent->when, rawEvent->value != 0, rawEvent->keyCode, scanCode,
-                    rawEvent->flags);
+                    rawEvent->flags, rawEvent->deviceId);
+//        } else {
+//            std::printf("Not keyboard or gamepad key ..ignore then\n");
         }
         break;
     }
@@ -1860,7 +1873,8 @@ bool KeyboardInputMapper::isKeyboardOrGamepadKey(int32_t scanCode) {
 }
 
 void KeyboardInputMapper::processKey(nsecs_t when, bool down, int32_t keyCode,
-        int32_t scanCode, uint32_t policyFlags) {
+        int32_t scanCode, uint32_t policyFlags, uint32_t deviceId) {
+    LOG_FUNC();
 
     if (down) {
         // Rotate key codes according to orientation if needed.
@@ -1933,9 +1947,13 @@ void KeyboardInputMapper::processKey(nsecs_t when, bool down, int32_t keyCode,
         getContext()->fadePointer();
     }
 
+    char16_t charCode;
+    // now we'll get char code here
+    charCode = getEventHub()->getCharCode(deviceId, keyCode, newMetaState);
     NotifyKeyArgs args(when, getDeviceId(), mSource, policyFlags,
             down ? AKEY_EVENT_ACTION_DOWN : AKEY_EVENT_ACTION_UP,
-            AKEY_EVENT_FLAG_FROM_SYSTEM, keyCode, scanCode, newMetaState, downTime);
+            AKEY_EVENT_FLAG_FROM_SYSTEM, keyCode, scanCode, newMetaState, downTime, charCode);
+//    std::printf("GOnna notify listener, metaState is %d\n", newMetaState);
     getListener()->notifyKey(&args);
 }
 
