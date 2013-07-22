@@ -24,6 +24,8 @@
 #include "OrientationObserver.h"
 #include "mozilla/HalSensor.h"
 
+#include "cutils/properties.h"
+
 using namespace mozilla;
 using namespace dom;
 
@@ -46,6 +48,16 @@ const static int sDefaultPortrait = 0;
 
 static uint32_t sOrientationOffset = 0;
 
+static uint32_t sOrientationSensorAvail = 0;
+static uint32_t sScreenRotationLock = 0;
+
+#define HW_SENSOR_ORIENTATION_AVAIL_PROP "hw.sensor.orientation.avail"
+
+static inline bool
+OrientationSensorAvail() {
+  return (sOrientationSensorAvail != 0);
+}
+
 static already_AddRefed<nsIScreen>
 GetPrimaryScreen()
 {
@@ -56,6 +68,19 @@ GetPrimaryScreen()
   nsCOMPtr<nsIScreen> screen;
   screenMgr->GetPrimaryScreen(getter_AddRefs(screen));
   return screen.forget();
+}
+
+static void
+DetectOrientationSensorAvail() {
+  // FIXME: is there anyway to get this information from hardware sensor?
+  char propValue[PROPERTY_VALUE_MAX];
+  // this property is not defined by Android, so the default value should be available: 1
+  property_get(HW_SENSOR_ORIENTATION_AVAIL_PROP, propValue, "1");
+
+  sOrientationSensorAvail = atoi(propValue);
+  if (!OrientationSensorAvail()) {
+    sScreenRotationLock = 0;
+  }
 }
 
 static void
@@ -170,6 +195,7 @@ OrientationObserver::OrientationObserver()
   , mAllowedOrientations(sDefaultOrientations)
 {
   DetectDefaultOrientation();
+  DetectOrientationSensorAvail();
 
   EnableAutoOrientation();
 }
@@ -260,7 +286,7 @@ OrientationObserver::Notify(const hal::SensorData& aSensorData)
 void
 OrientationObserver::EnableAutoOrientation()
 {
-  MOZ_ASSERT(NS_IsMainThread() && !mAutoOrientationEnabled);
+  MOZ_ASSERT(NS_IsMainThread() && OrientationSensorAvail() && !mAutoOrientationEnabled);
 
   hal::RegisterSensorObserver(hal::SENSOR_ORIENTATION, this);
   mAutoOrientationEnabled = true;
@@ -272,7 +298,7 @@ OrientationObserver::EnableAutoOrientation()
 void
 OrientationObserver::DisableAutoOrientation()
 {
-  MOZ_ASSERT(NS_IsMainThread() && mAutoOrientationEnabled);
+  MOZ_ASSERT(NS_IsMainThread() && OrientationSensorAvail() && mAutoOrientationEnabled);
 
   hal::UnregisterSensorObserver(hal::SENSOR_ORIENTATION, this);
   mAutoOrientationEnabled = false;
@@ -303,6 +329,11 @@ OrientationObserver::LockScreenOrientation(ScreenOrientation aOrientation)
 
   nsCOMPtr<nsIScreen> screen = GetPrimaryScreen();
   NS_ENSURE_TRUE(screen, false);
+
+  if (!OrientationSensorAvail()) {
+    screen->SetRotation(sScreenRotationLock);
+    return true;
+  }
 
   uint32_t currRotation;
   nsresult rv = screen->GetRotation(&currRotation);
@@ -337,7 +368,7 @@ OrientationObserver::LockScreenOrientation(ScreenOrientation aOrientation)
 void
 OrientationObserver::UnlockScreenOrientation()
 {
-  if (!mAutoOrientationEnabled) {
+  if (OrientationSensorAvail() && !mAutoOrientationEnabled) {
     EnableAutoOrientation();
   }
 
