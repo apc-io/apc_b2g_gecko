@@ -42,6 +42,8 @@
 #include "Keyboard.h"
 #include "VirtualKeyMap.h"
 
+#include "android_keycodes.h"
+
 #include <stddef.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -61,6 +63,41 @@
 #define LOG_FUNC()
 
 namespace android {
+
+// --- This is for numkey pad handling when numlock is off ---
+struct NumKeyMap {
+    uint32_t originalKeyCode;
+    uint32_t modifedKeyCode;
+};
+
+static const NumKeyMap sNumLockKeyMaps[] = {
+    { AKEYCODE_NUMPAD_2, AKEYCODE_DPAD_DOWN },
+    { AKEYCODE_NUMPAD_4, AKEYCODE_DPAD_LEFT },
+    { AKEYCODE_NUMPAD_6, AKEYCODE_DPAD_RIGHT },
+    { AKEYCODE_NUMPAD_8, AKEYCODE_DPAD_UP },
+    { AKEYCODE_NUMPAD_DOT, AKEYCODE_FORWARD_DEL },
+    { -1, -1 },
+};
+
+static uint32_t translateNumKeyCode(uint32_t originalKeyCode, uint32_t metaState) {
+    if (metaState == AMETA_NUM_LOCK_ON) { // numlock is on, so just leave it as it is
+        return originalKeyCode;
+    }
+
+    if (originalKeyCode < AKEYCODE_NUMPAD_0 || originalKeyCode > AKEYCODE_NUMPAD_DOT) {
+        return originalKeyCode; // not a key in the numpad
+    }
+
+    int i = 0;
+    while (sNumLockKeyMaps[i].originalKeyCode != -1) {
+        if (originalKeyCode == sNumLockKeyMaps[i].originalKeyCode) {
+            return sNumLockKeyMaps[i].modifedKeyCode;
+        }
+        i++;
+    }
+
+    return originalKeyCode;
+}
 
 // --- Constants ---
 
@@ -1950,9 +1987,14 @@ void KeyboardInputMapper::processKey(nsecs_t when, bool down, int32_t keyCode,
     char16_t charCode;
     // now we'll get char code here
     charCode = getEventHub()->getCharCode(deviceId, keyCode, newMetaState);
+    uint32_t finalKeyCode = keyCode;
+    // handling numpad
+    if (charCode == 0) {
+        finalKeyCode = translateNumKeyCode(keyCode, newMetaState);
+    }
     NotifyKeyArgs args(when, getDeviceId(), mSource, policyFlags,
             down ? AKEY_EVENT_ACTION_DOWN : AKEY_EVENT_ACTION_UP,
-            AKEY_EVENT_FLAG_FROM_SYSTEM, keyCode, scanCode, newMetaState, downTime, charCode);
+            AKEY_EVENT_FLAG_FROM_SYSTEM, finalKeyCode, scanCode, newMetaState, downTime, charCode);
 //    std::printf("GOnna notify listener, metaState is %d\n", newMetaState);
     getListener()->notifyKey(&args);
 }
