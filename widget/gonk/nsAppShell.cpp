@@ -264,8 +264,8 @@ public:
     virtual int32_t getButtonState() const;
     virtual void setPosition(float x, float y);
     virtual void getPosition(float* outX, float* outY) const;
-    virtual void fade(Transition transition) {}
-    virtual void unfade(Transition transition) {}
+    virtual void fade(Transition transition);
+    virtual void unfade(Transition transition);
     virtual void setPresentation(Presentation presentation) {}
     virtual void setSpots(const PointerCoords* spotCoords, const uint32_t* spotIdToIndex,
             BitSet32 spotIdBits) {}
@@ -302,6 +302,7 @@ GeckoPointerController::move(float deltaX, float deltaY)
 
     mX = clamped(mX + deltaX, minX, maxX);
     mY = clamped(mY + deltaY, minY, maxY);
+    nsWindow::MoveMouse(int(mX), int(mY));
 }
 
 void
@@ -321,6 +322,7 @@ GeckoPointerController::setPosition(float x, float y)
 {
     mX = x;
     mY = y;
+    nsWindow::MoveMouse(int(mX), int(mY));
 }
 
 void
@@ -328,6 +330,16 @@ GeckoPointerController::getPosition(float* outX, float* outY) const
 {
     *outX = mX;
     *outY = mY;
+}
+
+void
+GeckoPointerController::fade(Transition transition) {
+    nsWindow::ShowMouse(false);
+}
+
+void
+GeckoPointerController::unfade(Transition transition) {
+    nsWindow::ShowMouse(true);
 }
 
 class GeckoInputReaderPolicy : public InputReaderPolicyInterface {

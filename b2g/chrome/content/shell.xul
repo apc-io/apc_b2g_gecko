@@ -23,5 +23,5 @@
   <script type="application/javascript" src="chrome://browser/content/runapp.js"/>
 #endif
   <!-- The html:iframe containing the UI is created here. -->
-  <div id="cursorbox" style="border: 2px solid #fff; position: fixed; padding-left: 7px; padding-top: 7px; background: #000"/>
+  <div id="cursorbox"/>
 </window>

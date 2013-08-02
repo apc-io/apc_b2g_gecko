@@ -101,6 +101,8 @@ public:
                         bool* aAllowRetaining = nullptr);
     gfxASurface* GetThebesSurface();
 
+    void DrawWindowOverlay(LayerManager* aManager, nsIntRect aRect);
+
     NS_IMETHOD_(void) SetInputContext(const InputContext& aContext,
                                       const InputContextAction& aAction);
     NS_IMETHOD_(InputContext) GetInputContext();
@@ -111,6 +113,9 @@ public:
     virtual bool NeedsPaint();
 
     virtual Composer2D* GetComposer2D() MOZ_OVERRIDE;
+
+    static void MoveMouse(int aX, int aY);
+    static void ShowMouse(bool aShow = true);
 
 protected:
     nsWindow* mParent;

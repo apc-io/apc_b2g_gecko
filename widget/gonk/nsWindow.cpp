@@ -43,6 +43,8 @@
 #include "cutils/properties.h"
 #include "BasicLayers.h"
 
+#include "MouseCursorSupport.h"
+
 #define LOG(args...)  __android_log_print(ANDROID_LOG_INFO, "Gonk" , ## args)
 #define LOGW(args...) __android_log_print(ANDROID_LOG_WARN, "Gonk", ## args)
 #define LOGE(args...) __android_log_print(ANDROID_LOG_ERROR, "Gonk", ## args)
@@ -72,6 +74,8 @@ static bool sUsingHwc;
 static bool sScreenInitialized;
 static nsRefPtr<gfxASurface> sOMTCSurface;
 static pthread_t sFramebufferWatchThread;
+
+static MouseCursorSupport sMouseCursorSupport;
 
 namespace {
 
@@ -619,6 +623,11 @@ nsWindow::GetThebesSurface()
 }
 
 void
+nsWindow::DrawWindowOverlay(LayerManager* aManager, nsIntRect aRect) {
+    sMouseCursorSupport.Render(aManager, aRect);
+}
+
+void
 nsWindow::BringToTop()
 {
     if (!sTopWindows.IsEmpty()) {
@@ -683,6 +692,20 @@ nsWindow::GetComposer2D()
         return hwc->Initialized() ? hwc : nullptr;
     }
     return nullptr;
+}
+
+void
+nsWindow::MoveMouse(int aX, int aY) {
+    if (sMouseCursorSupport.SetPosition(aX, aY)) {
+        // TODO: how can we call refresh here?
+    }
+}
+
+void
+nsWindow::ShowMouse(bool aShow) {
+    if (sMouseCursorSupport.SetVisible(aShow)) {
+        // TODO: how can we call refresh here?
+    }
 }
 
 // nsScreenGonk.cpp
