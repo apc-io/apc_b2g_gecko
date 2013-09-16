@@ -19,6 +19,7 @@ const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/Sntp.jsm");
 
 var RIL = {};
 Cu.import("resource://gre/modules/ril_consts.js", RIL);
@@ -53,8 +54,13 @@ const kSmsDeliveryErrorObserverTopic     = "sms-delivery-error";
 const kMozSettingsChangedObserverTopic   = "mozsettings-changed";
 const kSysMsgListenerReadyObserverTopic  = "system-message-listener-ready";
 const kSysClockChangeObserverTopic       = "system-clock-change";
-const kTimeNitzAutomaticUpdateEnabled    = "time.nitz.automatic-update.enabled";
-const kTimeNitzAvailable                 = "time.nitz.available";
+//const kTimeNitzAutomaticUpdateEnabled    = "time.nitz.automatic-update.enabled";
+//const kTimeNitzAvailable                 = "time.nitz.available";
+const kClockAutoUpdateEnabled            = "time.clock.automatic-update.enabled";
+const kClockAutoUpdateAvailable          = "time.clock.automatic-update.available";
+const kTimezoneAutoUpdateEnabled         = "time.timezone.automatic-update.enabled";
+const kTimezoneAutoUpdateAvailable       = "time.timezone.automatic-update.available";
+
 const kCellBroadcastSearchList           = "ril.cellbroadcast.searchlist";
 const kCellBroadcastDisabled             = "ril.cellbroadcast.disabled";
 const kPrefenceChangedObserverTopic      = "nsPref:changed";
@@ -307,12 +313,25 @@ function RadioInterfaceLayer() {
   lock.get("ril.supl.httpProxyHost", this);
   lock.get("ril.supl.httpProxyPort", this);
 
-  // Read the 'time.nitz.automatic-update.enabled' setting to see if
-  // we need to adjust the system clock time and time zone by NITZ.
-  lock.get(kTimeNitzAutomaticUpdateEnabled, this);
+  // Read the 'time.clock.automatic-update.enabled' setting to see if
+  // we need to adjust the system clock time and time zone by NITZ or SNTP.
+//  lock.get(kTimeNitzAutomaticUpdateEnabled, this);
+  lock.get(kClockAutoUpdateEnabled, this);
+
+ // Read the 'time.timezone.automatic-update.enabled' setting to see if
+  // we need to adjust the system timezone by NITZ.
+  lock.get(kTimezoneAutoUpdateEnabled, this);
+
+  // Set "time.clock.automatic-update.available" to false when starting up.
+  this.setClockAutoUpdateAvailable(false);
+
+  // Set "time.timezone.automatic-update.available" to false when starting up.
+  this.setTimezoneAutoUpdateAvailable(false);
 
   // Set "time.nitz.available" to false when starting up.
-  this.setNitzAvailable(false);
+//  this.setNitzAvailable(false);
+
+
 
   // Read the Cell Broadcast Search List setting, string of integers or integer
   // ranges separated by comma, to set listening channels.
@@ -342,6 +361,7 @@ function RadioInterfaceLayer() {
   Services.obs.addObserver(this, kSysMsgListenerReadyObserverTopic, false);
   Services.obs.addObserver(this, kSysClockChangeObserverTopic, false);
 
+  Services.obs.addObserver(this, kNetworkInterfaceStateChangedTopic, false);
   Services.prefs.addObserver(kCellBroadcastDisabled, this, false);
 
   this._sentSmsEnvelopes = {};
@@ -350,6 +370,13 @@ function RadioInterfaceLayer() {
   this.portAddressedSmsApps[WAP.WDP_PORT_PUSH] = this.handleSmsWdpPortPush.bind(this);
 
   this._targetMessageQueue = [];
+
+  this._sntp = new Sntp(this.setClockBySntp.bind(this),
+                            Services.prefs.getIntPref('network.sntp.maxRetryCount'),
+                            Services.prefs.getIntPref('network.sntp.refreshPeriod'),
+                            Services.prefs.getIntPref('network.sntp.timeout'),
+                            Services.prefs.getCharPref('network.sntp.pools').split(';'),
+                            Services.prefs.getIntPref('network.sntp.port'));
 }
 RadioInterfaceLayer.prototype = {
 
@@ -1639,20 +1666,41 @@ RadioInterfaceLayer.prototype = {
 
   /**
    * Set the setting value of "time.nitz.available".
+   * Set the setting value of "time.clock.automatic-update.available".
    */
-  setNitzAvailable: function setNitzAvailable(value) {
-    gSettingsService.createLock().set(kTimeNitzAvailable, value, null,
-                                      "fromInternalSetting");
+  //setNitzAvailable: function setNitzAvailable(value) {
+  //  gSettingsService.createLock().set(kTimeNitzAvailable, value, null,
+  //                                    "fromInternalSetting");
+  setClockAutoUpdateAvailable: function setClockAutoUpdateAvailable(value) {
+       gSettingsService.createLock().set(kClockAutoUpdateAvailable, value, null,
+                                           "fromInternalSetting");
   },
 
   /**
    * Set the NITZ message in our system time.
+   * Set the setting value of "time.timezone.automatic-update.available".
    */
-  setNitzTime: function setNitzTime(message) {
+  //setNitzTime: function setNitzTime(message) {
+     setTimezoneAutoUpdateAvailable: function setTimezoneAutoUpdateAvailable(value) {
+       gSettingsService.createLock().set(kTimezoneAutoUpdateAvailable, value, null,
+                                         "fromInternalSetting");
+     },
+   
+     /**
+      * Set the system clock by NITZ.
+      */
+  setClockByNitz: function setClockByNitz(message) {
+
     // To set the system clock time. Note that there could be a time diff
     // between when the NITZ was received and when the time is actually set.
     gTimeService.set(
       message.networkTimeInMS + (Date.now() - message.receiveTimeInMS));
+   },
+   
+     /**
+      * Set the system time zone by NITZ.
+      */
+     setTimezoneByNitz: function setTimezoneByNitz(message) {
 
     // To set the sytem timezone. Note that we need to convert the time zone
     // value to a UTC repesentation string in the format of "UTC(+/-)hh:mm".
@@ -1676,16 +1724,39 @@ RadioInterfaceLayer.prototype = {
    */
   handleNitzTime: function handleNitzTime(message) {
     // Got the NITZ info received from the ril_worker.
-    this.setNitzAvailable(true);
+    //this.setNitzAvailable(true);
+    this.setClockAutoUpdateAvailable(true);
+    this.setTimezoneAutoUpdateAvailable(true);
 
     // Cache the latest NITZ message whenever receiving it.
     this._lastNitzMessage = message;
 
     // Set the received NITZ time if the setting is enabled.
-    if (this._nitzAutomaticUpdateEnabled) {
-      this.setNitzTime(message);
+    //if (this._nitzAutomaticUpdateEnabled) {
+    //  this.setNitzTime(message);
+    if (this._clockAutoUpdateEnabled) {
+         this.setClockByNitz(message);
     }
+// Set the received NITZ timezone if the setting is enabled.
+       if (this._timezoneAutoUpdateEnabled) {
+         this.setTimezoneByNitz(message);
+       }
   },
+/**
+      * Set the system clock by SNTP.
+      */
+     setClockBySntp: function setClockBySntp(offset) {
+       // Got the SNTP info.
+       this.setClockAutoUpdateAvailable(true);
+       if (!this._clockAutoUpdateEnabled) {
+         return;
+       }
+       if (this._lastNitzMessage) {
+         debug("SNTP: NITZ available, discard SNTP");
+         return;
+       }
+       gTimeService.set(Date.now() + offset);
+    },
 
   handleICCMbdn: function handleICCMbdn(message) {
     let voicemailInfo = this.voicemailInfo;
@@ -1835,14 +1906,32 @@ RadioInterfaceLayer.prototype = {
         Services.obs.removeObserver(this, "xpcom-shutdown");
         Services.obs.removeObserver(this, kMozSettingsChangedObserverTopic);
         Services.obs.removeObserver(this, kSysClockChangeObserverTopic);
+	Services.obs.removeObserver(this, kNetworkInterfaceStateChangedTopic);
         Services.prefs.removeObserver(kCellBroadcastDisabled, this);
         break;
       case kSysClockChangeObserverTopic:
+	dump("==========kSysClockChangeObserverTopic========");
+	let offset = parseInt(data, 10);
         if (this._lastNitzMessage) {
-          this._lastNitzMessage.receiveTimeInMS += parseInt(data, 10);
+          //this._lastNitzMessage.receiveTimeInMS += parseInt(data, 10);
+	  this._lastNitzMessage.receiveTimeInMS += offset;
         }
+	this._sntp.updateOffset(offset);
         break;
-    }
+      case kNetworkInterfaceStateChangedTopic:
+	   dump("=====kNetworkInterfaceStateChangedTopic=============");
+           let network = subject.QueryInterface(Ci.nsINetworkInterface);
+           //if (network.state == Ci.nsINetworkInterface.NETWORK_STATE_CONNECTED) {
+             // Check SNTP when we have data connection, this may not take
+             // effect immediately before the setting get enabled.
+	     dump("=============Network connected=============");
+             if (this._sntp.isExpired()) {
+ 	     // We call request when init Sntp since cannot get this event.
+               //this._sntp.request();
+             }
+ 	   //}
+	break;
+     }
   },
 
   // Flag to determine whether the UI's system app is ready to receive
@@ -1866,11 +1955,19 @@ RadioInterfaceLayer.prototype = {
 
   // Flag to determine whether to use NITZ. It corresponds to the
   // 'time.nitz.automatic-update.enabled' setting from the UI.
-  _nitzAutomaticUpdateEnabled: null,
+  //_nitzAutomaticUpdateEnabled: null,
+  _clockAutoUpdateEnabled: null,
+
+  // Flag to determine whether to update system timezone automatically. It
+  // corresponds to the 'time.clock.automatic-update.enabled' setting.
+  _timezoneAutoUpdateEnabled: null,
 
   // Remember the last NITZ message so that we can set the time based on
   // the network immediately when users enable network-based time.
   _lastNitzMessage: null,
+
+  // Object that handles SNTP.
+  _sntp: null,
 
   // Cell Broadcast settings values.
   _cellBroadcastSearchListStr: null,
@@ -1878,14 +1975,39 @@ RadioInterfaceLayer.prototype = {
   handleSettingsChange: function handleSettingsChange(aName, aResult, aMessage) {
     // Don't allow any content processes to modify the setting
     // "time.nitz.available" except for the chrome process.
-    let isNitzAvailable = (this._lastNitzMessage !== null);
-    if (aName === kTimeNitzAvailable && aMessage !== "fromInternalSetting" &&
-        aResult !== isNitzAvailable) {
-      debug("Content processes cannot modify 'time.nitz.available'. Restore!");
+//    let isNitzAvailable = (this._lastNitzMessage !== null);
+//    if (aName === kTimeNitzAvailable && aMessage !== "fromInternalSetting" &&
+//        aResult !== isNitzAvailable) {
+//      debug("Content processes cannot modify 'time.nitz.available'. Restore!");
       // Restore the setting to the current value.
-      this.setNitzAvailable(isNitzAvailable);
-    }
-
+//      this.setNitzAvailable(isNitzAvailable);
+//    }
+// "time.clock.automatic-update.available" except for the chrome process.
+       if (aName === kClockAutoUpdateAvailable &&
+           aMessage !== "fromInternalSetting") {
+         let isClockAutoUpdateAvailable = this._lastNitzMessage !== null ||
+                                          this._sntp.isAvailable();
+         if (aResult !== isClockAutoUpdateAvailable) {
+           debug("Content processes cannot modify 'time.clock.automatic-update.available'. Restore!");
+           // Restore the setting to the current value.
+           this.setClockAutoUpdateAvailable(isClockAutoUpdateAvailable);
+           }
+       }
+   
+       // Don't allow any content processes to modify the setting
+       // "time.timezone.automatic-update.available" except for the chrome
+       // process.
+       if (aName === kTimezoneAutoUpdateAvailable &&
+           aMessage !== "fromInternalSetting") {
+         let isTimezoneAutoUpdateAvailable = this._lastNitzMessage !== null;
+         if (aResult !== isTimezoneAutoUpdateAvailable) {
+           if (DEBUG) {
+             this.debug("Content processes cannot modify 'time.timezone.automatic-update.available'. Restore!");
+           }
+           // Restore the setting to the current value.
+           this.setTimezoneAutoUpdateAvailable(isTimezoneAutoUpdateAvailable);
+         }
+	}
     this.handle(aName, aResult);
   },
 
@@ -1941,13 +2063,42 @@ RadioInterfaceLayer.prototype = {
         key = aName.slice(9);
         this.dataCallSettingsSUPL[key] = aResult;
         break;
-      case kTimeNitzAutomaticUpdateEnabled:
-        this._nitzAutomaticUpdateEnabled = aResult;
+      //case kTimeNitzAutomaticUpdateEnabled:
+      //  this._nitzAutomaticUpdateEnabled = aResult;
 
         // Set the latest cached NITZ time if the setting is enabled.
-        if (this._nitzAutomaticUpdateEnabled && this._lastNitzMessage) {
-          this.setNitzTime(this._lastNitzMessage);
-        }
+      //  if (this._nitzAutomaticUpdateEnabled && this._lastNitzMessage) {
+      //    this.setNitzTime(this._lastNitzMessage);
+      //  }
+      case kClockAutoUpdateEnabled:
+           this._clockAutoUpdateEnabled = aResult;
+           if (!this._clockAutoUpdateEnabled) {
+             break;
+           }
+   
+           // Set the latest cached NITZ time if it's available.
+           if (this._lastNitzMessage) {
+             this.setClockByNitz(this._lastNitzMessage);
+           } else if (gNetworkManager.active && gNetworkManager.active.state ==
+                    Ci.nsINetworkInterface.NETWORK_STATE_CONNECTED) {
+             // Set the latest cached SNTP time if it's available.
+             if (!this._sntp.isExpired()) {
+               this.setClockBySntp(this._sntp.getOffset());
+             } else {
+               // Or refresh the SNTP.
+               this._sntp.request();
+             }
+           }
+           break;
+      case kTimezoneAutoUpdateEnabled:
+           this._timezoneAutoUpdateEnabled = aResult;
+   
+           if (this._timezoneAutoUpdateEnabled) {
+             // Apply the latest cached NITZ for timezone if it's available.
+             if (this._timezoneAutoUpdateEnabled && this._lastNitzMessage) {
+               this.setTimezoneByNitz(this._lastNitzMessage);
+             }
+           }
         break;
       case kCellBroadcastSearchList:
         debug("'" + kCellBroadcastSearchList + "' is now " + aResult);
