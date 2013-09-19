@@ -141,8 +141,8 @@ static const unsigned long kKeyMapping[] = {
     0, // CTRL_RIGHT
     NS_VK_CAPS_LOCK,
     NS_VK_SCROLL_LOCK,
-    0, // META_LEFT
-    0, // META_RIGHT
+    NS_VK_META, // META_LEFT
+    NS_VK_META, // META_RIGHT
     0, // FUNCTION
     0, // SYSRQ
     0, // BREAK
