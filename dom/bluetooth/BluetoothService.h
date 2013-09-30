@@ -246,9 +246,13 @@ public:
    * @return NS_OK if the task begins, NS_ERROR_FAILURE otherwise
    */
   virtual nsresult
-  GetServiceChannel(const nsAString& aObjectPath,
+  GetServiceChannel(const nsAString& aDeviceAddress,
                     const nsAString& aServiceUuid,
                     BluetoothProfileManagerBase* aManager) = 0;
+
+  virtual bool
+  UpdateSdpRecords(const nsAString& aDeviceAddress,
+                   BluetoothProfileManagerBase* aManager) = 0;
 
   virtual bool
   SetPinCodeInternal(const nsAString& aDeviceAddress, const nsAString& aPinCode,
@@ -335,7 +339,7 @@ protected:
   Cleanup();
 
   nsresult
-  StartStopBluetooth(bool aStart);
+  StartStopBluetooth(bool aStart, bool aIsStartup);
 
   /** 
    * Platform specific startup functions go here. Usually deals with member

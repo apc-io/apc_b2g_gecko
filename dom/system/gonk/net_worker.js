@@ -88,9 +88,6 @@ function usbTetheringFail(params) {
   postMessage(params);
   // Try to roll back to ensure
   // we don't leave the network systems in limbo.
-  let functionChain = [setIpForwardingEnabled,
-                       stopTethering];
-
   // This parameter is used to disable ipforwarding.
   params.enable = false;
   chain(params, gUSBFailChain, null);
@@ -115,6 +112,18 @@ function networkInterfaceStatsSuccess(params) {
   // Notify the main thread.
   params.txBytes = parseFloat(params.resultReason);
 
+  postMessage(params);
+  return true;
+}
+
+function updateUpStreamSuccess(params) {
+  // Notify the main thread.
+  postMessage(params);
+  return true;
+}
+
+function updateUpStreamFail(params) {
+  // Notify the main thread.
   postMessage(params);
   return true;
 }
@@ -151,6 +160,20 @@ self.onmessage = function onmessage(event) {
     postMessage({id: message.id, ret: ret});
   }
 };
+
+/**
+* Set DNS servers for given network interface.
+*/
+function setDNS(options) {
+  let ifprops = getIFProperties(options.ifname);
+  let dns1_str = options.dns1_str || ifprops.dns1_str;
+  let dns2_str = options.dns2_str || ifprops.dns2_str;
+  libcutils.property_set("net.dns1", dns1_str);
+  libcutils.property_set("net.dns2", dns2_str);
+  // Bump the DNS change property.
+  let dnschange = libcutils.property_get("net.dnschange", "0");
+  libcutils.property_set("net.dnschange", (parseInt(dnschange, 10) + 1).toString());
+}
 
 /**
  * Set default route and DNS servers for given network interface.
@@ -213,6 +236,25 @@ function removeHostRoute(options) {
   for (let i = 0; i < options.hostnames.length; i++) {
     libnetutils.ifc_remove_route(options.ifname, options.hostnames[i], 32, options.gateway);
   }
+}
+
+/**
+ * Remove the routes associated with the named interface.
+ */
+function removeHostRoutes(options) {
+  libnetutils.ifc_remove_host_routes(options.ifname);
+}
+
+function removeNetworkRoute(options) {
+  let ipvalue = netHelpers.stringToIP(options.ip);
+  let netmaskvalue = netHelpers.stringToIP(options.netmask);
+  let subnet = netmaskvalue & ipvalue;
+  let dst = netHelpers.ipToString(subnet);
+  let prefixLength = netHelpers.getMaskLength(netmaskvalue);
+  let gateway = "0.0.0.0";
+
+  libnetutils.ifc_remove_default_route(options.ifname);
+  libnetutils.ifc_remove_route(options.ifname, dst, prefixLength, gateway);
 }
 
 let gCommandQueue = [];
@@ -396,6 +438,18 @@ function setAccessPoint(params, callback) {
   return doCommand(command, callback);
 }
 
+function cleanUpStream(params, callback) {
+  let command = "nat disable " + params.previous.internalIfname + " " +
+                params.previous.externalIfname + " " + "0";
+  return doCommand(command, callback);
+}
+
+function createUpStream(params, callback) {
+  let command = "nat enable " + params.current.internalIfname + " " +
+                params.current.externalIfname + " " + "0";
+  return doCommand(command, callback);
+}
+
 /**
  * Modify usb function's property to turn on USB RNDIS function
  */
@@ -568,6 +622,16 @@ function setWifiTethering(params) {
     chain(params, gWifiDisableChain, wifiTetheringFail);
   }
   return true;
+}
+
+let gUpdateUpStreamChain = [cleanUpStream,
+                            createUpStream,
+                            updateUpStreamSuccess];
+/**
+ * handling upstream interface change event.
+ */
+function updateUpStream(params) {
+  chain(params, gUpdateUpStreamChain, updateUpStreamFail);
 }
 
 let gUSBEnableChain = [setInterfaceUp,

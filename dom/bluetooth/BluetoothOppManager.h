@@ -10,9 +10,10 @@
 #include "BluetoothCommon.h"
 #include "BluetoothProfileManagerBase.h"
 #include "BluetoothSocketObserver.h"
+#include "DeviceStorage.h"
 #include "mozilla/dom/ipc/Blob.h"
 #include "mozilla/ipc/UnixSocket.h"
-#include "DeviceStorage.h"
+#include "nsCOMArray.h"
 
 class nsIOutputStream;
 class nsIInputStream;
@@ -52,12 +53,12 @@ public:
    * either call Disconnect() to close RFCOMM connection or start another
    * file-sending thread via calling SendFile() again.
    */
-  void Connect(const nsAString& aDeviceObjectPath,
+  void Connect(const nsAString& aDeviceAddress,
                BluetoothReplyRunnable* aRunnable);
   void Disconnect();
   bool Listen();
 
-  bool SendFile(BlobParent* aBlob);
+  bool SendFile(const nsAString& aDeviceAddress, BlobParent* aBlob);
   bool StopSendingFile();
   bool ConfirmReceivingFile(bool aConfirm);
 
@@ -89,10 +90,12 @@ public:
   virtual void OnGetServiceChannel(const nsAString& aDeviceAddress,
                                    const nsAString& aServiceUuid,
                                    int aChannel) MOZ_OVERRIDE;
+  virtual void OnUpdateSdpRecords(const nsAString& aDeviceAddress) MOZ_OVERRIDE;
 
 private:
   BluetoothOppManager();
   void StartFileTransfer();
+  void StartSendingNextFile();
   void FileTransferComplete();
   void UpdateProgress();
   void ReceivingFileConfirmation();
@@ -107,9 +110,12 @@ private:
   void AfterOppDisconnected();
   void ValidateFileName();
   bool IsReservedChar(PRUnichar c);
+  void ClearQueue();
+  void RetrieveSentFileName();
   DeviceStorageFile* CreateDeviceStorageFile(nsIFile* aFile);
   void NotifyAboutFileChange();
   bool AcquireSdcardMountLock();
+
   /**
    * OBEX session status.
    * Set when OBEX session is established.
@@ -136,6 +142,12 @@ private:
   int mBodySegmentLength;
   int mReceivedDataBufferOffset;
   int mUpdateProgressCounter;
+
+  /**
+   * When it is true and the target service on target device couldn't be found,
+   * refreshing SDP records is necessary.
+   */
+  bool mNeedsUpdatingSdpRecords;
 
   /**
    * Set when StopSendingFile() is called.
@@ -177,7 +189,9 @@ private:
   nsAutoArrayPtr<uint8_t> mBodySegment;
   nsAutoArrayPtr<uint8_t> mReceivedDataBuffer;
 
+  int mCurrentBlobIndex;
   nsCOMPtr<nsIDOMBlob> mBlob;
+  nsCOMArray<nsIDOMBlob> mBlobs;
 
   /**
    * A seperate member thread is required because our read calls can block

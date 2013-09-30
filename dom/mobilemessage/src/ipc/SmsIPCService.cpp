@@ -175,7 +175,13 @@ GetSendMmsMessageRequestFromParams(const JS::Value& aParam,
     return false;
   }
 
-  JSContext* cx = nsContentUtils::GetSafeJSContext();
+  JSContext* cx = nsContentUtils::GetCurrentJSContext();
+  if (!cx) {
+    cx = nsContentUtils::GetSafeJSContext();
+  }
+  MOZ_ASSERT(cx);
+
+  JSAutoCompartment ac(cx, JSVAL_TO_OBJECT(aParam));
   MmsParameters params;
   nsresult rv = params.Init(cx, &aParam);
   NS_ENSURE_SUCCESS(rv, false);
@@ -255,7 +261,7 @@ SmsIPCService::Send(const JS::Value& aParameters,
 {
   SendMmsMessageRequest req;
   if (!GetSendMmsMessageRequestFromParams(aParameters, req)) {
-    return NS_ERROR_UNEXPECTED;
+    return NS_ERROR_INVALID_ARG;
   }
   return SendRequest(SendMessageRequest(req), aRequest);
 }

@@ -225,21 +225,67 @@ this.ERROR_SS_MODIFIED_TO_DIAL = 23;
 this.ERROR_SS_MODIFIED_TO_USSD = 24;
 this.ERROR_SS_MODIFIED_TO_SS = 25;
 this.ERROR_SUBSCRIPTION_NOT_SUPPORTED = 26;
+this.ERROR_INVALID_PARAMETER = 27;
+this.ERROR_REJECTED_BY_REMOTE = 28;
 
 this.GECKO_ERROR_SUCCESS = null;
 this.GECKO_ERROR_RADIO_NOT_AVAILABLE = "RadioNotAvailable";
 this.GECKO_ERROR_GENERIC_FAILURE = "GenericFailure";
-this.GECKO_ERROR_REQUEST_NOT_SUPPORTED = "RequestNotSupported";
-this.GECKO_ERROR_ILLEGAL_SIM_OR_ME = "IllegalSIMorME";
 this.GECKO_ERROR_PASSWORD_INCORRECT = "IncorrectPassword";
+this.GECKO_ERROR_SIM_PIN2 = "SimPin2";
+this.GECKO_ERROR_SIM_PUK2 = "SimPuk2";
+this.GECKO_ERROR_REQUEST_NOT_SUPPORTED = "RequestNotSupported";
+this.GECKO_ERROR_CANCELLED = "Cancelled";
+this.GECKO_ERROR_ILLEGAL_SIM_OR_ME = "IllegalSIMorME";
+this.GECKO_ERROR_OP_NOT_ALLOWED_DURING_VOICE_CALL = "OpNotAllowedDuringVoiceCall";
+this.GECKO_ERROR_OP_NOT_ALLOWED_BEFORE_REG_TO_NW = "OpNotAllowedBeforeRegToNw";
+this.GECKO_ERROR_SMS_SEND_FAIL_RETRY = "SmsSendFailRetry";
+this.GECKO_ERROR_SIM_ABSENT = "SimAbsent";
+this.GECKO_ERROR_SUBSCRIPTION_NOT_AVAILABLE = "SubscriptionNotAvailable";
+this.GECKO_ERROR_MODE_NOT_SUPPORTED = "ModeNotSupported";
+this.GECKO_ERROR_FDN_CHECK_FAILURE = "FdnCheckFailure";
+this.GECKO_ERROR_DIAL_MODIFIED_TO_USSD = "DialModifiedToUssd";
+this.GECKO_ERROR_DIAL_MODIFIED_TO_SS = "DialModifiedToSs";
+this.GECKO_ERROR_DIAL_MODIFIED_TO_DIAL = "DialModifiedToDial";
+this.GECKO_ERROR_USSD_MODIFIED_TO_DIAL = "UssdModifiedToDial";
+this.GECKO_ERROR_USSD_MODIFIED_TO_SS = "UssdModifiedToSs";
+this.GECKO_ERROR_USSD_MODIFIED_TO_USSD = "UssdModifiedToUssd";
+this.GECKO_ERROR_SS_MODIFIED_TO_DIAL = "SsModifiedToDial";
+this.GECKO_ERROR_SS_MODIFIED_TO_USSD = "SsModifiedToUssd";
+this.GECKO_ERROR_SS_MODIFIED_TO_SS = "SsModifiedToSs";
+this.GECKO_ERROR_SUBSCRIPTION_NOT_SUPPORTED = "SubscriptionNotSupported";
+this.GECKO_ERROR_INVALID_PARAMETER = "InvalidParameter";
+this.GECKO_ERROR_REJECTED_BY_REMOTE = "RejectedByRemote";
 
 this.RIL_ERROR_TO_GECKO_ERROR = {};
 RIL_ERROR_TO_GECKO_ERROR[ERROR_SUCCESS] = GECKO_ERROR_SUCCESS;
 RIL_ERROR_TO_GECKO_ERROR[ERROR_RADIO_NOT_AVAILABLE] = GECKO_ERROR_RADIO_NOT_AVAILABLE;
 RIL_ERROR_TO_GECKO_ERROR[ERROR_GENERIC_FAILURE] = GECKO_ERROR_GENERIC_FAILURE;
-RIL_ERROR_TO_GECKO_ERROR[ERROR_REQUEST_NOT_SUPPORTED] = GECKO_ERROR_REQUEST_NOT_SUPPORTED;
-RIL_ERROR_TO_GECKO_ERROR[ERROR_ILLEGAL_SIM_OR_ME] = GECKO_ERROR_ILLEGAL_SIM_OR_ME;
 RIL_ERROR_TO_GECKO_ERROR[ERROR_PASSWORD_INCORRECT] = GECKO_ERROR_PASSWORD_INCORRECT;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_SIM_PIN2] = GECKO_ERROR_SIM_PIN2;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_SIM_PUK2] = GECKO_ERROR_SIM_PUK2;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_REQUEST_NOT_SUPPORTED] = GECKO_ERROR_REQUEST_NOT_SUPPORTED;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_CANCELLED] = GECKO_ERROR_CANCELLED;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_OP_NOT_ALLOWED_DURING_VOICE_CALL] = GECKO_ERROR_OP_NOT_ALLOWED_DURING_VOICE_CALL;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_OP_NOT_ALLOWED_BEFORE_REG_TO_NW] = GECKO_ERROR_OP_NOT_ALLOWED_BEFORE_REG_TO_NW;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_SMS_SEND_FAIL_RETRY] = GECKO_ERROR_SMS_SEND_FAIL_RETRY;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_SIM_ABSENT] = GECKO_ERROR_SIM_ABSENT;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_SUBSCRIPTION_NOT_AVAILABLE] = GECKO_ERROR_SUBSCRIPTION_NOT_AVAILABLE;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_MODE_NOT_SUPPORTED] = GECKO_ERROR_MODE_NOT_SUPPORTED;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_FDN_CHECK_FAILURE] = GECKO_ERROR_FDN_CHECK_FAILURE;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_ILLEGAL_SIM_OR_ME] = GECKO_ERROR_ILLEGAL_SIM_OR_ME;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_DIAL_MODIFIED_TO_USSD] = GECKO_ERROR_DIAL_MODIFIED_TO_USSD;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_DIAL_MODIFIED_TO_SS] = GECKO_ERROR_DIAL_MODIFIED_TO_SS;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_DIAL_MODIFIED_TO_DIAL] = GECKO_ERROR_DIAL_MODIFIED_TO_DIAL;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_USSD_MODIFIED_TO_DIAL] = GECKO_ERROR_USSD_MODIFIED_TO_DIAL;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_USSD_MODIFIED_TO_SS] = GECKO_ERROR_USSD_MODIFIED_TO_SS;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_USSD_MODIFIED_TO_USSD] = GECKO_ERROR_USSD_MODIFIED_TO_USSD;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_SS_MODIFIED_TO_DIAL] = GECKO_ERROR_SS_MODIFIED_TO_DIAL;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_SS_MODIFIED_TO_USSD] = GECKO_ERROR_SS_MODIFIED_TO_USSD;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_SS_MODIFIED_TO_SS] = GECKO_ERROR_SS_MODIFIED_TO_SS;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_SUBSCRIPTION_NOT_SUPPORTED] = GECKO_ERROR_SUBSCRIPTION_NOT_SUPPORTED;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_INVALID_PARAMETER] = GECKO_ERROR_INVALID_PARAMETER;
+RIL_ERROR_TO_GECKO_ERROR[ERROR_REJECTED_BY_REMOTE] = GECKO_ERROR_REJECTED_BY_REMOTE;
 
 // 3GPP 23.040 clause 9.2.3.6 TP-Message-Reference(TP-MR):
 // The number of times the MS automatically repeats the SMS-SUBMIT shall be in
@@ -467,7 +513,7 @@ this.MSISDN_MAX_NUMBER_SIZE_BYTES = 10;
 // READ_RECORD mode,  TS 102.221
 this.READ_RECORD_ABSOLUTE_MODE = 4;
 
-// GET_RESPONSE mandatory response size for EF, see TS 51.011 clause 9, 
+// GET_RESPONSE mandatory response size for EF, see TS 51.011 clause 9,
 // 'Response data in case of an EF.'
 this.GET_RESPONSE_EF_SIZE_BYTES = 15;
 
@@ -1812,6 +1858,7 @@ this.GSM_SMS_STRICT_7BIT_CHARMAP = {
   "\u00c0": "\u0041", // "À" => "A"
   "\u00c1": "\u0041", // "Á" => "A"
   "\u00c2": "\u0041", // "Â" => "A"
+  "\u00c3": "\u0041", // "Ã" => "A"
 //"\u00c4": "\u00c4", // "Ä" => "Ä", already in default alphabet
 //"\u00c5": "\u00c5", // "Å" => "Å", already in default alphabet
 //"\u00c6": "\u00c6", // "Æ" => "Æ", already in default alphabet
@@ -1828,6 +1875,7 @@ this.GSM_SMS_STRICT_7BIT_CHARMAP = {
   "\u00d2": "\u004f", // "Ò" => "O"
   "\u00d3": "\u004f", // "Ó" => "O"
   "\u00d4": "\u004f", // "Ô" => "O"
+  "\u00d5": "\u004f", // "Õ" => "O"
 //"\u00d6": "\u00d6", // "Ö" => "Ö", already in default alphabet
   "\u00d9": "\u0055", // "Ù" => "U"
   "\u00da": "\u0055", // "Ú" => "U"
@@ -1837,6 +1885,7 @@ this.GSM_SMS_STRICT_7BIT_CHARMAP = {
 //"\u00e0": "\u00e0", // "à" => "à", already in default alphabet
   "\u00e1": "\u0061", // "á" => "a"
   "\u00e2": "\u0061", // "â" => "a"
+  "\u00e3": "\u0061", // "ã" => "a"
 //"\u00e4": "\u00e4", // "ä" => "ä", already in default alphabet
 //"\u00e5": "\u00e5", // "å" => "å", already in default alphabet
 //"\u00e6": "\u00e6", // "æ" => "æ", already in default alphabet
@@ -1853,6 +1902,7 @@ this.GSM_SMS_STRICT_7BIT_CHARMAP = {
 //"\u00f2": "\u00f2", // "ò" => "ò", already in default alphabet
   "\u00f3": "\u006f", // "ó" => "o"
   "\u00f4": "\u006f", // "ô" => "o"
+  "\u00f5": "\u006f", // "õ" => "o"
 //"\u00f6": "\u00f6", // "ö" => "ö", already in default alphabet
 //"\u00f8": "\u00f8", // "ø" => "ø", already in default alphabet
 //"\u00f9": "\u00f9", // "ù" => "ù", already in default alphabet
@@ -1873,6 +1923,8 @@ this.GSM_SMS_STRICT_7BIT_CHARMAP = {
   "\u0113": "\u0065", // "ē" => "e"
   "\u0118": "\u0045", // "Ę" => "E"
   "\u0119": "\u0065", // "ę" => "e"
+  "\u0128": "\u0049", // "Ĩ" => "I"
+  "\u0129": "\u0069", // "ĩ" => "i"
   "\u012a": "\u0049", // "Ī" => "I"
   "\u012b": "\u0069", // "ī" => "i"
   "\u012e": "\u0049", // "Į" => "I"
@@ -1892,6 +1944,8 @@ this.GSM_SMS_STRICT_7BIT_CHARMAP = {
   "\u0160": "\u0053", // "Š" => "S"
   "\u0161": "\u0073", // "š" => "s"
   "\u0165": "\u0074", // "ť" => "t"
+  "\u0168": "\u0055", // "Ū" => "U"
+  "\u0169": "\u0075", // "ū" => "u"
   "\u016a": "\u0055", // "Ū" => "U"
   "\u016b": "\u0075", // "ū" => "u"
   "\u0178": "\u0059", // "Ÿ" => "Y"
@@ -1903,6 +1957,12 @@ this.GSM_SMS_STRICT_7BIT_CHARMAP = {
   "\u017e": "\u007a", // "ž" => "z"
   "\u025b": "\u0045", // "ɛ" => "E"
 //"\u0398": "\u0398", // "Θ" => "Θ", already in default alphabet
+  "\u1e7c": "\u0056", // "Ṽ" => "V"
+  "\u1e7d": "\u0076", // "ṽ" => "v"
+  "\u1ebc": "\u0045", // "Ẽ" => "E"
+  "\u1ebd": "\u0065", // "ẽ" => "e"
+  "\u1ef8": "\u0059", // "Ỹ" => "Y"
+  "\u1ef9": "\u0079", // "ỹ" => "y"
   "\u20a4": "\u00a3", // "₤" => "£"
 //"\u20ac": "\u20ac", // "€" => "€", already in default alphabet
 };
@@ -2228,6 +2288,80 @@ this.MMI_SC_BAICr = "351";
 this.MMI_SC_BA_ALL = "330";
 this.MMI_SC_BA_MO = "333";
 this.MMI_SC_BA_MT = "353";
+
+// MMI service code key strings.
+this.MMI_KS_SC_CALL_BARRING = "scCallBarring";
+this.MMI_KS_SC_CALL_FORWARDING = "scCallForwarding";
+this.MMI_KS_SC_CLIP = "scClip";
+this.MMI_KS_SC_CLIR = "scClir";
+this.MMI_KS_SC_PWD = "scPwd";
+this.MMI_KS_SC_CALL_WAITING = "scCallWaiting";
+this.MMI_KS_SC_PIN = "scPin";
+this.MMI_KS_SC_PIN2 = "scPin2";
+this.MMI_KS_SC_PUK = "scPuk";
+this.MMI_KS_SC_PUK2 = "scPuk2";
+this.MMI_KS_SC_IMEI = "scImei";
+this.MMI_KS_SC_USSD = "scUssd";
+
+// MMI error messages key strings.
+this.MMI_ERROR_KS_ERROR = "emMmiError";
+this.MMI_ERROR_KS_NOT_SUPPORTED = "emMmiErrorNotSupported";
+this.MMI_ERROR_KS_INVALID_ACTION = "emMmiErrorInvalidAction";
+this.MMI_ERROR_KS_MISMATCH_PIN = "emMmiErrorMismatchPin";
+this.MMI_ERROR_KS_BAD_PIN = "emMmiErrorBadPin";
+this.MMI_ERROR_KS_BAD_PUK = "emMmiErrorBadPuk";
+this.MMI_ERROR_KS_INVALID_PIN = "emMmiErrorInvalidPin";
+this.MMI_ERROR_KS_NEEDS_PUK = "emMmiErrorNeedsPuk";
+this.MMI_ERROR_KS_PIN_PUK_ATTEMPTS = "emMmiErrorPinPukAttempts";
+this.MMI_ERROR_KS_SIM_BLOCKED = "emMmiErrorSimBlocked";
+
+// MMI status message.
+this.MMI_SM_KS_PIN_CHANGED = "smPinChanged";
+this.MMI_SM_KS_PIN2_CHANGED = "smPin2Changed";
+this.MMI_SM_KS_PIN_UNBLOCKED = "smPinUnblocked";
+this.MMI_SM_KS_PIN2_UNBLOCKED = "smPin2Unblocked";
+this.MMI_SM_KS_SERVICE_ENABLED = "smServiceEnabled";
+this.MMI_SM_KS_SERVICE_DISABLED = "smServiceDisabled";
+this.MMI_SM_KS_SERVICE_REGISTERED = "smServiceRegistered";
+this.MMI_SM_KS_SERVICE_ERASED = "smServiceErased";
+this.MMI_SM_KS_SERVICE_INTERROGATED = "smServiceInterrogated";
+
+/**
+ * The table for MCC which the length of MNC is 3
+ *
+ * This table is built from below links.
+ * - http://www.itu.int/pub/T-SP-E.212B-2013
+ * - http://en.wikipedia.org/wiki/Mobile_Network_Code
+ */
+this.MCC_TABLE_FOR_MNC_LENGTH_IS_3 = [
+  "302",  // Canada
+  "310",  // United States of America
+  "311",  // United States of America
+  "312",  // United States of America
+  "313",  // United States of America
+  "316",  // United States of America
+  "330",  // Puerto Rico
+  "334",  // Mexico
+  "338",  // Jamaica
+  "342",  // Barbados
+  "344",  // Antigua and Barbuda
+  "346",  // Cayman Islands
+  "348",  // British Virgin Islands
+  "350",  // Bermuda
+  "352",  // Grenada
+  "354",  // Montserrat
+  "356",  // Saint Kitts and Nevis
+  "358",  // Saint Lucia
+  "360",  // Saint Vincent and the Grenadines
+  "365",  // Anguilla
+  "366",  // Dominica
+  "376",  // Turks and Caicos Islands
+  "405",  // India
+  "708",  // Honduras
+  "722",  // Argentina
+  "732",  // Colombia
+  "750"   // Falkland Islands (Malvinas)
+];
 
 // Allow this file to be imported via Components.utils.import().
 this.EXPORTED_SYMBOLS = Object.keys(this);

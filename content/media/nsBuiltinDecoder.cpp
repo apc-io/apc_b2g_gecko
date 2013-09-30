@@ -56,12 +56,14 @@ void nsBuiltinDecoder::SetDormantIfNecessary(bool aDormant)
       mNextState = PLAY_STATE_PAUSED;
     }
     mNextState = mPlayState;
-    mIsDormant = aDormant;
+    mIsDormant = true;
+    mIsExitingDormant = false;
     ChangeState(PLAY_STATE_LOADING);
   } else if ((aDormant != true) && (mPlayState == PLAY_STATE_LOADING)) {
     // exit dormant state
-    // just trigger to state machine.
+    // trigger to state machine.
     mDecoderStateMachine->SetDormant(false);
+    mIsExitingDormant = true;
   }
 }
 
@@ -261,6 +263,7 @@ nsBuiltinDecoder::nsBuiltinDecoder() :
   mSeekable(true),
   mReentrantMonitor("media.decoder"),
   mIsDormant(false),
+  mIsExitingDormant(false),
   mPlayState(PLAY_STATE_PAUSED),
   mNextState(PLAY_STATE_PAUSED),
   mResourceLoaded(false),
@@ -589,6 +592,12 @@ void nsBuiltinDecoder::MetadataLoaded(uint32_t aChannels,
 
   {
     ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
+    if (mPlayState == PLAY_STATE_LOADING && mIsDormant && !mIsExitingDormant) {
+      return;
+    } else if (mPlayState == PLAY_STATE_LOADING && mIsDormant && mIsExitingDormant) {
+      mIsDormant = false;
+      mIsExitingDormant = false;
+    }
     mDuration = mDecoderStateMachine ? mDecoderStateMachine->GetDuration() : -1;
     // Duration has changed so we should recompute playback rate
     UpdatePlaybackRate();
@@ -807,8 +816,8 @@ nsBuiltinDecoder::GetStatistics()
 double nsBuiltinDecoder::ComputePlaybackRate(bool* aReliable)
 {
   GetReentrantMonitor().AssertCurrentThreadIn();
-  NS_ASSERTION(NS_IsMainThread() || OnStateMachineThread(),
-               "Should be on main or state machine thread.");
+  NS_ASSERTION(NS_IsMainThread() || OnStateMachineThread() || OnDecodeThread(),
+               "Should be on main or state machine or decoder thread.");
 
   int64_t length = mResource ? mResource->GetLength() : -1;
   if (mDuration >= 0 && length >= 0) {
@@ -907,32 +916,6 @@ void nsBuiltinDecoder::NotifyBytesConsumed(int64_t aBytes)
     mDecoderPosition += aBytes;
     mPlaybackStatistics.AddBytes(aBytes);
   }
-}
-
-void nsBuiltinDecoder::NextFrameUnavailableBuffering()
-{
-  NS_ASSERTION(NS_IsMainThread(), "Should be called on main thread");
-  if (!mElement || mShuttingDown || !mDecoderStateMachine)
-    return;
-
-  mElement->UpdateReadyStateForData(nsHTMLMediaElement::NEXT_FRAME_UNAVAILABLE_BUFFERING);
-}
-
-void nsBuiltinDecoder::NextFrameAvailable()
-{
-  NS_ASSERTION(NS_IsMainThread(), "Should be called on main thread");
-  if (!mElement || mShuttingDown || !mDecoderStateMachine)
-    return;
-
-  mElement->UpdateReadyStateForData(nsHTMLMediaElement::NEXT_FRAME_AVAILABLE);
-}
-
-void nsBuiltinDecoder::NextFrameUnavailable()
-{
-  NS_ASSERTION(NS_IsMainThread(), "Should be called on main thread");
-  if (!mElement || mShuttingDown || !mDecoderStateMachine)
-    return;
-  mElement->UpdateReadyStateForData(nsHTMLMediaElement::NEXT_FRAME_UNAVAILABLE);
 }
 
 void nsBuiltinDecoder::UpdateReadyStateForData()
@@ -1034,7 +1017,8 @@ void nsBuiltinDecoder::ChangeState(PlayState aState)
     mNextState = PLAY_STATE_PAUSED;
   }
 
-  if (mPlayState == PLAY_STATE_SHUTDOWN) {
+  if ((mPlayState == PLAY_STATE_LOADING && mIsDormant && aState != PLAY_STATE_SHUTDOWN) ||
+       mPlayState == PLAY_STATE_SHUTDOWN) {
     GetReentrantMonitor().NotifyAll();
     return;
   }
@@ -1064,6 +1048,7 @@ void nsBuiltinDecoder::ChangeState(PlayState aState)
 
   if (aState!= PLAY_STATE_LOADING) {
     mIsDormant = false;
+    mIsExitingDormant = false;
   }
 
   GetReentrantMonitor().NotifyAll();

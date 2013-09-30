@@ -414,7 +414,7 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(nsHTMLMediaElement)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(nsHTMLMediaElement, nsGenericHTMLElement)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mSrcStream)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mSrcAttrStream)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mSourcePointer)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR_AMBIGUOUS(mSourcePointer, nsIDOMRange)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mLoadBlockedDoc)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mSourceLoadCandidate)
   for (uint32_t i = 0; i < tmp->mOutputStreams.Length(); ++i) {
@@ -2358,6 +2358,11 @@ const char nsHTMLMediaElement::gOmxTypes[6][16] = {
   "video/quicktime",
 };
 
+char const *const nsHTMLMediaElement::gMpegAudioCodecs[2] = {
+  "mp3",
+  nullptr
+};
+
 bool
 nsHTMLMediaElement::IsOmxEnabled()
 {
@@ -2483,7 +2488,11 @@ nsHTMLMediaElement::CanHandleMediaType(const char* aMIMEType,
 #endif
 #ifdef MOZ_WIDGET_GONK
   if (IsOmxSupportedType(nsDependentCString(aMIMEType))) {
-    *aCodecList = gH264Codecs;
+    if (nsDependentCString(aMIMEType).EqualsASCII("audio/mpeg")) {
+      *aCodecList = gMpegAudioCodecs;
+    } else {
+      *aCodecList = gH264Codecs;
+    }    
     return CANPLAY_MAYBE;
   }
 #endif
@@ -3699,6 +3708,9 @@ nsIContent* nsHTMLMediaElement::GetNextSource()
   if (!mSourcePointer) {
     // First time this has been run, create a selection to cover children.
     mSourcePointer = new nsRange();
+    // If this media element is removed from the DOM, don't gravitate the
+    // range up to its ancestor, leave it attached to the media element.
+    mSourcePointer->SetEnableGravitationOnElementRemoval(false);
 
     rv = mSourcePointer->SelectNodeContents(thisDomNode);
     if (NS_FAILED(rv)) return nullptr;
@@ -3951,8 +3963,14 @@ void nsHTMLMediaElement::UpdateAudioChannelPlayingState()
       if (!mAudioChannelAgent) {
         return;
       }
+
+      nsCOMPtr<nsIDOMHTMLVideoElement> video = do_QueryObject(this);
       // Use a weak ref so the audio channel agent can't leak |this|.
-      mAudioChannelAgent->InitWithWeakCallback(mAudioChannelType, this);
+      if (AUDIO_CHANNEL_NORMAL == mAudioChannelType && video) {
+        mAudioChannelAgent->InitWithVideo(mAudioChannelType, this, true);
+      } else {
+        mAudioChannelAgent->InitWithWeakCallback(mAudioChannelType, this);
+      }
 
       nsCOMPtr<nsIDOMDocument> domDoc = do_QueryInterface(OwnerDoc());
       if (domDoc) {

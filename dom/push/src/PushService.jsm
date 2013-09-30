@@ -295,6 +295,8 @@ this.PushService = {
       case "network-active-changed":
         if (this._udpServer) {
           this._udpServer.close();
+          // Set to null since this is checked in _listenForUDPWakeup()
+          this._udpServer = null;
         }
 
         this._shutdownWS();
@@ -354,7 +356,7 @@ this.PushService = {
             // just for it
             if (this._ws) {
               debug("Had a connection, so telling the server");
-              this._request("unregister", {channelID: records[i].channelID});
+              this._sendRequest("unregister", {channelID: records[i].channelID});
             }
           }
         }.bind(this), function() {
@@ -481,6 +483,7 @@ this.PushService = {
 
     if (this._udpServer) {
       this._udpServer.close();
+      this._udpServer = null;
     }
 
     // All pending requests (ideally none) are dropped at this point. We
@@ -583,9 +586,20 @@ this.PushService = {
 
   /** |delay| should be in milliseconds. */
   _setAlarm: function(delay) {
+    // Bug 909270: Since calls to AlarmService.add() are async, calls must be
+    // 'queued' to ensure only one alarm is ever active.
+    if (this._settingAlarm) {
+        // onSuccess will handle the set. Overwriting the variable enforces the
+        // last-writer-wins semantics.
+        this._queuedAlarmDelay = delay;
+        this._waitingForAlarmSet = true;
+        return;
+    }
+
     // Stop any existing alarm.
     this._stopAlarm();
 
+    this._settingAlarm = true;
     AlarmService.add(
       {
         date: new Date(Date.now() + delay),
@@ -595,6 +609,12 @@ this.PushService = {
       function onSuccess(alarmID) {
         this._alarmID = alarmID;
         debug("Set alarm " + delay + " in the future " + this._alarmID);
+        this._settingAlarm = false;
+
+        if (this._waitingForAlarmSet) {
+          this._waitingForAlarmSet = false;
+          this._setAlarm(this._queuedAlarmDelay);
+        }
       }.bind(this)
     )
   },
@@ -642,8 +662,15 @@ this.PushService = {
     else if (this._currentState == STATE_READY) {
       // Send a ping.
       // Bypass the queue; we don't want this to be kept pending.
-      this._ws.sendMsg('{}');
-      debug("Sent ping.");
+      // Watch out for exception in case the socket has disconnected.
+      // When this happens, we pretend the ping was sent and don't specially
+      // handle the exception, as the lack of a pong will lead to the socket
+      // being reset.
+      try {
+        this._ws.sendMsg('{}');
+      } catch (e) {
+      }
+
       this._waitingForPong = true;
       this._setAlarm(prefs.get("requestTimeout"));
     }
@@ -1275,14 +1302,17 @@ this.PushService = {
   _wsOnStop: function(context, statusCode) {
     debug("wsOnStop()");
 
-    this._shutdownWS();
-
     if (statusCode != Cr.NS_OK &&
         !(statusCode == Cr.NS_BASE_STREAM_CLOSED && this._willBeWokenUpByUDP)) {
       debug("Socket error " + statusCode);
       this._reconnectAfterBackoff();
     }
 
+    // Bug 896919. We always shutdown the WebSocket, even if we need to
+    // reconnect. This works because _reconnectAfterBackoff() is "async"
+    // (there is a minimum delay of the pref retryBaseInterval, which by default
+    // is 5000ms), so that function will open the WebSocket again.
+    this._shutdownWS();
   },
 
   _wsOnMessageAvailable: function(context, message) {

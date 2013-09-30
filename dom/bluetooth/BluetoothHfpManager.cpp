@@ -59,6 +59,12 @@ namespace {
   // Wait for 2 seconds for Dialer processing event 'BLDN'. '2' seconds is a
   // magic number. The mechanism should be revised once we can get call history.
   static int sWaitingForDialingInterval = 2000; //unit: ms
+
+  // Wait 3.7 seconds until Dialer stops playing busy tone. '3' seconds is the
+  // time window set in Dialer and the extra '0.7' second is a magic number.
+  // The mechanism should be revised once we know the exact time at which
+  // Dialer stops playing.
+  static int sBusyToneInterval = 3700; //unit: ms
 } // anonymous namespace
 
 /* CallState for sCINDItems[CINDType::CALL].value
@@ -331,6 +337,17 @@ public:
 private:
   nsString mNumber;
   int mType;
+};
+
+class BluetoothHfpManager::CloseScoTask : public Task
+{
+private:
+  void Run() MOZ_OVERRIDE
+  {
+    MOZ_ASSERT(gBluetoothHfpManager);
+
+    gBluetoothHfpManager->DisconnectSco();
+  }
 };
 
 static bool
@@ -810,7 +827,7 @@ BluetoothHfpManager::ReceiveSocketData(BluetoothSocket* aSocket,
     NS_ASSERTION(vgm >= 0 && vgm <= 15, "Received invalid VGM value");
     mCurrentVgm = vgm;
   } else if (msg.Find("AT+CHLD=?") != -1) {
-    SendLine("+CHLD: (1,2)");
+    SendLine("+CHLD: (0,1,2)");
   } else if (msg.Find("AT+CHLD=") != -1) {
     ParseAtCommand(msg, 8, atCommandValues);
 
@@ -820,14 +837,16 @@ BluetoothHfpManager::ReceiveSocketData(BluetoothSocket* aSocket,
     }
 
     /**
-     * The following two cases are supported:
+     * The following three cases are supported:
+     * AT+CHLD=0 - Releases all held calls or sets User Determined User Busy
+     *             (UDUB) for a waiting call
      * AT+CHLD=1 - Releases active calls and accepts the other (held or
      *             waiting) call
      * AT+CHLD=2 - Places active calls on hold and accepts the other (held
      *             or waiting) call
      *
      * The following cases are NOT supported yet:
-     * AT+CHLD=0, AT+CHLD=1<idx>, AT+CHLD=2<idx>, AT+CHLD=3, AT+CHLD=4
+     * AT+CHLD=1<idx>, AT+CHLD=2<idx>, AT+CHLD=3, AT+CHLD=4
      * Please see 4.33.2 in Bluetooth hands-free profile 1.6 for more
      * information.
      */
@@ -836,9 +855,14 @@ BluetoothHfpManager::ReceiveSocketData(BluetoothSocket* aSocket,
     if (atCommandValues[0].Length() > 1) {
       NS_WARNING("No index should be included in command [AT+CHLD]");
       valid = false;
-    } else if (chld == '0' || chld == '3' || chld == '4') {
+    } else if (chld == '3' || chld == '4') {
       NS_WARNING("The value of command [AT+CHLD] is not supported");
       valid = false;
+    } else if (chld == '0') {
+      // We need to rename these dialer commands for better readability
+      // and expandability.
+      // See bug 884190 for more information.
+      NotifyDialer(NS_LITERAL_STRING("CHLD=0"));
     } else if (chld == '1') {
       NotifyDialer(NS_LITERAL_STRING("CHUP+ATA"));
     } else if (chld == '2') {
@@ -992,7 +1016,7 @@ respond_with_ok:
 }
 
 void
-BluetoothHfpManager::Connect(const nsAString& aDevicePath,
+BluetoothHfpManager::Connect(const nsAString& aDeviceAddress,
                              const bool aIsHandsfree,
                              BluetoothReplyRunnable* aRunnable)
 {
@@ -1006,10 +1030,19 @@ BluetoothHfpManager::Connect(const nsAString& aDevicePath,
   }
 
   if (mSocket) {
-    DispatchBluetoothReply(aRunnable, BluetoothValue(),
-                           NS_LITERAL_STRING(ERR_REACHED_CONNECTION_LIMIT));
+    if (mDeviceAddress == aDeviceAddress) {
+      DispatchBluetoothReply(aRunnable, BluetoothValue(),
+                             NS_LITERAL_STRING(ERR_ALREADY_CONNECTED));
+    } else {
+      DispatchBluetoothReply(aRunnable, BluetoothValue(),
+                             NS_LITERAL_STRING(ERR_REACHED_CONNECTION_LIMIT));
+    }
+
     return;
   }
+
+  mNeedsUpdatingSdpRecords = true;
+  mIsHandsfree = aIsHandsfree;
 
   nsString uuid;
   if (aIsHandsfree) {
@@ -1018,10 +1051,9 @@ BluetoothHfpManager::Connect(const nsAString& aDevicePath,
     BluetoothUuidHelper::GetString(BluetoothServiceClass::HEADSET, uuid);
   }
 
-  if (NS_FAILED(bs->GetServiceChannel(aDevicePath, uuid, this))) {
-    BluetoothValue v;
-    DispatchBluetoothReply(aRunnable, v,
-                           NS_LITERAL_STRING("GetServiceChannelError"));
+  if (NS_FAILED(bs->GetServiceChannel(aDeviceAddress, uuid, this))) {
+    DispatchBluetoothReply(aRunnable, BluetoothValue(),
+                           NS_LITERAL_STRING(ERR_SERVICE_CHANNEL_NOT_FOUND));
     return;
   }
 
@@ -1344,6 +1376,7 @@ BluetoothHfpManager::HandleCallStateChanged(uint32_t aCallIndex,
           sStopSendingRingFlag = true;
 
           ConnectSco();
+        case nsIRadioInterfaceLayer::CALL_STATE_DIALING:
         case nsIRadioInterfaceLayer::CALL_STATE_ALERTING:
           // Outgoing call
           UpdateCIND(CINDType::CALL, CallState::IN_PROGRESS, aSend);
@@ -1405,8 +1438,17 @@ BluetoothHfpManager::HandleCallStateChanged(uint32_t aCallIndex,
       // -1 is necessary because call 0 is an invalid (padding) call object.
       if (mCurrentCallArray.Length() - 1 ==
             GetNumberOfCalls(nsIRadioInterfaceLayer::CALL_STATE_DISCONNECTED)) {
-        // There is no call, close Sco and clear mCurrentCallArray
-        DisconnectSco();
+        // In order to let user hear busy tone via connected Bluetooth headset,
+        // we postpone the timing of dropping SCO.
+        if (prevCallState != nsIRadioInterfaceLayer::CALL_STATE_BUSY) {
+          DisconnectSco();
+        } else {
+          // Close Sco later since Dialer is still playing busy tone via HF.
+          MessageLoop::current()->PostDelayedTask(FROM_HERE,
+                                                  new CloseScoTask(),
+                                                  sBusyToneInterval);
+        }
+
         ResetCallArray();
       }
       break;
@@ -1521,29 +1563,68 @@ BluetoothHfpManager::OnDisconnect(BluetoothSocket* aSocket)
 }
 
 void
+BluetoothHfpManager::OnUpdateSdpRecords(const nsAString& aDeviceAddress)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(!aDeviceAddress.IsEmpty());
+  MOZ_ASSERT(mRunnable);
+
+  BluetoothService* bs = BluetoothService::Get();
+  NS_ENSURE_TRUE_VOID(bs);
+
+  nsString uuid;
+  if (mIsHandsfree) {
+    BluetoothUuidHelper::GetString(BluetoothServiceClass::HANDSFREE, uuid);
+  } else {
+    BluetoothUuidHelper::GetString(BluetoothServiceClass::HEADSET, uuid);
+  }
+
+  // Since we have updated SDP records of the target device, we should
+  // try to get the channel of target service again.
+  if (NS_FAILED(bs->GetServiceChannel(aDeviceAddress, uuid, this))) {
+    DispatchBluetoothReply(mRunnable, BluetoothValue(),
+                           NS_LITERAL_STRING(ERR_SERVICE_CHANNEL_NOT_FOUND));
+    mRunnable = nullptr;
+    mSocket = nullptr;
+    Listen();
+  }
+}
+
+void
 BluetoothHfpManager::OnGetServiceChannel(const nsAString& aDeviceAddress,
                                          const nsAString& aServiceUuid,
                                          int aChannel)
 {
   MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(!aDeviceAddress.IsEmpty());
   MOZ_ASSERT(mRunnable);
+
+  BluetoothService* bs = BluetoothService::Get();
+  NS_ENSURE_TRUE_VOID(bs);
 
   BluetoothValue v;
 
   if (aChannel < 0) {
-    DispatchBluetoothReply(mRunnable, v,
-                           NS_LITERAL_STRING("DeviceChannelRetrievalError"));
-    mSocket = nullptr;
-    Listen();
+    if (mNeedsUpdatingSdpRecords) {
+      mNeedsUpdatingSdpRecords = false;
+      bs->UpdateSdpRecords(aDeviceAddress, this);
+    } else {
+      DispatchBluetoothReply(mRunnable, v,
+                             NS_LITERAL_STRING(ERR_SERVICE_CHANNEL_NOT_FOUND));
+      mRunnable = nullptr;
+      mSocket = nullptr;
+      Listen();
+    }
+
     return;
   }
 
   if (!mSocket->Connect(NS_ConvertUTF16toUTF8(aDeviceAddress), aChannel)) {
     DispatchBluetoothReply(mRunnable, v,
                            NS_LITERAL_STRING("SocketConnectionError"));
+    mRunnable = nullptr;
     mSocket = nullptr;
     Listen();
-    return;
   }
 }
 
@@ -1641,8 +1722,14 @@ BluetoothHfpManager::ConnectSco(BluetoothReplyRunnable* aRunnable)
 bool
 BluetoothHfpManager::DisconnectSco()
 {
-  if (!mScoSocket) {
+  if (!IsConnected()) {
     NS_WARNING("BluetoothHfpManager is not connected");
+    return false;
+  }
+
+  SocketConnectionStatus status = mScoSocket->GetConnectionStatus();
+  if (status != SOCKET_CONNECTED && status != SOCKET_CONNECTING) {
+    NS_WARNING("No SCO exists");
     return false;
   }
 

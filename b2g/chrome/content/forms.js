@@ -185,6 +185,8 @@ let FormAssistant = {
     addEventListener("resize", this, true, false);
     addEventListener("submit", this, true, false);
     addEventListener("pagehide", this, true, false);
+    addEventListener("keydown", this, true, false);
+    addEventListener("keyup", this, true, false);
     addMessageListener("Forms:Select:Choice", this);
     addMessageListener("Forms:Input:Value", this);
     addMessageListener("Forms:Select:Blur", this);
@@ -202,6 +204,8 @@ let FormAssistant = {
   _focusedElement: null,
   _documentEncoder: null,
   _editor: null,
+  _editing: false,
+  _ignoreEditActionOnce: false,
 
   get focusedElement() {
     if (this._focusedElement && Cu.isDeadWrapper(this._focusedElement))
@@ -227,13 +231,28 @@ let FormAssistant = {
     }
 
     this._documentEncoder = null;
-    this._editor = null;
+    if (this._editor) {
+      // When the nsIFrame of the input element is reconstructed by
+      // CSS restyling, the editor observers are removed. Catch
+      // [nsIEditor.removeEditorObserver] failure exception if that
+      // happens.
+      try {
+        this._editor.removeEditorObserver(this);
+      } catch (e) {}
+      this._editor = null;
+    }
 
     if (element) {
       element.addEventListener('mousedown', this);
       element.addEventListener('mouseup', this);
       if (isContentEditable(element)) {
         this._documentEncoder = getDocumentEncoder(element);
+      }
+      this._editor = getPlaintextEditor(element);
+      if (this._editor) {
+        // Add a nsIEditorObserver to monitor the text content of the focused
+        // element.
+        this._editor.addEditorObserver(this);
       }
     }
 
@@ -246,12 +265,20 @@ let FormAssistant = {
 
   // Get the nsIPlaintextEditor object of current input field.
   get editor() {
-    if (!this._editor && this.focusedElement) {
-      this._editor = getPlaintextEditor(this.focusedElement);
-    }
     return this._editor;
   },
 
+  // Implements nsIEditorObserver get notification when the text content of
+  // current input field has changed.
+  EditAction: function fa_editAction() {
+    if (this._editing) {
+      return;
+    } else if (this._ignoreEditActionOnce) {
+      this._ignoreEditActionOnce = false;
+      return;
+    }
+    this.sendKeyboardState(this.focusedElement);
+  },
 
   handleEvent: function fa_handleEvent(evt) {
     let target = evt.target;
@@ -276,9 +303,14 @@ let FormAssistant = {
           this.showKeyboard(target);
         break;
 
+      case "pagehide":
+        // We are only interested to the pagehide event from the root document.
+        if (target && target != content.document) {
+          break;
+        }
+        // fall through
       case "blur":
       case "submit":
-      case "pagehide":
         if (this.focusedElement)
           this.hideKeyboard();
         break;
@@ -323,6 +355,15 @@ let FormAssistant = {
           }.bind(this), RESIZE_SCROLL_DELAY);
         }
         break;
+
+      case "keydown":
+        // Don't monitor the text change resulting from key event.
+        this._ignoreEditActionOnce = true;
+        break;
+
+      case "keyup":
+        this._ignoreEditActionOnce = false;
+        break;
     }
   },
 
@@ -332,6 +373,7 @@ let FormAssistant = {
       return;
     }
 
+    this._editing = true;
     let json = msg.json;
     switch (msg.name) {
       case "Forms:Input:Value": {
@@ -381,6 +423,8 @@ let FormAssistant = {
         break;
       }
     }
+    this._editing = false;
+
   },
 
   showKeyboard: function fa_showKeyboard(target) {
@@ -592,8 +636,10 @@ function getDocumentEncoder(element) {
                 .createInstance(Ci.nsIDocumentEncoder);
   let flags = Ci.nsIDocumentEncoder.SkipInvisibleContent |
               Ci.nsIDocumentEncoder.OutputRaw |
+              // Bug 902847. Don't trim trailing spaces of a line.
+              Ci.nsIDocumentEncoder.OutputDontRemoveLineEndingSpaces |
               Ci.nsIDocumentEncoder.OutputLFLineBreak |
-              Ci.nsIDocumentEncoder.OutputDropInvisibleBreak;
+              Ci.nsIDocumentEncoder.OutputNonTextContentAsPlaceholder;
   encoder.init(element.ownerDocument, "text/plain", flags);
   return encoder;
 }
@@ -750,6 +796,9 @@ function replaceSurroundingText(element, text, selectionStart, beforeLength,
   }
 
   if (text) {
+    // We don't use CR but LF
+    // see https://bugzilla.mozilla.org/show_bug.cgi?id=902847
+    text = text.replace(/\r/g, '\n');
     // Insert the text to be replaced with.
     editor.insertText(text);
   }

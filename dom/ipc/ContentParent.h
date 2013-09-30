@@ -17,6 +17,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/HalTypes.h"
 #include "mozilla/LinkedList.h"
+#include "mozilla/StaticPtr.h"
 
 #include "nsFrameMessageManager.h"
 #include "nsIObserver.h"
@@ -101,6 +102,7 @@ public:
                        nsIDOMElement* aFrameElement);
 
     static void GetAll(nsTArray<ContentParent*>& aArray);
+    static void GetAllEvenIfDead(nsTArray<ContentParent*>& aArray);
 
     NS_DECL_ISUPPORTS
     NS_DECL_NSIOBSERVER
@@ -138,9 +140,7 @@ public:
         return mSubprocess;
     }
 
-    int32_t Pid() {
-        return base::GetProcId(mSubprocess->GetChildProcessHandle());
-    }
+    int32_t Pid();
 
     bool NeedsPermissionsUpdate() {
         return mSendPermissionUpdates;
@@ -177,7 +177,7 @@ private:
     static nsDataHashtable<nsStringHashKey, ContentParent*> *sAppContentParents;
     static nsTArray<ContentParent*>* sNonAppContentParents;
     static nsTArray<ContentParent*>* sPrivateContent;
-    static LinkedList<ContentParent> sContentParents;
+    static StaticAutoPtr<LinkedList<ContentParent> > sContentParents;
 
     static void JoinProcessesIOThread(const nsTArray<ContentParent*>* aProcesses,
                                       Monitor* aMonitor, bool* aDone);
@@ -237,8 +237,13 @@ private:
      * will return false and this ContentParent will not be returned
      * by the Get*() funtions.  However, the shutdown sequence itself
      * may be asynchronous.
+     *
+     * If aCloseWithError is true and this is the first call to
+     * ShutDownProcess, then we'll close our channel using CloseWithError()
+     * rather than vanilla Close().  CloseWithError() indicates to IPC that this
+     * is an abnormal shutdown (e.g. a crash).
      */
-    void ShutDownProcess();
+    void ShutDownProcess(bool aCloseWithError);
 
     PCompositorParent*
     AllocPCompositor(mozilla::ipc::Transport* aTransport,
@@ -387,9 +392,11 @@ private:
                                           const bool& aElementWasHidden,
                                           bool* aValue);
 
-    virtual bool RecvAudioChannelRegisterType(const AudioChannelType& aType);
+    virtual bool RecvAudioChannelRegisterType(const AudioChannelType& aType,
+                                              const bool& aWithVideo);
     virtual bool RecvAudioChannelUnregisterType(const AudioChannelType& aType,
-                                                const bool& aElementHidden);
+                                                const bool& aElementHidden,
+                                                const bool& aWithVideo);
 
     virtual bool RecvAudioChannelChangedNotification();
 

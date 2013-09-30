@@ -165,7 +165,7 @@ SettingsListener.observe('language.current', 'en-US', function(value) {
       Services.prefs.setBoolPref('dom.sms.strict7BitEncoding', value);
   });
 
-  SettingsListener.observe('ril.sms.requestStatusReport.enabled', true,
+  SettingsListener.observe('ril.sms.requestStatusReport.enabled', false,
     function(value) {
       Services.prefs.setBoolPref('dom.sms.requestStatusReport', value);
   });
@@ -173,6 +173,21 @@ SettingsListener.observe('language.current', 'en-US', function(value) {
   SettingsListener.observe('ril.cellbroadcast.disabled', false,
     function(value) {
       Services.prefs.setBoolPref('ril.cellbroadcast.disabled', value);
+  });
+
+  SettingsListener.observe('ril.radio.disabled', false,
+    function(value) {
+      Services.prefs.setBoolPref('ril.radio.disabled', value);
+  });
+
+  SettingsListener.observe('wap.UAProf.url', '',
+    function(value) {
+      Services.prefs.setCharPref('wap.UAProf.url', value);
+  });
+
+  SettingsListener.observe('wap.UAProf.tagname', 'x-wap-profile',
+    function(value) {
+      Services.prefs.setCharPref('wap.UAProf.tagname', value);
   });
 })();
 
@@ -293,6 +308,8 @@ SettingsListener.observe('app.reportCrashes', 'ask', function(value) {
   } else {
     Services.prefs.clearUserPref('app.reportCrashes');
   }
+  // This preference is consulted during startup.
+  Services.prefs.savePrefFile(null);
 });
 
 // ================ Updates ================

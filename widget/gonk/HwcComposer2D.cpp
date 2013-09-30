@@ -340,15 +340,21 @@ HwcComposer2D::PrepareLayerList(Layer* aLayer,
     LayerRenderState state = layerGL->GetRenderState();
     nsIntSize surfaceSize;
 
+    sp<GraphicBuffer> buffer = nullptr;
+
     if (state.mSurface &&
         state.mSurface->type() == SurfaceDescriptor::TSurfaceDescriptorGralloc) {
         surfaceSize = state.mSurface->get_SurfaceDescriptorGralloc().size();
-    }
-    else {
+        buffer = GrallocBufferActor::GetFrom(*state.mSurface);
+    } else if (state.mGraphicBuffer.get()) {
+        surfaceSize = nsIntSize(state.mGraphicBuffer->getWidth(), state.mGraphicBuffer->getHeight());
+        buffer = state.mGraphicBuffer;
+    } else {
         if (aLayer->AsColorLayer() && mColorFill) {
             fillColor = true;
         } else {
-            LOGD("Layer doesn't have a gralloc buffer");
+            MOZ_ASSERT(!fillColor, "Failed to compose color layer or layer doesn't have a gralloc buffer");
+            LOGD("%s Layer doesn't have a gralloc buffer", aLayer->Name());
             return false;
         }
     }
@@ -368,8 +374,6 @@ HwcComposer2D::PrepareLayerList(Layer* aLayer,
         }
     }
 
-    sp<GraphicBuffer> buffer = fillColor ? nullptr : GrallocBufferActor::GetFrom(*state.mSurface);
-
     nsIntRect visibleRect = visibleRegion.GetBounds();
 
     nsIntRect bufferRect;
@@ -380,8 +384,9 @@ HwcComposer2D::PrepareLayerList(Layer* aLayer,
             bufferRect = nsIntRect(state.mOffset.x, state.mOffset.y,
                 surfaceSize.width, surfaceSize.height);
         } else {
-            bufferRect = nsIntRect(visibleRect.x, visibleRect.y,
-                surfaceSize.width, surfaceSize.height);
+            //Since the buffer doesn't have its own offset, assign the whole
+            //surface size as its buffer bounds
+            bufferRect = nsIntRect(0, 0, surfaceSize.width, surfaceSize.height);
         }
     }
 

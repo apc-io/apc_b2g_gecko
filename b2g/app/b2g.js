@@ -393,13 +393,19 @@ pref("dom.ipc.processCount", 100000);
 
 pref("dom.ipc.browser_frames.oop_by_default", false);
 
-// Temporary permission hack for WebSMS
+// WebSMS
 pref("dom.sms.enabled", true);
 pref("dom.sms.strict7BitEncoding", false); // Disabled by default.
 pref("dom.sms.requestStatusReport", true); // Enabled by default.
 
-// Temporary permission hack for WebContacts
+// WebContacts
 pref("dom.mozContacts.enabled", true);
+
+// Shortnumber matching needed for e.g. Brazil:
+// 01187654321 can be found with 87654321
+pref("dom.phonenumber.substringmatching.BR", 8);
+pref("dom.phonenumber.substringmatching.CO", 10);
+pref("dom.phonenumber.substringmatching.VE", 7);
 
 // WebAlarms
 pref("dom.mozAlarms.enabled", true);
@@ -407,7 +413,7 @@ pref("dom.mozAlarms.enabled", true);
 // SimplePush
 pref("services.push.enabled", true);
 // serverURL to be assigned by services team
-pref("services.push.serverURL", "");
+pref("services.push.serverURL", "wss://push.services.mozilla.com/");
 pref("services.push.userAgentID", "");
 // Exponential back-off start is 5 seconds like in HTTP/1.1.
 // Maximum back-off is pingInterval.
@@ -426,7 +432,6 @@ pref("services.push.udp.port", 2442);
 // NetworkStats
 #ifdef MOZ_B2G_RIL
 pref("dom.mozNetworkStats.enabled", true);
-pref("ril.lastKnownMcc", "724");
 pref("ril.cellbroadcast.disabled", false);
 #endif
 

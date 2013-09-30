@@ -96,11 +96,15 @@ class Channel : public Message::Sender {
   // |message| must be allocated using operator new.  This object will be
   // deleted once the contents of the Message have been sent.
   //
-  //  FIXME bug 551500: the channel does not notice failures, so if the
-  //    renderer crashes, it will silently succeed, leaking the parameter.
-  //    At least the leak will be fixed by...
-  //
+  // If you Send() a message on a Close()'d channel, we delete the message
+  // immediately.
   virtual bool Send(Message* message);
+
+  // Unsound_IsClosed() and Unsound_NumQueuedMessages() are safe to call from
+  // any thread, but the value returned may be out of date, because we don't
+  // use any synchronization when reading or writing it.
+  bool Unsound_IsClosed() const;
+  uint32_t Unsound_NumQueuedMessages() const;
 
 #if defined(OS_POSIX)
   // On POSIX an IPC::Channel wraps a socketpair(), this method returns the
@@ -115,6 +119,10 @@ class Channel : public Message::Sender {
 
   // Return the server side of the socketpair.
   int GetServerFileDescriptor() const;
+
+  // Close the client side of the socketpair.
+  void CloseClientFileDescriptor();
+
 #elif defined(OS_WIN)
   // Return the server pipe handle.
   void* GetServerPipeHandle() const;

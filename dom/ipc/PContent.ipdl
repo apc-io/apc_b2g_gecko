@@ -296,6 +296,7 @@ child:
      * MemoryInfoDumper::dumpGCAndCCLogsToFile.
      */
     async DumpGCAndCCLogsToFile(nsString identifier,
+                                bool dumpAllTraces,
                                 bool dumpChildProcesses);
 
     PTestShell();
@@ -337,7 +338,8 @@ child:
                    nsCString reasons);
 
     FileSystemUpdate(nsString fsName, nsString mountPoint, int32_t fsState,
-                     int32_t mountGeneration);
+                     int32_t mountGeneration, bool isMediaPresent,
+                     bool isSharing);
 
     NotifyProcessPriorityChanged(ProcessPriority priority);
     MinimizeMemoryUsage();
@@ -452,9 +454,10 @@ parent:
                               bool aElementWasHidden)
         returns (bool value);
 
-    sync AudioChannelRegisterType(AudioChannelType aType);
+    sync AudioChannelRegisterType(AudioChannelType aType, bool aWithVideo);
     sync AudioChannelUnregisterType(AudioChannelType aType,
-                                    bool aElementHidden);
+                                    bool aElementHidden,
+                                    bool aWithVideo);
 
     async AudioChannelChangedNotification();
 

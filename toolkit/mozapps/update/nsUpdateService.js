@@ -2610,8 +2610,15 @@ UpdateService.prototype = {
    * See nsIUpdateService.idl
    */
   pauseDownload: function AUS_pauseDownload() {
-    if (this.isDownloading)
+    if (this.isDownloading) {
       this._downloader.cancel();
+    } else if (this._retryTimer) {
+      // Download status is still consider as 'downloading' during retry.
+      // We need to cancel both retry and download at this stage.
+      this._retryTimer.cancel();
+      this._retryTimer = null;
+      this._downloader.cancel();
+    }
   },
 
   /**
@@ -3845,6 +3852,13 @@ Downloader.prototype = {
 
       this._update.statusText = getStatusTextFromCode(status,
                                                       Cr.NS_BINDING_FAILED);
+
+#ifdef MOZ_WIDGET_GONK
+      // bug891009: On FirefoxOS, manaully retry OTA download will reuse
+      // the Update object. We need to remove selected patch so that download
+      // can be triggered again successfully.
+      this._update.selectedPatch.selected = false;
+#endif
 
       // Destroy the updates directory, since we're done with it.
       cleanUpUpdatesDir();

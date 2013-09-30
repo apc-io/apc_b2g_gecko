@@ -176,10 +176,90 @@ MemoryReportRequestParent::~MemoryReportRequestParent()
     MOZ_COUNT_DTOR(MemoryReportRequestParent);
 }
 
+/**
+ * A memory reporter for ContentParent objects themselves.
+ */
+class ContentParentMemoryReporter MOZ_FINAL : public nsIMemoryMultiReporter
+{
+public:
+    NS_DECL_ISUPPORTS
+    NS_DECL_NSIMEMORYMULTIREPORTER
+    NS_MEMORY_REPORTER_MALLOC_SIZEOF_FUN(MallocSizeOf, ContentParentMemoryReporter)
+};
+
+NS_IMPL_ISUPPORTS1(ContentParentMemoryReporter, nsIMemoryMultiReporter)
+
+NS_IMETHODIMP
+ContentParentMemoryReporter::GetExplicitNonHeap(int64_t* aValue)
+{
+    *aValue = 0;
+    return NS_OK;
+}
+
+NS_IMETHODIMP
+ContentParentMemoryReporter::GetName(nsACString& aName)
+{
+    aName.AssignLiteral("ContentParents");
+    return NS_OK;
+}
+
+NS_IMETHODIMP
+ContentParentMemoryReporter::CollectReports(nsIMemoryMultiReporterCallback* cb,
+                                            nsISupports* aClosure)
+{
+    nsAutoTArray<ContentParent*, 16> cps;
+    ContentParent::GetAllEvenIfDead(cps);
+
+    for (uint32_t i = 0; i < cps.Length(); i++) {
+        ContentParent* cp = cps[i];
+        AsyncChannel* channel = cp->GetIPCChannel();
+
+        nsString friendlyName;
+        cp->FriendlyName(friendlyName);
+
+        cp->AddRef();
+        nsrefcnt refcnt = cp->Release();
+
+        const char* channelStr = "no channel";
+        uint32_t numQueuedMessages = 0;
+        if (channel) {
+            if (channel->Unsound_IsClosed()) {
+                channelStr = "closed channel";
+            } else {
+                channelStr = "open channel";
+            }
+            numQueuedMessages = channel->Unsound_NumQueuedMessages();
+        }
+
+        nsPrintfCString path("queued-ipc-messages/content-parent"
+                             "(%s, pid=%d, %s, 0x%p, refcnt=%d)",
+                             NS_ConvertUTF16toUTF8(friendlyName).get(),
+                             cp->Pid(), channelStr, cp, refcnt);
+
+        NS_NAMED_LITERAL_CSTRING(desc,
+            "The number of unset IPC messages held in this ContentParent's "
+            "channel.  A large value here might indicate that we're leaking "
+            "messages.  Similarly, a ContentParent object for a process that's no "
+            "longer running could indicate that we're leaking ContentParents.");
+
+        nsresult rv = cb->Callback(/* process */ EmptyCString(),
+                                   path,
+                                   nsIMemoryReporter::KIND_OTHER,
+                                   nsIMemoryReporter::UNITS_COUNT,
+                                   numQueuedMessages,
+                                   desc,
+                                   aClosure);
+
+        NS_ENSURE_SUCCESS(rv, rv);
+    }
+
+    return NS_OK;
+}
+
 nsDataHashtable<nsStringHashKey, ContentParent*>* ContentParent::sAppContentParents;
 nsTArray<ContentParent*>* ContentParent::sNonAppContentParents;
 nsTArray<ContentParent*>* ContentParent::sPrivateContent;
-LinkedList<ContentParent> ContentParent::sContentParents;
+StaticAutoPtr<LinkedList<ContentParent> > ContentParent::sContentParents;
 
 // This is true when subprocess launching is enabled.  This is the
 // case between StartUp() and ShutDown() or JoinAllSubprocesses().
@@ -239,6 +319,9 @@ ContentParent::StartUp()
     if (XRE_GetProcessType() != GeckoProcessType_Default) {
         return;
     }
+
+    nsRefPtr<ContentParentMemoryReporter> mr = new ContentParentMemoryReporter();
+    NS_RegisterMemoryMultiReporter(mr);
 
     sCanLaunchSubprocesses = true;
 
@@ -470,7 +553,28 @@ ContentParent::GetAll(nsTArray<ContentParent*>& aArray)
 {
     aArray.Clear();
 
-    for (ContentParent* cp = sContentParents.getFirst(); cp;
+    if (!sContentParents) {
+        return;
+    }
+
+    for (ContentParent* cp = sContentParents->getFirst(); cp;
+         cp = cp->getNext()) {
+        if (cp->mIsAlive) {
+            aArray.AppendElement(cp);
+        }
+    }
+}
+
+void
+ContentParent::GetAllEvenIfDead(nsTArray<ContentParent*>& aArray)
+{
+    aArray.Clear();
+
+    if (!sContentParents) {
+        return;
+    }
+
+    for (ContentParent* cp = sContentParents->getFirst(); cp;
          cp = cp->getNext()) {
         aArray.AppendElement(cp);
     }
@@ -685,19 +789,26 @@ ContentParent::TransformPreallocatedIntoApp(const nsAString& aAppManifestURL,
 }
 
 void
-ContentParent::ShutDownProcess()
+ContentParent::ShutDownProcess(bool aCloseWithError)
 {
   if (!mIsDestroyed) {
+    mIsDestroyed = true;
+
     const InfallibleTArray<PIndexedDBParent*>& idbParents =
       ManagedPIndexedDBParent();
     for (uint32_t i = 0; i < idbParents.Length(); ++i) {
       static_cast<IndexedDBParent*>(idbParents[i])->Disconnect();
     }
 
-    // Close() can only be called once.  It kicks off the
-    // destruction sequence.
-    Close();
-    mIsDestroyed = true;
+    if (aCloseWithError) {
+      AsyncChannel* channel = GetIPCChannel();
+      if (channel) {
+        channel->CloseWithError();
+      }
+    } else {
+      // Close() can only be called once: It kicks off the destruction sequence.
+      Close();
+    }
   }
   // NB: must MarkAsDead() here so that this isn't accidentally
   // returned from Get*() while in the midst of shutdown.
@@ -732,11 +843,6 @@ ContentParent::MarkAsDead()
     }
 
     mIsAlive = false;
-
-    // Remove from sContentParents.
-    if (isInList()) {
-         remove();
-    }
 }
 
 void
@@ -905,6 +1011,11 @@ ContentParent::ActorDestroy(ActorDestroyReason why)
         obs->NotifyObservers((nsIPropertyBag2*) props, "ipc:content-shutdown", nullptr);
     }
 
+    // If the child process was terminated due to a SIGKIL, ShutDownProcess
+    // might not have been called yet.  We must call it to ensure that our
+    // channel is closed, etc.
+    ShutDownProcess(/* closeWithError */ true);
+
     MessageLoop::current()->
         PostTask(FROM_HERE,
                  NewRunnableFunction(DelayedDeleteSubprocess, mSubprocess));
@@ -963,7 +1074,8 @@ ContentParent::NotifyTabDestroyed(PBrowserParent* aTab,
     if (ManagedPBrowserParent().Length() == 1) {
         MessageLoop::current()->PostTask(
             FROM_HERE,
-            NewRunnableMethod(this, &ContentParent::ShutDownProcess));
+            NewRunnableMethod(this, &ContentParent::ShutDownProcess,
+                              /* force */ false));
     }
 }
 
@@ -1010,7 +1122,10 @@ ContentParent::ContentParent(mozIApplication* aApp,
     MOZ_ASSERT(!!aApp + aIsForBrowser + aIsForPreallocated <= 1);
 
     // Insert ourselves into the global linked list of ContentParent objects.
-    sContentParents.insertBack(this);
+    if (!sContentParents) {
+        sContentParents = new LinkedList<ContentParent>();
+    }
+    sContentParents->insertBack(this);
 
     if (aApp) {
         aApp->GetManifestURL(mAppManifestURL);
@@ -1109,6 +1224,15 @@ bool
 ContentParent::IsForApp()
 {
     return !mAppManifestURL.IsEmpty();
+}
+
+int32_t
+ContentParent::Pid()
+{
+    if (!mSubprocess || !mSubprocess->GetChildProcessHandle()) {
+        return -1;
+    }
+    return base::GetProcId(mSubprocess->GetChildProcessHandle());
 }
 
 bool
@@ -1341,24 +1465,26 @@ ContentParent::RecvAudioChannelGetMuted(const AudioChannelType& aType,
 }
 
 bool
-ContentParent::RecvAudioChannelRegisterType(const AudioChannelType& aType)
+ContentParent::RecvAudioChannelRegisterType(const AudioChannelType& aType,
+                                            const bool& aWithVideo)
 {
     nsRefPtr<AudioChannelService> service =
         AudioChannelService::GetAudioChannelService();
     if (service) {
-        service->RegisterType(aType, mChildID);
+        service->RegisterType(aType, mChildID, aWithVideo);
     }
     return true;
 }
 
 bool
 ContentParent::RecvAudioChannelUnregisterType(const AudioChannelType& aType,
-                                              const bool& aElementHidden)
+                                              const bool& aElementHidden,
+                                              const bool& aWithVideo)
 {
     nsRefPtr<AudioChannelService> service =
         AudioChannelService::GetAudioChannelService();
     if (service) {
-        service->UnregisterType(aType, aElementHidden, mChildID);
+        service->UnregisterType(aType, aElementHidden, mChildID, aWithVideo);
     }
     return true;
 }
@@ -1413,7 +1539,7 @@ ContentParent::Observe(nsISupports* aSubject,
                        const PRUnichar* aData)
 {
     if (!strcmp(aTopic, "xpcom-shutdown") && mSubprocess) {
-        ShutDownProcess();
+        ShutDownProcess(/* closeWithError */ false);
         NS_ASSERTION(!mSubprocess, "Close should have nulled mSubprocess");
     }
 
@@ -1480,14 +1606,19 @@ ContentParent::Observe(nsISupports* aSubject,
         nsString mountPoint;
         int32_t  state;
         int32_t  mountGeneration;
+        bool     isMediaPresent;
+        bool     isSharing;
 
         vol->GetName(volName);
         vol->GetMountPoint(mountPoint);
         vol->GetState(&state);
         vol->GetMountGeneration(&mountGeneration);
+        vol->GetIsMediaPresent(&isMediaPresent);
+        vol->GetIsSharing(&isSharing);
 
         unused << SendFileSystemUpdate(volName, mountPoint, state,
-                                       mountGeneration);
+                                       mountGeneration, isMediaPresent,
+                                       isSharing);
     }
 #endif
 #ifdef ACCESSIBILITY
@@ -1634,6 +1765,19 @@ ContentParent::GetParamsForBlob(nsDOMFileBase* aBlob,
     resultParams = MysteryBlobConstructorParams();
   }
   else {
+    nsCOMPtr<nsIRemoteBlob> remoteBlob;
+    CallQueryInterface(static_cast<nsIDOMBlob*>(aBlob),
+                       getter_AddRefs(remoteBlob));
+    if (remoteBlob) {
+      BlobParent* actor =
+        static_cast<BlobParent*>(
+          static_cast<PBlobParent*>(remoteBlob->GetPBlob()));
+      if (actor && actor->ManagerIs(this)) {
+        *aOutParams = BlobConstructorNoMultipartParams(actor);
+        return true;
+      }
+    }
+
     BlobOrFileConstructorParams params;
 
     nsString contentType;
@@ -1694,38 +1838,69 @@ ContentParent::GetParamsForBlob(nsDOMFileBase* aBlob,
   }
 
   *aOutParams = resultParams;
-
   return true;
 }
 
 BlobParent*
 ContentParent::GetOrCreateActorForBlob(nsIDOMBlob* aBlob)
 {
-  NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
-  NS_ASSERTION(aBlob, "Null pointer!");
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(aBlob);
+
+  // If the blob represents a remote blob for this ContentParent then we can
+  // simply pass its actor back here.
+  if (nsCOMPtr<nsIRemoteBlob> remoteBlob = do_QueryInterface(aBlob)) {
+    BlobParent* actor =
+      static_cast<BlobParent*>(
+        static_cast<PBlobParent*>(remoteBlob->GetPBlob()));
+    if (actor && actor->ManagerIs(this)) {
+      return actor;
+    }
+  }
 
   // XXX This is only safe so long as all blob implementations in our tree
   //     inherit nsDOMFileBase. If that ever changes then this will need to grow
   //     a real interface or something.
   nsDOMFileBase* blob = static_cast<nsDOMFileBase*>(aBlob);
 
+  // We often pass blobs that are multipart but that only contain one sub-blob
+  // (WebActivities does this a bunch). Unwrap to reduce the number of actors
+  // that we have to maintain.
+  const nsTArray<nsCOMPtr<nsIDOMBlob> >* subBlobs = blob->GetSubBlobs();
+  if (subBlobs && subBlobs->Length() == 1) {
+    const nsCOMPtr<nsIDOMBlob>& subBlob = subBlobs->ElementAt(0);
+    MOZ_ASSERT(subBlob);
+
+    // We can only take this shortcut if the multipart and the sub-blob are both
+    // Blob objects or both File objects.
+    nsCOMPtr<nsIDOMFile> multipartBlobAsFile = do_QueryInterface(aBlob);
+    nsCOMPtr<nsIDOMFile> subBlobAsFile = do_QueryInterface(subBlob);
+    if (!multipartBlobAsFile == !subBlobAsFile) {
+      // The wrapping might have been unnecessary, see if we can simply pass an
+      // existing remote blob for this ContentParent.
+      if (nsCOMPtr<nsIRemoteBlob> remoteSubBlob = do_QueryInterface(subBlob)) {
+        BlobParent* actor =
+          static_cast<BlobParent*>(
+            static_cast<PBlobParent*>(remoteSubBlob->GetPBlob()));
+        if (actor && actor->ManagerIs(this)) {
+          return actor;
+        }
+      }
+
+      // No need to add a reference here since the original blob must have a
+      // strong reference in the caller and it must also have a strong reference
+      // to this sub-blob.
+      aBlob = subBlob;
+      blob = static_cast<nsDOMFileBase*>(aBlob);
+      subBlobs = blob->GetSubBlobs();
+    }
+  }
+
   // All blobs shared between processes must be immutable.
   nsCOMPtr<nsIMutable> mutableBlob = do_QueryInterface(aBlob);
   if (!mutableBlob || NS_FAILED(mutableBlob->SetMutable(false))) {
     NS_WARNING("Failed to make blob immutable!");
     return nullptr;
-  }
-
-  nsCOMPtr<nsIRemoteBlob> remoteBlob = do_QueryInterface(aBlob);
-  if (remoteBlob) {
-    BlobParent* actor =
-      static_cast<BlobParent*>(
-        static_cast<PBlobParent*>(remoteBlob->GetPBlob()));
-    NS_ASSERTION(actor, "Null actor?!");
-
-    if (actor->ManagerIs(this)) {
-      return actor;
-    }
   }
 
   BlobConstructorParams params;
@@ -1742,7 +1917,7 @@ ContentParent::GetOrCreateActorForBlob(nsIDOMBlob* aBlob)
 
   actor->SetManager(this);
 
-  if (const nsTArray<nsCOMPtr<nsIDOMBlob> >* subBlobs = blob->GetSubBlobs()) {
+  if (subBlobs) {
     for (uint32_t i = 0; i < subBlobs->Length(); ++i) {
       BlobConstructorParams subParams;
       nsDOMFileBase* subBlob =
@@ -1778,6 +1953,12 @@ ContentParent::KillHard()
         FROM_HERE,
         NewRunnableFunction(&ProcessWatcher::EnsureProcessTerminated,
                             OtherProcess(), /*force=*/true));
+    //We do clean-up here 
+    MessageLoop::current()->PostDelayedTask(
+        FROM_HERE,
+        NewRunnableMethod(this, &ContentParent::ShutDownProcess,
+                          /* closeWithError */ true),
+        3000);
 }
 
 bool

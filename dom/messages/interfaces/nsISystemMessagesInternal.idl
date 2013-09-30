@@ -47,3 +47,17 @@ interface nsISystemMessagesWrapper: nsISupports
    */
   jsval wrapMessage(in jsval message, in nsIDOMWindow window);
 };
+
+/*
+ * Implements an interface to allow specific message types to
+ * configure some behaviors
+ */
+[scriptable, uuid(a0e970f6-faa9-4605-89d6-fafae8b10a80)]
+interface nsISystemMessagesConfigurator: nsISupports
+{
+  /*
+   * Will be true if this type of system messages assumes/requires
+   * that the app will be brought to the front always.
+   */
+  readonly attribute boolean mustShowRunningApp;
+};

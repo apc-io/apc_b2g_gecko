@@ -84,6 +84,15 @@ MobileMessageCallback::NotifyError(int32_t aError)
     case nsIMobileMessageCallback::INTERNAL_ERROR:
       mDOMRequest->FireError(NS_LITERAL_STRING("InternalError"));
       break;
+    case nsIMobileMessageCallback::NO_SIM_CARD_ERROR:
+      mDOMRequest->FireError(NS_LITERAL_STRING("NoSimCardError"));
+      break;
+    case nsIMobileMessageCallback::RADIO_DISABLED_ERROR:
+      mDOMRequest->FireError(NS_LITERAL_STRING("RadioDisabledError"));
+      break;
+    case nsIMobileMessageCallback::INVALID_ADDRESS_ERROR:
+      mDOMRequest->FireError(NS_LITERAL_STRING("InvalidAddressError"));
+      break;
     default: // SUCCESS_NO_ERROR is handled above.
       MOZ_NOT_REACHED("Should never get here!");
       return NS_ERROR_FAILURE;
@@ -131,7 +140,13 @@ MobileMessageCallback::NotifyMessageDeleted(bool *aDeleted, uint32_t aSize)
   JSContext* cx = sc->GetNativeContext();
   NS_ENSURE_TRUE(cx, NS_ERROR_FAILURE);
 
-  JSObject *deleteArrayObj = JS_NewArrayObject(cx, aSize, NULL);
+  JSObject* global = sc->GetNativeGlobal();
+  NS_ENSURE_TRUE(global, NS_ERROR_FAILURE);
+
+  JSAutoRequest ar(cx);
+  JSAutoCompartment ac(cx, global);
+
+  JSObject* deleteArrayObj = JS_NewArrayObject(cx, aSize, NULL);
   JS::Value jsValTrue = BOOLEAN_TO_JSVAL(1);
   JS::Value jsValFalse = BOOLEAN_TO_JSVAL(0);
   for (uint32_t i = 0; i < aSize; i++) {

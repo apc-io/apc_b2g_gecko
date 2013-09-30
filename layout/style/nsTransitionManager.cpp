@@ -141,7 +141,7 @@ ElementTransitions::HasAnimationOfProperty(nsCSSProperty aProperty) const
 bool
 ElementTransitions::CanPerformOnCompositorThread(CanAnimateFlags aFlags) const
 {
-  nsIFrame* frame = mElement->GetPrimaryFrame();
+  nsIFrame* frame = nsLayoutUtils::GetStyleFrame(mElement);
   if (!frame) {
     return false;
   }
@@ -259,7 +259,7 @@ nsTransitionManager::UpdateThrottledStyle(dom::Element* aElement,
                                      nsCSSPseudoElements::ePseudo_NotPseudoElement,
                                      false), "element not transitioning");
 
-  nsIFrame* primaryFrame = aElement->GetPrimaryFrame();
+  nsIFrame* primaryFrame = nsLayoutUtils::GetStyleFrame(aElement);
   if (!primaryFrame) {
     return nullptr;
   }
@@ -350,7 +350,7 @@ nsTransitionManager::UpdateThrottledStylesForSubtree(nsIContent* aContent,
   } else {
     // reparent the element's style
     nsStyleSet* styleSet = mPresContext->PresShell()->StyleSet();
-    nsIFrame* primaryFrame = aContent->GetPrimaryFrame();
+    nsIFrame* primaryFrame = nsLayoutUtils::GetStyleFrame(aContent);
     if (!primaryFrame) {
       return;
     }
@@ -423,7 +423,7 @@ nsTransitionManager::UpdateAllThrottledStyles()
 
     nsIFrame* primaryFrame;
     if (element &&
-        (primaryFrame = element->GetPrimaryFrame())) {
+        (primaryFrame = nsLayoutUtils::GetStyleFrame(element))) {
       UpdateThrottledStylesForSubtree(element,
         primaryFrame->GetStyleContext()->GetParent(), changeList);
     }
@@ -431,6 +431,28 @@ nsTransitionManager::UpdateAllThrottledStyles()
 
   mPresContext->PresShell()->FrameConstructor()->
     ProcessRestyledFrames(changeList);
+}
+
+void
+nsTransitionManager::ElementDataRemoved()
+{
+  // If we have no transitions or animations left, remove ourselves from
+  // the refresh driver.
+  if (PR_CLIST_IS_EMPTY(&mElementData)) {
+    mPresContext->RefreshDriver()->RemoveRefreshObserver(this, Flush_Style);
+  }
+}
+
+void
+nsTransitionManager::AddElementData(CommonElementAnimationData* aData)
+{
+  if (PR_CLIST_IS_EMPTY(&mElementData)) {
+    // We need to observe the refresh driver.
+    nsRefreshDriver *rd = mPresContext->RefreshDriver();
+    rd->AddRefreshObserver(this, Flush_Style);
+  }
+
+  PR_INSERT_BEFORE(aData, &mElementData);
 }
 
 already_AddRefed<nsIStyleRule>
@@ -1099,9 +1121,6 @@ nsTransitionManager::FlushTransitions(FlushFlags aFlags)
       }
     }
   }
-
-  // We might have removed transitions above.
-  ElementDataRemoved();
 
   if (didThrottle) {
     mPresContext->Document()->SetNeedStyleFlush();

@@ -65,6 +65,7 @@ const DOM_MOBILE_MESSAGE_DELIVERY_SENT     = "sent";
 const DOM_MOBILE_MESSAGE_DELIVERY_ERROR    = "error";
 
 const CALL_WAKELOCK_TIMEOUT              = 5000;
+const SMS_HANDLED_WAKELOCK_TIMEOUT = 5000;
 
 const RIL_IPC_TELEPHONY_MSG_NAMES = [
   "RIL:EnumerateCalls",
@@ -917,7 +918,8 @@ RadioInterfaceLayer.prototype = {
     dataInfo.type = newInfo.type;
     // For the data connection, the `connected` flag indicates whether
     // there's an active data call.
-    dataInfo.connected = this.dataNetworkInterface.connected;
+    dataInfo.connected = (this.getDataCallStateByType("default") ==
+                          RIL.GECKO_NETWORK_STATE_CONNECTED);
 
     // Make sure we also reset the operator and signal strength information
     // if we drop off the network.
@@ -945,7 +947,8 @@ RadioInterfaceLayer.prototype = {
    */
   handleDataCallError: function handleDataCallError(message) {
     // Notify data call error only for data APN
-    if (message.apn == this.dataCallSettings["apn"]) {
+    if (message.apn == this.dataCallSettings["apn"] &&
+        this.dataNetworkInterface.inConnectedTypes("default")) {
       this._sendTargetMessage("mobileconnection", "RIL:DataError", message);
     }
 
@@ -1156,8 +1159,9 @@ RadioInterfaceLayer.prototype = {
       return;
     }
 
-    if (this.dataNetworkInterface.state == RIL.GECKO_NETWORK_STATE_CONNECTING ||
-        this.dataNetworkInterface.state == RIL.GECKO_NETWORK_STATE_DISCONNECTING) {
+    let defaultDataCallState = this.getDataCallStateByType("default");
+    if (defaultDataCallState == RIL.GECKO_NETWORK_STATE_CONNECTING ||
+        defaultDataCallState == RIL.GECKO_NETWORK_STATE_DISCONNECTING) {
       debug("Nothing to do during connecting/disconnecting in progress.");
       return;
     }
@@ -1178,15 +1182,16 @@ RadioInterfaceLayer.prototype = {
       wifi_active = true;
     }
 
-    if (this.dataNetworkInterface.connected &&
-        (!this.dataCallSettings["enabled"] ||
-         (dataInfo.roaming && !this.dataCallSettings["roaming_enabled"]) ||
-         (wifi_active && this.shareDefaultAPNCounter == 0))) {
+    let defaultDataCallConnected = defaultDataCallState ==
+                                   RIL.GECKO_NETWORK_STATE_CONNECTED;
+    if (defaultDataCallConnected &&
+        (!this.dataCallSettings["enabled"]  || wifi_active ||
+         (dataInfo.roaming && !this.dataCallSettings["roaming_enabled"]))) {
       debug("Data call settings: disconnect data call.");
-      this.dataNetworkInterface.disconnect();
+      this.deactivateDataCallByType("default");
       return;
     }
-    if (!this.dataCallSettings["enabled"] || this.dataNetworkInterface.connected) {
+    if (!this.dataCallSettings["enabled"] || defaultDataCallConnected) {
       debug("Data call settings: nothing to do.");
       return;
     }
@@ -1194,7 +1199,7 @@ RadioInterfaceLayer.prototype = {
       debug("We're roaming, but data roaming is disabled.");
       return;
     }
-    if (wifi_active && this.shareDefaultAPNCounter == 0) {
+    if (wifi_active) {
       debug("Don't connect data call when Wifi is connected.");
       return;
     }
@@ -1204,7 +1209,7 @@ RadioInterfaceLayer.prototype = {
     }
 
     debug("Data call settings: connect data call.");
-    this.dataNetworkInterface.connect(this.dataCallSettings);
+    this.setupDataCallByType("default");
   },
 
   /**
@@ -1427,9 +1432,42 @@ RadioInterfaceLayer.prototype = {
     });
   },
 
+  // The following attributes/functions are used for acquiring the CPU wake
+  // lock when the RIL handles the received SMS. Note that we need a timer to
+  // bound the lock's life cycle to avoid exhausting the battery.
+  _smsHandledWakeLock: null,
+  _smsHandledWakeLockTimer: null,
+  _cancelSmsHandledWakeLockTimer: function _cancelSmsHandledWakeLockTimer() {
+    debug("Releasing the CPU wake lock for handling SMS.");
+    if (this._smsHandledWakeLockTimer) {
+      this._smsHandledWakeLockTimer.cancel();
+    }
+    if (this._smsHandledWakeLock) {
+      this._smsHandledWakeLock.unlock();
+      this._smsHandledWakeLock = null;
+    }
+  },
+
   portAddressedSmsApps: null,
   handleSmsReceived: function handleSmsReceived(message) {
     debug("handleSmsReceived: " + JSON.stringify(message));
+
+    // We need to acquire a CPU wake lock to avoid the system falling into
+    // the sleep mode when the RIL handles the received SMS.
+    if (!this._smsHandledWakeLock) {
+      debug("Acquiring a CPU wake lock for handling SMS.");
+      this._smsHandledWakeLock = gPowerManagerService.newWakeLock("cpu");
+    }
+    if (!this._smsHandledWakeLockTimer) {
+      debug("Creating a timer for releasing the CPU wake lock.");
+      this._smsHandledWakeLockTimer =
+        Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+    }
+    debug("Setting the timer for releasing the CPU wake lock.");
+    this._smsHandledWakeLockTimer
+        .initWithCallback(this._cancelSmsHandledWakeLockTimer.bind(this),
+                          SMS_HANDLED_WAKELOCK_TIMEOUT,
+                          Ci.nsITimer.TYPE_ONE_SHOT);
 
     // FIXME: Bug 737202 - Typed arrays become normal arrays when sent to/from workers
     if (message.encoding == RIL.PDU_DCS_MSG_CODING_8BITS_ALPHABET) {
@@ -1619,9 +1657,12 @@ RadioInterfaceLayer.prototype = {
   handleDataCallState: function handleDataCallState(datacall) {
     let data = this.rilContext.data;
 
-    if (datacall.ifname &&
-        datacall.apn == this.dataCallSettings["apn"]) {
-      data.connected = (datacall.state == RIL.GECKO_NETWORK_STATE_CONNECTED);
+    if (datacall.ifname && datacall.apn == this.dataCallSettings["apn"]) {
+      data.connected = false;
+      if (this.dataNetworkInterface.inConnectedTypes("default") &&
+          datacall.state == RIL.GECKO_NETWORK_STATE_CONNECTED) {
+        data.connected = true;
+      }
       this._sendTargetMessage("mobileconnection", "RIL:DataInfoChanged", data);
     }
 
@@ -1714,6 +1755,14 @@ RadioInterfaceLayer.prototype = {
     // RIL:IccInfoChanged corresponds to a DOM event that gets fired only
     // when the MCC or MNC codes have changed.
     this._sendTargetMessage("mobileconnection", "RIL:IccInfoChanged", message);
+
+    // Update lastKnownSimMcc.
+    if (message.mcc) {
+      try {
+        Services.prefs.setCharPref("ril.lastKnownSimMcc",
+                                   message.mcc.toString());
+      } catch (e) {}
+    }
 
     // Update lastKnownHomeNetwork.
     if (message.mcc && message.mnc) {
@@ -1812,6 +1861,9 @@ RadioInterfaceLayer.prototype = {
         }
         break;
       case "xpcom-shutdown":
+        // Cancel the timer of the CPU wake lock for handling the received SMS.
+        this._cancelSmsHandledWakeLockTimer();
+
         ppmm.removeMessageListener("child-process-shutdown", this);
         for (let msgname of RIL_IPC_TELEPHONY_MSG_NAMES) {
           ppmm.removeMessageListener(msgname, this);
@@ -2628,6 +2680,34 @@ RadioInterfaceLayer.prototype = {
       // TODO bug 832140 handle !Components.isSuccessCode(rv)
       Services.obs.notifyObservers(domMessage, kSmsSendingObserverTopic, null);
 
+      // If the radio is disabled or the SIM card is not ready, just directly
+      // return with the corresponding error code.
+      let errorCode;
+      if (!PhoneNumberUtils.isPlainPhoneNumber(options.number)) {
+        debug("Error! Address is invalid when sending SMS: " +
+              options.number);
+        errorCode = Ci.nsIMobileMessageCallback.INVALID_ADDRESS_ERROR;
+      } else if (!this._radioEnabled) {
+        debug("Error! Radio is disabled when sending SMS.");
+        errorCode = Ci.nsIMobileMessageCallback.RADIO_DISABLED_ERROR;
+      } else if (this.rilContext.cardState != "ready") {
+        debug("Error! SIM card is not ready when sending SMS.");
+        errorCode = Ci.nsIMobileMessageCallback.NO_SIM_CARD_ERROR;
+      }
+      if (errorCode) {
+        gMobileMessageDatabaseService
+          .setMessageDelivery(domMessage.id,
+                              null,
+                              DOM_MOBILE_MESSAGE_DELIVERY_ERROR,
+                              RIL.GECKO_SMS_DELIVERY_STATUS_ERROR,
+                              function notifyResult(rv, domMessage) {
+          // TODO bug 832140 handle !Components.isSuccessCode(rv)
+          request.notifySendMessageFailed(errorCode);
+          Services.obs.notifyObservers(domMessage, kSmsFailedObserverTopic, null);
+        });
+        return;
+      }
+
       // Keep current SMS message info for sent/delivered notifications
       options.envelopeId = this.createSmsEnvelope({
           request: request,
@@ -2635,12 +2715,8 @@ RadioInterfaceLayer.prototype = {
           requestStatusReport: options.requestStatusReport
       });
 
-      if (PhoneNumberUtils.isPlainPhoneNumber(options.number)) {
-        this.worker.postMessage(options);
-      } else {
-        debug('Number ' + options.number + ' is not sendable.');
-        this.handleSmsSendFailed(options);
-      }
+      // This is the entry point starting to send SMS.
+      this.worker.postMessage(options);
 
     }.bind(this));
   },
@@ -2708,27 +2784,54 @@ RadioInterfaceLayer.prototype = {
     }
   },
 
-  /**
-   * Number of activated secondary APN data call that shares with default APN.
-   */
-  shareDefaultAPNCounter: 0,
+  setupDataCallBySharedApn: function setupDataCallBySharedApn(apntype) {
+    this.dataNetworkInterface.connect(this.dataCallSettings, apntype);
+
+    // We just call connect() function, so this interface should be in
+    // connecting state. If this interface is already in connected state, we
+    // are sure that this interface have successfully established connection
+    // for other data call types before we call connect() function for current
+    // data call type. In this circumstance, we have to directly update the
+    // necessary data call and interface information to RILContentHelper
+    // and network manager.
+    if (this.dataNetworkInterface.connected) {
+      let dataInfo = this.rilContext.data;
+      if (apntype == "default" && !dataInfo.connected) {
+        dataInfo.connected = true;
+        this._sendMobileConnectionMessage("RIL:DataInfoChanged", dataInfo);
+      }
+
+      // Update the interface status via-registration if the interface has
+      // already been registered in the network manager.
+      if (this.dataNetworkInterface.name in gNetworkManager.networkInterfaces) {
+        gNetworkManager.unregisterNetworkInterface(this.dataNetworkInterface);
+      }
+      gNetworkManager.registerNetworkInterface(this.dataNetworkInterface);
+
+      Services.obs.notifyObservers(this.dataNetworkInterface,
+                                   kNetworkInterfaceStateChangedTopic,
+                                   null);
+    }
+  },
 
   setupDataCallByType: function setupDataCallByType(apntype) {
-    if (apntype != "default" && this.usingDefaultAPN(apntype)) {
-      debug("Setup secondary APN type " + apntype + " which goes through default APN.");
-      this.shareDefaultAPNCounter++;
-      this.updateRILNetworkInterface();
+    // If it's a shared apn type then we can only reuse the
+    // dataNetworkInterface in current design.
+    if (this.usingDefaultAPN(apntype) ||
+        (apntype == "default" && this.usingDefaultAPN("mms")) ||
+        (apntype == "default" && this.usingDefaultAPN("supl"))) {
+      this.setupDataCallBySharedApn(apntype);
       return;
     }
     switch (apntype) {
       case "default":
-        this.dataNetworkInterface.connect(this.dataCallSettings);
+        this.dataNetworkInterface.connect(this.dataCallSettings, apntype);
         break;
       case "mms":
-        this.mmsNetworkInterface.connect(this.dataCallSettingsMMS);
+        this.mmsNetworkInterface.connect(this.dataCallSettingsMMS, apntype);
         break;
       case "supl":
-        this.suplNetworkInterface.connect(this.dataCallSettingsSUPL);
+        this.suplNetworkInterface.connect(this.dataCallSettingsSUPL, apntype);
         break;
       default:
         debug("Unsupported APN type " + apntype);
@@ -2736,24 +2839,54 @@ RadioInterfaceLayer.prototype = {
     }
   },
 
-  deactivateDataCallByType: function deactivateDataCallByType(apntype) {
-    if (apntype != "default" && this.usingDefaultAPN(apntype)) {
-      debug("Deactivate secondary APN type " + apntype + " which goes through default APN.");
-      if (this.shareDefaultAPNCounter > 0) {
-        this.shareDefaultAPNCounter--;
-        this.updateRILNetworkInterface();
+  deactivateDataCallBySharedApn: function deactivateDataCallBySharedApn(apntype) {
+    this.dataNetworkInterface.disconnect(apntype);
+
+    // We just call disconnect() function, so this interface should be in
+    // disconnecting state. If this interface is still in connected state, we
+    // are sure that other data call types still need this connection of this
+    // interface. In this circumstance, we have to directly update the
+    // necessary data call and interface information to RILContentHelper
+    // and network manager.
+    if (this.dataNetworkInterface.connectedTypes.length &&
+        this.dataNetworkInterface.connected) {
+      let dataInfo = this.rilContext.data;
+      if (apntype == "default" && dataInfo.connected) {
+        dataInfo.connected = false;
+        this._sendMobileConnectionMessage("RIL:DataInfoChanged", dataInfo);
       }
+
+      // Update the interface status via-registration if the interface has
+      // already been registered in the network manager.
+      if (this.dataNetworkInterface.name in gNetworkManager.networkInterfaces) {
+        gNetworkManager.unregisterNetworkInterface(this.dataNetworkInterface);
+      }
+      gNetworkManager.registerNetworkInterface(this.dataNetworkInterface);
+
+      Services.obs.notifyObservers(this.dataNetworkInterface,
+                                   kNetworkInterfaceStateChangedTopic,
+                                   null);
+    }
+  },
+
+  deactivateDataCallByType: function deactivateDataCallByType(apntype) {
+    // If it's a shared apn type then we can only reuse the
+    // dataNetworkInterface in current design.
+    if (this.usingDefaultAPN(apntype) ||
+        (apntype == "default" && this.usingDefaultAPN("mms")) ||
+        (apntype == "default" && this.usingDefaultAPN("supl"))) {
+      this.deactivateDataCallBySharedApn(apntype);
       return;
     }
     switch (apntype) {
       case "default":
-        this.dataNetworkInterface.disconnect();
+        this.dataNetworkInterface.disconnect(apntype);
         break;
       case "mms":
-        this.mmsNetworkInterface.disconnect();
+        this.mmsNetworkInterface.disconnect(apntype);
         break;
       case "supl":
-        this.suplNetworkInterface.disconnect();
+        this.suplNetworkInterface.disconnect(apntype);
         break;
       default:
         debug("Unsupported APN type " + apntype);
@@ -2762,8 +2895,15 @@ RadioInterfaceLayer.prototype = {
   },
 
   getDataCallStateByType: function getDataCallStateByType(apntype) {
-    if (apntype != "default" && this.usingDefaultAPN(apntype)) {
-      return this.dataNetworkInterface.state;
+    // If it's a shared apn type then we can only reuse the
+    // dataNetworkInterface in current design.
+    if (this.usingDefaultAPN(apntype) ||
+        (apntype == "default" && this.usingDefaultAPN("mms")) ||
+        (apntype == "default" && this.usingDefaultAPN("supl"))) {
+      if (this.dataNetworkInterface.inConnectedTypes(apntype)) {
+         return this.dataNetworkInterface.state;
+      }
+      return RIL.GECKO_NETWORK_STATE_UNKNOWN;
     }
     switch (apntype) {
       case "default":
@@ -2828,7 +2968,9 @@ RadioInterfaceLayer.prototype = {
 function RILNetworkInterface(ril, type)
 {
   this.mRIL = ril;
-  this.type = type;
+  this.initType = type;
+
+  this.connectedTypes = [];
 }
 
 RILNetworkInterface.prototype = {
@@ -2854,6 +2996,10 @@ RILNetworkInterface.prototype = {
   NETWORK_TYPE_MOBILE:      Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE,
   NETWORK_TYPE_MOBILE_MMS:  Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE_MMS,
   NETWORK_TYPE_MOBILE_SUPL: Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE_SUPL,
+  // The network manager should only need to add the host route for "other"
+  // types, which is the same handling method as the supl type. So let the
+  // definition of other types to be the same as the one of supl type.
+  NETWORK_TYPE_MOBILE_OTHERS: Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE_SUPL,
 
   /**
    * Standard values for the APN connection retry process
@@ -2866,7 +3012,18 @@ RILNetworkInterface.prototype = {
   // Event timer for connection retries
   timer: null,
 
-  type: Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE,
+  get type() {
+    if (this.connectedTypes.indexOf("default") != -1) {
+      return this.NETWORK_TYPE_MOBILE;
+    }
+    if (this.connectedTypes.indexOf("mms") != -1) {
+      return this.NETWORK_TYPE_MOBILE_MMS;
+    }
+    if (this.connectedTypes.indexOf("supl") != -1) {
+      return this.NETWORK_TYPE_MOBILE_SUPL;
+    }
+    return this.NETWORK_TYPE_MOBILE_OTHERS;
+  },
 
   name: null,
 
@@ -2935,7 +3092,30 @@ RILNetworkInterface.prototype = {
     if (this.cid == null) {
       return;
     }
+
     if (this.state == datacall.state) {
+      if (datacall.state != GECKO_NETWORK_STATE_CONNECTED) {
+        return;
+      }
+      // State remains connected, check for minor changes.
+      let changed = false;
+      if (this.gateway != datacall.gw) {
+        this.gateway = datacall.gw;
+        changed = true;
+      }
+      if (datacall.dns &&
+          (this.dns1 != datacall.dns[0] ||
+           this.dns2 != datacall.dns[1])) {
+        this.dns1 = datacall.dns[0];
+        this.dns2 = datacall.dns[1];
+        changed = true;
+      }
+      if (changed) {
+        if (DEBUG) this.debug("Notify for data call minor changes.");
+        Services.obs.notifyObservers(this,
+                                     kNetworkInterfaceStateChangedTopic,
+                                     null);
+      }
       return;
     }
 
@@ -2953,6 +3133,7 @@ RILNetworkInterface.prototype = {
       gNetworkManager.unregisterNetworkInterface(this);
       this.registeredAsNetworkInterface = false;
       this.cid = null;
+      this.connectedTypes = [];
       return;
     }
 
@@ -2970,17 +3151,33 @@ RILNetworkInterface.prototype = {
   registeredAsDataCallCallback: false,
   registeredAsNetworkInterface: false,
   connecting: false,
-  dataCallSettings: {},
+  dataCallSettings: null,
 
   // APN failed connections. Retry counter
   apnRetryCounter: 0,
+
+  connectedTypes: null,
+
+  inConnectedTypes: function inConnectedTypes(type) {
+    return this.connectedTypes.indexOf(type) != -1;
+  },
 
   get connected() {
     return this.state == RIL.GECKO_NETWORK_STATE_CONNECTED;
   },
 
-  connect: function connect(options) {
+  connect: function connect(options, apntype) {
+    if (apntype && !this.inConnectedTypes(apntype)) {
+      this.connectedTypes.push(apntype);
+    }
+
     if (this.connecting || this.connected) {
+      return;
+    }
+
+    // When the retry mechanism is running in background and someone calls
+    // disconnect(), this.connectedTypes.length has chances to become 0.
+    if (!this.connectedTypes.length) {
       return;
     }
 
@@ -3027,6 +3224,7 @@ RILNetworkInterface.prototype = {
     if (this.apnRetryCounter >= this.NETWORK_APNRETRY_MAXRETRIES) {
       this.apnRetryCounter = 0;
       this.timer = null;
+      this.connectedTypes = [];
       debug("Too many APN Connection retries - STOP retrying");
       return;
     }
@@ -3046,7 +3244,16 @@ RILNetworkInterface.prototype = {
                                 Ci.nsITimer.TYPE_ONE_SHOT);
   },
 
-  disconnect: function disconnect() {
+  disconnect: function disconnect(apntype) {
+    let index = this.connectedTypes.indexOf(apntype);
+    if (index != -1) {
+      this.connectedTypes.splice(index, 1);
+    }
+
+    if (this.connectedTypes.length) {
+      return;
+    }
+
     if (this.state == RIL.GECKO_NETWORK_STATE_DISCONNECTING ||
         this.state == RIL.GECKO_NETWORK_STATE_DISCONNECTED) {
       return;

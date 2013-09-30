@@ -16,6 +16,7 @@ this.EXPORTED_SYMBOLS = ["DOMContactManager"];
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/ContactDB.jsm");
+Cu.import("resource://gre/modules/PhoneNumberUtils.jsm");
 
 XPCOMUtils.defineLazyServiceGetter(this, "ppmm",
                                    "@mozilla.org/parentprocessmessagemanager;1",
@@ -56,20 +57,42 @@ this.DOMContactManager = {
     this._db = new ContactDB(myGlobal);
     this._db.init(myGlobal);
 
+    this.configureSubstringMatching();
+
     Services.obs.addObserver(this, "profile-before-change", false);
+    Services.prefs.addObserver("ril.lastKnownSimMcc", this, false);
   },
 
   observe: function(aSubject, aTopic, aData) {
-    myGlobal = null;
-    this._messages.forEach(function(msgName) {
-      ppmm.removeMessageListener(msgName, this);
-    }.bind(this));
-    Services.obs.removeObserver(this, "profile-before-change");
-    ppmm = null;
-    this._messages = null;
-    if (this._db)
-      this._db.close();
-    this._db = null;
+    if (aTopic === 'profile-before-change') {
+      myGlobal = null;
+      this._messages.forEach(function(msgName) {
+        ppmm.removeMessageListener(msgName, this);
+      }.bind(this));
+      Services.obs.removeObserver(this, "profile-before-change");
+      Services.prefs.removeObserver("dom.phonenumber.substringmatching", this);
+      ppmm = null;
+      this._messages = null;
+      if (this._db)
+        this._db.close();
+      this._db = null;
+    } else if (aTopic === 'nsPref:changed' && aData === "ril.lastKnownSimMcc") {
+      this.configureSubstringMatching();
+    }
+  },
+
+  configureSubstringMatching: function() {
+    let countryName = PhoneNumberUtils.getCountryName();
+    if (Services.prefs.getPrefType("dom.phonenumber.substringmatching." + countryName) == Ci.nsIPrefBranch.PREF_INT) {
+      let val = Services.prefs.getIntPref("dom.phonenumber.substringmatching." + countryName);
+      if (val) {
+        this._db.enableSubstringMatching(val);
+        return;
+       }
+     }
+    // if we got here, we dont have a substring setting
+    // for this country, so disable substring matching
+    this._db.disableSubstringMatching();
   },
 
   assertPermission: function(aMessage, aPerm) {
@@ -203,7 +226,8 @@ this.DOMContactManager = {
               requestID: msg.requestID,
               revision: revision
             });
-          }
+          },
+          function(aErrorMsg) { mm.sendAsyncMessage("Contacts:GetRevision:Return:KO", { requestID: msg.requestID, errorMsg: aErrorMsg }); }.bind(this)
         );
         break;
       case "Contacts:RegisterForMessages":

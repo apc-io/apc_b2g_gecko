@@ -687,12 +687,6 @@ public:
   // This must be called on the main thread only.
   void PlaybackPositionChanged();
 
-  // Calls mElement->UpdateReadyStateForData, telling it which state we have
-  // entered.  Main thread only.
-  void NextFrameUnavailableBuffering();
-  void NextFrameAvailable();
-  void NextFrameUnavailable();
-
   // Calls mElement->UpdateReadyStateForData, telling it whether we have
   // data for the next frame and if we're buffering. Main thread only.
   void UpdateReadyStateForData();
@@ -836,6 +830,10 @@ public:
   // True if this decoder is in dormant state.
   // Should be true only when PlayState is PLAY_STATE_LOADING.
   bool mIsDormant;
+
+  // True if this decoder is exiting from dormant state.
+  // Should be true only when PlayState is PLAY_STATE_LOADING.
+  bool mIsExitingDormant;
 
   // Set to one of the valid play states.
   // This can only be changed on the main thread while holding the decoder

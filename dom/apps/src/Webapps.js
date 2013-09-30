@@ -276,7 +276,9 @@ WebappsRegistry.prototype = {
 # B2G Desktop and others: installPackage implementation status varies
                                          Ci.mozIDOMApplicationRegistry2,
 #endif
-                                         Ci.nsIDOMGlobalPropertyInitializer]),
+                                         Ci.nsIDOMGlobalPropertyInitializer,
+                                         Ci.nsIMessageListener,
+                                         Ci.nsISupportsWeakReference]),
 
   classInfo: XPCOMUtils.generateCI({classID: Components.ID("{fff440b3-fae2-45c1-bf03-3b5a2e432270}"),
                                     contractID: "@mozilla.org/webapps;1",
@@ -299,16 +301,10 @@ WebappsRegistry.prototype = {
                                     classDescription: "Webapps Registry"})
 }
 
+#ifndef MOZ_B2G_RIL
 /**
-  * nsIDOMDOMError object
-  */
-function createDOMError(aError) {
-  let error = Cc["@mozilla.org/dom-error;1"]
-                .createInstance(Ci.nsIDOMDOMError);
-  error.wrappedJSObject.init(aError);
-  return error;
-}
-
+ * nsIDOMDOMError object
+ */
 function DOMError() {
   this.wrappedJSObject = this;
 }
@@ -328,6 +324,7 @@ DOMError.prototype = {
                                     flags: Ci.nsIClassInfo.DOM_OBJECT,
                                     classDescription: "DOMError object"})
 }
+#endif
 
 /**
   * mozIDOMApplication object
@@ -474,7 +471,10 @@ WebappsApplication.prototype = {
   },
 
   get downloadError() {
-    return createDOMError(this._downloadError);
+    let error = Cc["@mozilla.org/dom-error;1"]
+                  .createInstance(Ci.nsIDOMDOMError);
+    error.wrappedJSObject.init(this._downloadError);
+    return error;
   },
 
   download: function() {
@@ -676,7 +676,9 @@ WebappsApplication.prototype = {
 
   classID: Components.ID("{723ed303-7757-4fb0-b261-4f78b1f6bd22}"),
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.mozIDOMApplication]),
+  QueryInterface: XPCOMUtils.generateQI([Ci.mozIDOMApplication,
+                                         Ci.nsIMessageListener,
+                                         Ci.nsISupportsWeakReference]),
 
   classInfo: XPCOMUtils.generateCI({classID: Components.ID("{723ed303-7757-4fb0-b261-4f78b1f6bd22}"),
                                     contractID: "@mozilla.org/webapps/application;1",
@@ -826,7 +828,9 @@ WebappsApplicationMgmt.prototype = {
 
   classID: Components.ID("{8c1bca96-266f-493a-8d57-ec7a95098c15}"),
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.mozIDOMApplicationMgmt]),
+  QueryInterface: XPCOMUtils.generateQI([Ci.mozIDOMApplicationMgmt,
+                                         Ci.nsIMessageListener,
+                                         Ci.nsISupportsWeakReference]),
 
   classInfo: XPCOMUtils.generateCI({classID: Components.ID("{8c1bca96-266f-493a-8d57-ec7a95098c15}"),
                                     contractID: "@mozilla.org/webapps/application-mgmt;1",
@@ -835,6 +839,11 @@ WebappsApplicationMgmt.prototype = {
                                     classDescription: "Webapps Application Mgmt"})
 }
 
+#ifdef MOZ_B2G_RIL
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory([WebappsRegistry,
-                                                     WebappsApplication,
-                                                     DOMError]);
+                                                     WebappsApplication]);
+#else
+this.NSGetFactory = XPCOMUtils.generateNSGetFactory([WebappsRegistry,
+                                                     DOMError,
+                                                     WebappsApplication]);
+#endif

@@ -37,6 +37,7 @@ namespace mozilla {
 class MediaResource;
 }
 
+class nsRange;
 class nsITimer;
 
 #ifdef MOZ_DASH
@@ -328,6 +329,7 @@ public:
   static bool IsOmxSupportedType(const nsACString& aType);
   static const char gOmxTypes[6][16];
   static char const *const gH264Codecs[7];
+  static char const *const gMpegAudioCodecs[2];
 #endif
 
 #ifdef MOZ_MEDIA_PLUGINS
@@ -761,7 +763,7 @@ protected:
 
   // Points to the child source elements, used to iterate through the children
   // when selecting a resource to load.
-  nsCOMPtr<nsIDOMRange> mSourcePointer;
+  nsRefPtr<nsRange> mSourcePointer;
 
   // Points to the document whose load we're blocking. This is the document
   // we're bound to when loading starts.

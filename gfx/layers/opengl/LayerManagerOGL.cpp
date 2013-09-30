@@ -42,6 +42,10 @@
 #include "gfxPlatformMac.h"
 #endif
 
+#ifdef MOZ_WIDGET_GONK
+#include "ui/FramebufferNativeWindow.h"
+#endif
+
 namespace mozilla {
 namespace layers {
 
@@ -1037,6 +1041,16 @@ LayerManagerOGL::Render()
   // Allow widget to render a custom foreground too.
   mWidget->DrawWindowOverlay(this, rect);
 
+#ifdef MOZ_WIDGET_GONK
+  // Should be called when composition rendering is complete for a frame.
+  // Only HWC v1.0 needs this call. ICS gonk always needs the call.
+  // XXX HWC v1.1 or newer does not need the call. Need to handle it in JB gonk.
+  android::FramebufferNativeWindow* nativeWindow = reinterpret_cast<android::FramebufferNativeWindow*> (mWidget->GetNativeData(NS_NATIVE_WINDOW));
+  if (nativeWindow) {
+    nativeWindow->compositionComplete();
+  }
+#endif
+
 #ifdef MOZ_DUMP_PAINTING
   if (gfxUtils::sDumpPainting) {
     nsIntRect rect;
@@ -1353,7 +1367,7 @@ GetFrameBufferInternalFormat(GLContext* gl,
   return LOCAL_GL_RGBA;
 }
 
-void
+bool
 LayerManagerOGL::CreateFBOWithTexture(const nsIntRect& aRect, InitMode aInit,
                                       GLuint aCurrentFrameBuffer,
                                       GLuint *aFBO, GLuint *aTexture)
@@ -1435,6 +1449,8 @@ LayerManagerOGL::CreateFBOWithTexture(const nsIntRect& aRect, InitMode aInit,
 
   // Making this call to fCheckFramebufferStatus prevents a crash on
   // PowerVR. See bug 695246.
+  //
+  // Return false instead of abort when create FBO failed. Bug 867226
   GLenum result = mGLContext->fCheckFramebufferStatus(LOCAL_GL_FRAMEBUFFER);
   if (result != LOCAL_GL_FRAMEBUFFER_COMPLETE) {
     nsAutoCString msg;
@@ -1446,7 +1462,13 @@ LayerManagerOGL::CreateFBOWithTexture(const nsIntRect& aRect, InitMode aInit,
     msg.AppendInt(aRect.width);
     msg.Append(", aRect.height ");
     msg.AppendInt(aRect.height);
-    NS_RUNTIMEABORT(msg.get());
+    NS_WARNING(msg.get());
+
+    mGLContext->fBindFramebuffer(LOCAL_GL_FRAMEBUFFER, 0);
+    mGLContext->fDeleteFramebuffers(1, &fbo);
+    mGLContext->fDeleteTextures(1, &tex);
+
+    return false;
   }
 
   SetupPipeline(aRect.width, aRect.height, DontApplyWorldTransform);
@@ -1459,6 +1481,8 @@ LayerManagerOGL::CreateFBOWithTexture(const nsIntRect& aRect, InitMode aInit,
 
   *aFBO = fbo;
   *aTexture = tex;
+
+  return true;
 }
 
 already_AddRefed<ShadowThebesLayer>

@@ -65,6 +65,33 @@ ProxyReleaseToMainThread(SmartPtr<T>& aDoomed)
   }
 }
 
+template <ActorFlavorEnum ActorFlavor>
+already_AddRefed<nsIDOMBlob>
+BlobFromExistingActor(const BlobConstructorNoMultipartParams& aParams)
+{
+  MOZ_STATIC_ASSERT(ActorFlavor == Parent,
+                    "There can only be Parent and Child, and Child should "
+                    "instantiate below!");
+
+  MOZ_ASSERT(aParams.type() == BlobConstructorNoMultipartParams::TPBlobParent);
+
+  Blob<Parent>* actor = static_cast<Blob<Parent>*>(aParams.get_PBlobParent());
+  MOZ_ASSERT(actor);
+
+  return actor->GetBlob();
+}
+
+template <>
+already_AddRefed<nsIDOMBlob>
+BlobFromExistingActor<Child>(const BlobConstructorNoMultipartParams& aParams)
+{
+  MOZ_ASSERT(aParams.type() == BlobConstructorNoMultipartParams::TPBlobChild);
+
+  Blob<Child>* actor = static_cast<Blob<Child>*>(aParams.get_PBlobChild());
+  MOZ_ASSERT(actor);
+
+  return actor->GetBlob();
+}
 
 // This class exists to keep a blob alive at least as long as its internal
 // stream.
@@ -1094,7 +1121,7 @@ public:
   RemoteMemoryBlob(void* aMemoryBuffer,
                    uint64_t aLength,
                    const nsAString& aContentType)
-  : nsDOMMemoryFile(aMemoryBuffer, aLength, EmptyString(), aContentType)
+  : nsDOMMemoryFile(aMemoryBuffer, aLength, aContentType)
   {
     mImmutable = true;
   }
@@ -1382,6 +1409,15 @@ Blob<ActorFlavor>::Create(const BlobConstructorParams& aParams)
           NS_ENSURE_SUCCESS(rv, nullptr);
 
           return new Blob<ActorFlavor>(slice);
+        }
+
+        case BlobConstructorNoMultipartParams::TPBlobParent:
+        case BlobConstructorNoMultipartParams::TPBlobChild: {
+          nsCOMPtr<nsIDOMBlob> localBlob =
+            BlobFromExistingActor<ActorFlavor>(params);
+          MOZ_ASSERT(localBlob);
+
+          return new Blob<ActorFlavor>(localBlob);
         }
 
         default:
@@ -1740,14 +1776,18 @@ Blob<ActorFlavor>::RecvPBlobConstructor(ProtocolType* aActor,
   MOZ_ASSERT(NS_IsMainThread());
 
   Blob<ActorFlavor>* subBlobActor = static_cast<Blob<ActorFlavor>*>(aActor);
+  MOZ_ASSERT(subBlobActor->ManagerIs(this));
 
-  if (!subBlobActor->ManagerIs(this)) {
-    // Somebody screwed up!
-    return false;
+  // Append sub-blobs here, but slices are special: they are sub-actors but not
+  // sub-blobs.
+  if (aParams.type() !=
+        BlobConstructorParams::TBlobConstructorNoMultipartParams ||
+      aParams.get_BlobConstructorNoMultipartParams().type() !=
+        BlobConstructorNoMultipartParams::TSlicedBlobConstructorParams) {
+    nsCOMPtr<nsIDOMBlob> blob = subBlobActor->GetBlob();
+    static_cast<nsDOMMultipartFile*>(mBlob)->AddBlob(blob);
   }
 
-  nsCOMPtr<nsIDOMBlob> blob = subBlobActor->GetBlob();
-  static_cast<nsDOMMultipartFile*>(mBlob)->AddBlob(blob);
   return true;
 }
 

@@ -1007,7 +1007,7 @@ NS_IMETHODIMP Navigator::GetDeviceStorages(const nsAString &aType, nsIVariant** 
   }
 
   nsTArray<nsRefPtr<nsDOMDeviceStorage> > stores;
-  nsDOMDeviceStorage::CreateDeviceStoragesFor(win, aType, stores, false);
+  nsDOMDeviceStorage::CreateDeviceStoragesFor(win, aType, stores);
 
   nsCOMPtr<nsIWritableVariant> result = do_CreateInstance("@mozilla.org/variant;1");
   NS_ENSURE_TRUE(result, NS_ERROR_FAILURE);
@@ -1468,7 +1468,7 @@ Navigator::GetMozTime(nsIDOMMozTimeManager** aTime)
   *aTime = nullptr;
 
   if (!CheckPermission("time")) {
-    return NS_ERROR_DOM_SECURITY_ERR;
+    return NS_OK;
   }
 
   if (!mTimeManager) {

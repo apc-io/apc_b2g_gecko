@@ -67,8 +67,9 @@ public:
   virtual void OnGetServiceChannel(const nsAString& aDeviceAddress,
                                    const nsAString& aServiceUuid,
                                    int aChannel) MOZ_OVERRIDE;
+  virtual void OnUpdateSdpRecords(const nsAString& aDeviceAddress) MOZ_OVERRIDE;
 
-  void Connect(const nsAString& aDeviceObjectPath,
+  void Connect(const nsAString& aDeviceAddress,
                const bool aIsHandsfree,
                BluetoothReplyRunnable* aRunnable);
   void Disconnect();
@@ -88,10 +89,12 @@ public:
   void GetAddress(nsAString& aDeviceAddress);
 
 private:
+  class CloseScoTask;
   class GetVolumeTask;
   class RespondToBLDNTask;
   class SendRingIndicatorTask;
 
+  friend class CloseScoTask;
   friend class GetVolumeTask;
   friend class RespondToBLDNTask;
   friend class SendRingIndicatorTask;
@@ -131,6 +134,9 @@ private:
   int mNetworkSelectionMode;
   bool mReceiveVgsFlag;
   bool mDialingRequestProcessed;
+  bool mIsHandsfree;
+  bool mNeedsUpdatingSdpRecords;
+
   nsString mDeviceAddress;
   nsString mMsisdn;
   nsString mOperatorName;

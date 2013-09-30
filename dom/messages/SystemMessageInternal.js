@@ -47,6 +47,17 @@ function debug(aMsg) {
   // dump("-- SystemMessageInternal " + Date.now() + " : " + aMsg + "\n");
 }
 
+
+let defaultMessageConfigurator = {
+  get mustShowRunningApp() {
+    return false;
+  }
+};
+
+const MSG_SENT_SUCCESS = 0;
+const MSG_SENT_FAILURE_PERM_DENIED = 1;
+const MSG_SENT_FAILURE_APP_NOT_RUNNING = 2;
+
 // Implementation of the component used by internal users.
 
 function SystemMessageInternal() {
@@ -66,6 +77,8 @@ function SystemMessageInternal() {
 
   this._cpuWakeLocks = {};
 
+  this._configurators = {};
+
   Services.obs.addObserver(this, "xpcom-shutdown", false);
   Services.obs.addObserver(this, "webapps-registry-start", false);
   Services.obs.addObserver(this, "webapps-registry-ready", false);
@@ -77,6 +90,22 @@ function SystemMessageInternal() {
 }
 
 SystemMessageInternal.prototype = {
+
+  _getMessageConfigurator: function _getMessageConfigurator(aType) {
+    debug("_getMessageConfigurator for type: " + aType);
+    if (this._configurators[aType] === undefined) {
+      let contractID = "@mozilla.org/dom/system-messages/configurator/" + aType + ";1";
+      if (contractID in Cc) {
+        debug(contractID + " is registered, creating an instance");
+        this._configurators[aType] =
+          Cc[contractID].createInstance(Ci.nsISystemMessagesConfigurator);
+      } else {
+        debug(contractID + "is not registered, caching the answer");
+        this._configurators[aType] = null;
+      }
+    }
+    return this._configurators[aType] || defaultMessageConfigurator;
+  },
 
   _cancelCpuWakeLock: function _cancelCpuWakeLock(aPageKey) {
     let cpuWakeLock = this._cpuWakeLocks[aPageKey];
@@ -147,13 +176,16 @@ SystemMessageInternal.prototype = {
     debug("Sending " + aType + " " + JSON.stringify(aMessage) +
       " for " + aPageURI.spec + " @ " + aManifestURI.spec);
 
+    let result = this._sendMessageCommon(aType,
+                                         aMessage,
+                                         messageID,
+                                         aPageURI.spec,
+                                         aManifestURI.spec);
+    debug("Returned status of sending message: " + result);
+
     // Don't need to open the pages and queue the system message
     // which was not allowed to be sent.
-    if (!this._sendMessageCommon(aType,
-                                 aMessage,
-                                 messageID,
-                                 aPageURI.spec,
-                                 aManifestURI.spec)) {
+    if (result === MSG_SENT_FAILURE_PERM_DENIED) {
       return;
     }
 
@@ -170,7 +202,7 @@ SystemMessageInternal.prototype = {
       // Note that we only need to open each app page once.
       let key = this._createKeyForPage(aPage);
       if (!pagesToOpen.hasOwnProperty(key)) {
-        this._openAppPage(aPage, aMessage);
+        this._openAppPage(aPage, aMessage, result);
         pagesToOpen[key] = true;
       }
     }, this);
@@ -195,13 +227,16 @@ SystemMessageInternal.prototype = {
     let pagesToOpen = {};
     this._pages.forEach(function(aPage) {
       if (aPage.type == aType) {
+        let result = this._sendMessageCommon(aType,
+                                             aMessage,
+                                             messageID,
+                                             aPage.uri,
+                                             aPage.manifest);
+        debug("Returned status of sending message: " + result);
+
         // Don't need to open the pages and queue the system message
         // which was not allowed to be sent.
-        if (!this._sendMessageCommon(aType,
-                                     aMessage,
-                                     messageID,
-                                     aPage.uri,
-                                     aPage.manifest)) {
+        if (result === MSG_SENT_FAILURE_PERM_DENIED) {
           return;
         }
 
@@ -212,7 +247,7 @@ SystemMessageInternal.prototype = {
         // Note that we only need to open each app page once.
         let key = this._createKeyForPage(aPage);
         if (!pagesToOpen.hasOwnProperty(key)) {
-          this._openAppPage(aPage, aMessage);
+          this._openAppPage(aPage, aMessage, result);
           pagesToOpen[key] = true;
         }
       }
@@ -492,12 +527,27 @@ SystemMessageInternal.prototype = {
     }
   },
 
-  _openAppPage: function _openAppPage(aPage, aMessage) {
+  _openAppPage: function _openAppPage(aPage, aMessage, aMsgSentStatus) {
+    // This means the app must be brought to the foreground.
+    let showApp = this._getMessageConfigurator(aPage.type).mustShowRunningApp;
+
+    // We should send the open-app message if the system message was
+    // not sent, or if it was sent but we should show the app anyway.
+    if ((aMsgSentStatus === MSG_SENT_SUCCESS) && !showApp) {
+      return;
+    }
+
+    // This flag means the app must *only* be brought to the foreground
+    // and we don't need to load the app to handle messages.
+    let onlyShowApp = (aMsgSentStatus === MSG_SENT_SUCCESS) && showApp;
+
     // We don't need to send the full object to observers.
     let page = { uri: aPage.uri,
                  manifest: aPage.manifest,
                  type: aPage.type,
-                 target: aMessage.target };
+                 target: aMessage.target,
+                 onlyShowApp: onlyShowApp,
+                 showApp: showApp };
     debug("Asking to open " + JSON.stringify(page));
     Services.obs.notifyObservers(this, "system-messages-open-app", JSON.stringify(page));
   },
@@ -533,13 +583,13 @@ SystemMessageInternal.prototype = {
           .isSystemMessagePermittedToSend(aType,
                                           aPageURI,
                                           aManifestURI)) {
-      return false;
+      return MSG_SENT_FAILURE_PERM_DENIED;
     }
 
     let appPageIsRunning = false;
     let pageKey = this._createKeyForPage({ type: aType,
                                            manifest: aManifestURI,
-                                           uri: aPageURI })
+                                           uri: aPageURI });
 
     let targets = this._listeners[aManifestURI];
     if (targets) {
@@ -579,9 +629,11 @@ SystemMessageInternal.prototype = {
       // message when the page finishes handling the system message with other
       // pending messages. At that point, we'll release the lock we acquired.
       this._acquireCpuWakeLock(pageKey);
+      return MSG_SENT_FAILURE_APP_NOT_RUNNING;
+    } else {
+      return MSG_SENT_SUCCESS;
     }
 
-    return true;
   },
 
   classID: Components.ID("{70589ca5-91ac-4b9e-b839-d6a88167d714}"),

@@ -178,6 +178,12 @@ const ContentPanning = {
 
     this.position.set(screenX, screenY);
     KineticPanning.record(new Point(0, 0), evt.timeStamp);
+
+    // We prevent start events to avoid sending a focus event at the end of this
+    // touch series. See bug 889717.
+    if (this.panning || this.preventNextClick) {
+      evt.preventDefault();
+    }
   },
 
   onTouchEnd: function cp_onTouchEnd(evt) {
@@ -209,13 +215,21 @@ const ContentPanning = {
     }
 
     if (this.target && click && (this.panning || this.preventNextClick)) {
-      let target = this.target;
-      let view = target.ownerDocument ? target.ownerDocument.defaultView
-                                      : target;
-      view.addEventListener('click', this, true, true);
+      if (this.hybridEvents) {
+        let target = this.target;
+        let view = target.ownerDocument ? target.ownerDocument.defaultView
+                                        : target;
+        view.addEventListener('click', this, true, true);
+      } else {
+        // We prevent end events to avoid sending a focus event. See bug 889717.
+        evt.preventDefault();
+      }
     }
 
     this._finishPanning();
+
+    // Now that we're done, avoid entraining the thing we just panned.
+    this.pointerDownTarget = null;
   },
 
   // True when there's an async pan-zoom controll watching the
@@ -627,9 +641,6 @@ const KineticPanning = {
     let momentums = this.momentums;
     let flick = momentums[momentums.length - 1].time - momentums[0].time < 300;
 
-    // Calculate the panning based on the last moves.
-    momentums = momentums.slice(-kSamples);
-
     let distance = new Point(0, 0);
     momentums.forEach(function(momentum) {
       distance.add(momentum.dx, momentum.dy);
@@ -688,6 +699,12 @@ const KineticPanning = {
   momentums: [],
   record: function kp_record(delta, timestamp) {
     this.momentums.push({ 'time': timestamp, 'dx' : delta.x, 'dy' : delta.y });
+
+    // We only need to keep kSamples in this.momentums.
+    if (this.momentums.length > kSamples) {
+      this.momentums.shift();
+    }
+
     this.distance.add(delta.x, delta.y);
   },
 
