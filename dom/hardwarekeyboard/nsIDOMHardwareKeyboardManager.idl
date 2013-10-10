@@ -1,0 +1,20 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsIDOMEventTarget.idl"
+
+[scriptable, builtinclass, uuid(B35437F6-2B3C-11E3-891E-5AD66088709B)]
+interface nsIDOMHardwareKeyboardManager : nsIDOMEventTarget {
+  /**
+   * Indicates whether the keyboard are plugged in or not.
+   */
+  readonly attribute boolean isPlugged;
+
+  /**
+   * Fired when the keyboard are plugged or unplugged.
+   *
+   */
+  [implicit_jscontext] attribute jsval onhardwarekeyboardconnected;
+  [implicit_jscontext] attribute jsval onhardwarekeyboarddisconnected;
+};

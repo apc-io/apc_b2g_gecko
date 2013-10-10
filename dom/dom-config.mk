@@ -5,6 +5,7 @@
 DOM_SRCDIRS = \
   dom/base \
   dom/battery \
+  dom/hardwarekeyboard \
   dom/encoding \
   dom/file \
   dom/power \

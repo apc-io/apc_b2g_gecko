@@ -1,0 +1,13 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+
+interface nsIDOMHardwareKeyboardManager;
+
+[scriptable, uuid(9A9FD1E2-2B3D-11E3-89D2-B6D76088709B)]
+interface nsINavigatorHardwareKeyboardManager : nsISupports
+{
+  readonly attribute nsIDOMHardwareKeyboardManager hardwareKeyboardManager;
+};

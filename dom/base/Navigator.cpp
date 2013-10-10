@@ -26,6 +26,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Telemetry.h"
 #include "BatteryManager.h"
+#include "HardwareKeyboardManager.h"
 #include "PowerManager.h"
 #include "nsIDOMWakeLock.h"
 #include "nsIPowerManagerService.h"
@@ -116,6 +117,7 @@ NS_INTERFACE_MAP_BEGIN(Navigator)
   NS_INTERFACE_MAP_ENTRY(nsIDOMNavigatorDeviceStorage)
   NS_INTERFACE_MAP_ENTRY(nsIDOMNavigatorGeolocation)
   NS_INTERFACE_MAP_ENTRY(nsINavigatorBattery)
+  NS_INTERFACE_MAP_ENTRY(nsINavigatorHardwareKeyboardManager)
   NS_INTERFACE_MAP_ENTRY(nsIDOMNavigatorDesktopNotification)
   NS_INTERFACE_MAP_ENTRY(nsIDOMMozNavigatorSms)
   NS_INTERFACE_MAP_ENTRY(nsIDOMMozNavigatorMobileMessage)
@@ -172,6 +174,11 @@ Navigator::Invalidate()
   if (mBatteryManager) {
     mBatteryManager->Shutdown();
     mBatteryManager = nullptr;
+  }
+
+  if (mHardwareKeyboardManager) {
+    //mHardwareKeyboardManager->Shutdown();
+    mHardwareKeyboardManager = nullptr;
   }
 
   if (mPowerManager) {
@@ -1007,7 +1014,7 @@ NS_IMETHODIMP Navigator::GetDeviceStorages(const nsAString &aType, nsIVariant** 
   }
 
   nsTArray<nsRefPtr<nsDOMDeviceStorage> > stores;
-  nsDOMDeviceStorage::CreateDeviceStoragesFor(win, aType, stores);
+  nsDOMDeviceStorage::CreateDeviceStoragesFor(win, aType, stores, false);
 
   nsCOMPtr<nsIWritableVariant> result = do_CreateInstance("@mozilla.org/variant;1");
   NS_ENSURE_TRUE(result, NS_ERROR_FAILURE);
@@ -1155,6 +1162,27 @@ Navigator::GetBattery(nsIDOMBatteryManager** aBattery)
   }
 
   NS_ADDREF(*aBattery = mBatteryManager);
+
+  return NS_OK;
+}
+
+//*****************************************************************************
+//    Navigator::nsINavigatorHardwareKeyboardManager
+//*****************************************************************************
+NS_IMETHODIMP
+Navigator::GetHardwareKeyboardManager(nsIDOMHardwareKeyboardManager** aHardwareKeyboard)
+{
+  if (!mHardwareKeyboardManager) {
+    *aHardwareKeyboard = nullptr;
+
+    nsCOMPtr<nsPIDOMWindow> win(do_QueryReferent(mWindow));
+    NS_ENSURE_TRUE(win && win->GetDocShell(), NS_OK);
+
+    mHardwareKeyboardManager = new hardwarekeyboard::HardwareKeyboardManager();
+    mHardwareKeyboardManager->Init(win);
+  }
+
+  NS_ADDREF(*aHardwareKeyboard = mHardwareKeyboardManager);
 
   return NS_OK;
 }
@@ -1468,7 +1496,7 @@ Navigator::GetMozTime(nsIDOMMozTimeManager** aTime)
   *aTime = nullptr;
 
   if (!CheckPermission("time")) {
-    return NS_OK;
+    return NS_ERROR_DOM_SECURITY_ERR;
   }
 
   if (!mTimeManager) {

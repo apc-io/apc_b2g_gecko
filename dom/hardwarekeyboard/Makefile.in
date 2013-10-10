@@ -1,0 +1,45 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+DEPTH            = @DEPTH@
+topsrcdir        = @top_srcdir@
+srcdir           = @srcdir@
+VPATH            = @srcdir@
+
+include $(DEPTH)/config/autoconf.mk
+
+LIBRARY_NAME     = dom_hardwarekeyboard_s
+XPIDL_MODULE     = dom_hardwarekeyboard
+LIBXUL_LIBRARY   = 1
+FORCE_STATIC_LIB = 1
+FAIL_ON_WARNINGS := 1
+
+include $(topsrcdir)/dom/dom-config.mk
+
+EXPORTS_NAMESPACES = mozilla/dom/hardwarekeyboard
+EXPORTS_mozilla/dom/hardwarekeyboard = \
+  Types.h \
+  $(NULL)
+
+CPPSRCS = \
+  HardwareKeyboardManager.cpp \
+  $(NULL)
+
+LOCAL_INCLUDES = \
+  -I$(topsrcdir)/content/events/src \
+  $(NULL)
+
+XPIDLSRCS = \
+  nsIDOMHardwareKeyboardManager.idl \
+  nsINavigatorHardwareKeyboardManager.idl \
+  $(NULL)
+
+include $(topsrcdir)/config/config.mk
+include $(topsrcdir)/ipc/chromium/chromium-config.mk
+include $(topsrcdir)/config/rules.mk
+
+XPIDL_FLAGS += \
+  -I$(topsrcdir)/dom/interfaces/base \
+  -I$(topsrcdir)/dom/interfaces/events \
+  $(NULL)
