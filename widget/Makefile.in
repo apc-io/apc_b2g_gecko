@@ -126,6 +126,11 @@ XPIDLSRCS	= \
 		nsIIMEPicker.idl \
 		$(NULL)
 
+ifeq ($(MOZ_WIDGET_TOOLKIT),gonk)
+XPIDLSRCS += nsIHWKeyboardObserver.idl \
+		$(NULL)
+endif
+
 ifeq ($(MOZ_WIDGET_TOOLKIT),windows)
 XPIDLSRCS	+= nsIPrintSettingsWin.idl \
 		nsIWinTaskbar.idl	\

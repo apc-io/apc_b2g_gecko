@@ -67,6 +67,7 @@ CPPSRCS	= \
 	Static.cpp \
 	PNGReader.cpp \
 	MouseCursorSupport.cpp \
+	nsHWKeyboardObserver.cpp \
 	$(NULL)
 
 SHARED_LIBRARY_LIBS = ../xpwidgets/libxpwidgets_s.a

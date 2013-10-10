@@ -150,6 +150,23 @@ struct NotifyDeviceResetArgs : public NotifyArgs {
     virtual void notify(const sp<InputListenerInterface>& listener) const;
 };
 
+struct NotifyDevicePresentArgs: public NotifyArgs {
+    nsecs_t eventTime;
+    int32_t deviceId;
+    bool present;
+    uint32_t classes;
+
+    inline NotifyDevicePresentArgs() { }
+
+    NotifyDevicePresentArgs(nsecs_t eventTime, int32_t deviceId,
+            bool present, uint32_t classes);
+
+    NotifyDevicePresentArgs(const NotifyDevicePresentArgs& other);
+
+    virtual ~NotifyDevicePresentArgs() { }
+
+    virtual void notify(const sp<InputListenerInterface>& listener) const;
+};
 
 /*
  * The interface used by the InputReader to notify the InputListener about input events.
@@ -165,6 +182,7 @@ public:
     virtual void notifyMotion(const NotifyMotionArgs* args) = 0;
     virtual void notifySwitch(const NotifySwitchArgs* args) = 0;
     virtual void notifyDeviceReset(const NotifyDeviceResetArgs* args) = 0;
+    virtual void notifyDevicePresent(const NotifyDevicePresentArgs* args) = 0;
 };
 
 
@@ -184,6 +202,7 @@ public:
     virtual void notifyMotion(const NotifyMotionArgs* args);
     virtual void notifySwitch(const NotifySwitchArgs* args);
     virtual void notifyDeviceReset(const NotifyDeviceResetArgs* args);
+    virtual void notifyDevicePresent(const NotifyDevicePresentArgs* args);
 
     void flush();
 

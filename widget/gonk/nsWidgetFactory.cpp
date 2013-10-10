@@ -28,6 +28,7 @@
 #include "nsScreenManagerGonk.h"
 #include "nsIdleServiceGonk.h"
 #include "nsTransferable.h"
+#include "nsHWKeyboardObserver.h"
 
 #include "nsHTMLFormatConverter.h"
 #include "nsXULAppAPI.h"
@@ -42,6 +43,7 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(PuppetScreenManager)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsHTMLFormatConverter)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIdleServiceGonk, nsIdleServiceGonk::GetInstance)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsTransferable)
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsHWKeyboardObserver)
 
 NS_DEFINE_NAMED_CID(NS_APPSHELL_CID);
 NS_DEFINE_NAMED_CID(NS_WINDOW_CID);
@@ -50,6 +52,7 @@ NS_DEFINE_NAMED_CID(NS_SCREENMANAGER_CID);
 NS_DEFINE_NAMED_CID(NS_HTMLFORMATCONVERTER_CID);
 NS_DEFINE_NAMED_CID(NS_IDLE_SERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_TRANSFERABLE_CID);
+NS_DEFINE_NAMED_CID(NS_HWKEYBOARDOBSERVER_CID);
 
 static nsresult
 ScreenManagerConstructor(nsISupports *aOuter, REFNSIID aIID, void **aResult)
@@ -67,6 +70,7 @@ static const mozilla::Module::CIDEntry kWidgetCIDs[] = {
     { &kNS_HTMLFORMATCONVERTER_CID, false, NULL, nsHTMLFormatConverterConstructor },
     { &kNS_IDLE_SERVICE_CID, false, NULL, nsIdleServiceGonkConstructor },
     { &kNS_TRANSFERABLE_CID, false, NULL, nsTransferableConstructor },
+    { &kNS_HWKEYBOARDOBSERVER_CID, false, NULL, nsHWKeyboardObserverConstructor },
     { NULL }
 };
 
@@ -78,6 +82,7 @@ static const mozilla::Module::ContractIDEntry kWidgetContracts[] = {
     { "@mozilla.org/widget/htmlformatconverter;1", &kNS_HTMLFORMATCONVERTER_CID },
     { "@mozilla.org/widget/idleservice;1", &kNS_IDLE_SERVICE_CID },
     { "@mozilla.org/widget/transferable;1", &kNS_TRANSFERABLE_CID },
+    { "@mozilla.org/hw/keyboardobserver;1", &kNS_HWKEYBOARDOBSERVER_CID },
     { NULL }
 };
 

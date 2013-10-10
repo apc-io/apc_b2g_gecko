@@ -133,6 +133,20 @@ void NotifyDeviceResetArgs::notify(const sp<InputListenerInterface>& listener) c
     listener->notifyDeviceReset(this);
 }
 
+// --- NotifyDevicePresentArgs ---
+NotifyDevicePresentArgs::NotifyDevicePresentArgs(nsecs_t eventTime, int32_t deviceId,
+    bool present, uint32_t classes) :
+        eventTime(eventTime), deviceId(deviceId), present(present), classes(classes) {
+}
+
+NotifyDevicePresentArgs::NotifyDevicePresentArgs(const NotifyDevicePresentArgs &other) :
+        eventTime(other.eventTime), deviceId(other.deviceId),
+        present(other.present), classes(other.classes) {
+}
+
+void NotifyDevicePresentArgs::notify(const sp<InputListenerInterface> &listener) const {
+    listener->notifyDevicePresent(this);
+}
 
 // --- QueuedInputListener ---
 
@@ -166,6 +180,10 @@ void QueuedInputListener::notifySwitch(const NotifySwitchArgs* args) {
 
 void QueuedInputListener::notifyDeviceReset(const NotifyDeviceResetArgs* args) {
     mArgsQueue.push(new NotifyDeviceResetArgs(*args));
+}
+
+void QueuedInputListener::notifyDevicePresent(const NotifyDevicePresentArgs *args) {
+    mArgsQueue.push(new NotifyDevicePresentArgs(*args));
 }
 
 void QueuedInputListener::flush() {
