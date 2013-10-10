@@ -1,0 +1,10 @@
+#include "nsISupports.idl"
+
+
+[scriptable, uuid(c7eb785e-5011-4fe2-bd92-b74dec98e8b4)]
+interface nsIHWKeyboardObserver: nsISupports
+{
+	readonly attribute bool present;
+
+	void notifyPresentChanged(in bool present);
+};

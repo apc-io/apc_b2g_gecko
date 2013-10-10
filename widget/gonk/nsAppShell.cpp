@@ -45,6 +45,7 @@
 #include "nsWindow.h"
 #include "OrientationObserver.h"
 #include "GonkMemoryPressureMonitoring.h"
+#include "nsIHWKeyboardObserver.h"
 
 #include "android/log.h"
 #include "libui/EventHub.h"
@@ -378,6 +379,7 @@ public:
     virtual void notifyMotion(const NotifyMotionArgs* args);
     virtual void notifySwitch(const NotifySwitchArgs* args);
     virtual void notifyDeviceReset(const NotifyDeviceResetArgs* args);
+    virtual void notifyDevicePresent(const NotifyDevicePresentArgs* args);
 
     virtual int32_t injectInputEvent(const InputEvent* event,
             int32_t injectorPid, int32_t injectorUid, int32_t syncMode, int32_t timeoutMillis,
@@ -573,6 +575,25 @@ void GeckoInputDispatcher::notifySwitch(const NotifySwitchArgs* args)
 
 void GeckoInputDispatcher::notifyDeviceReset(const NotifyDeviceResetArgs* args)
 {
+}
+
+void GeckoInputDispatcher::notifyDevicePresent(const NotifyDevicePresentArgs* args) {
+    if (args == 0) {
+        return;
+    }
+
+    // we only process with hardware keyboard
+    if (args->classes & INPUT_DEVICE_CLASS_ALPHAKEY) {
+
+        static nsCOMPtr<nsIHWKeyboardObserver> hwKbObs =
+            do_GetService("@mozilla.org/hw/keyboardobserver;1");
+
+        if (hwKbObs == 0) {
+            return;
+        }
+
+        hwKbObs->NotifyPresentChanged(args->present);
+    }
 }
 
 int32_t GeckoInputDispatcher::injectInputEvent(

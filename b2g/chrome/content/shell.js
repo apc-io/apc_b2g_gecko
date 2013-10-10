@@ -77,6 +77,26 @@ XPCOMUtils.defineLazyServiceGetter(Services, 'captivePortalDetector',
                                   'nsICaptivePortalDetector');
 #endif
 
+XPCOMUtils.defineLazyServiceGetter(this, 'hwKeyboardObserver',
+                                   '@mozilla.org/hw/keyboardobserver;1',
+                                   'nsIHWKeyboardObserver');
+
+let mozSettings = navigator.mozSettings;
+
+function onHWKeyboardPresentChanged() {
+  var hwKbPresent = hwKeyboardObserver.present;
+  let lock = mozSettings.createLock();
+  let result = lock.set( {
+    "mozilla.hw.keyboard.present": hwKbPresent
+  });
+}
+
+onHWKeyboardPresentChanged();
+
+Services.obs.addObserver(function observer(subject, topic, state) {
+  onHWKeyboardPresentChanged();
+  }, "hardware-keyboard-present-changed", false);
+
 function getContentWindow() {
   return shell.contentBrowser.contentWindow;
 }

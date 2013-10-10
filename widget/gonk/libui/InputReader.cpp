@@ -402,6 +402,8 @@ void InputReader::addDeviceLocked(nsecs_t when, int32_t deviceId) {
     ssize_t deviceIndex = mDevices.indexOfKey(deviceId);
     if (deviceIndex < 0) {
         mDevices.add(deviceId, device);
+        NotifyDevicePresentArgs args(when, deviceId, true, classes);
+        mQueuedListener->notifyDevicePresent(&args);
     } else {
         ALOGW("Ignoring spurious device added event for deviceId %d.", deviceId);
         delete device;
@@ -415,6 +417,8 @@ void InputReader::removeDeviceLocked(nsecs_t when, int32_t deviceId) {
     if (deviceIndex >= 0) {
         device = mDevices.valueAt(deviceIndex);
         mDevices.removeItemsAt(deviceIndex, 1);
+        NotifyDevicePresentArgs args(when, deviceId, false, device->getClasses());
+        mQueuedListener->notifyDevicePresent(&args);
     } else {
         ALOGW("Ignoring spurious device removed event for deviceId %d.", deviceId);
         return;
