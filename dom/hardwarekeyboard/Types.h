@@ -8,13 +8,13 @@
 
 namespace mozilla {
 namespace hal {
-class KeyboardInformation;
+class HardwareKeyboardInformation;
 } // namespace hal
 
 template <class T>
 class Observer;
 
-typedef Observer<hal::KeyboardInformation> KeyboardObserver;
+typedef Observer<hal::HardwareKeyboardInformation> HardwareKeyboardObserver;
 
 } // namespace mozilla
 

@@ -14,6 +14,7 @@
 #include "nsTArray.h"
 #include "prlog.h"
 #include "mozilla/dom/battery/Types.h"
+#include "mozilla/dom/hardwarekeyboard/Types.h"
 #include "mozilla/dom/network/Types.h"
 #include "mozilla/dom/power/Types.h"
 #include "mozilla/dom/ContentParent.h"
@@ -122,13 +123,13 @@ void NotifyBatteryChange(const hal::BatteryInformation& aBatteryInfo);
  * Inform the hardware keyboard backend there is a new hardware keyboard observer.
  * @param aHWKeyboardObserver The observer that should be added.
  */
-void RegisterHardwareKeyboardObserver(BatteryObserver* aHWKeyboardObserver);
+void RegisterHardwareKeyboardObserver(HardwareKeyboardObserver* aHWKeyboardObserver);
 
 /**
  * Inform the hardware keyboard backend a hardware keyboard observer unregistered.
  * @param aHWKeyboardObserver The observer that should be removed.
  */
-void UnregisterHardwareKeyboardObserver(BatteryObserver* aHWKeyboardObserver);
+void UnregisterHardwareKeyboardObserver(HardwareKeyboardObserver* aHWKeyboardObserver);
 
 /**
  * Returns the current hardware keyboard information.

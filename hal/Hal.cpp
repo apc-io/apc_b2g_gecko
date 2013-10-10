@@ -24,8 +24,6 @@
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/ContentParent.h"
 
- #include "android/log.h"
-
 #ifdef XP_WIN
 #include <process.h>
 #define getpid _getpid
@@ -33,9 +31,6 @@
 
 using namespace mozilla::services;
 using namespace mozilla::dom;
-
-#define LOG(args...)                                            \
-    __android_log_print(ANDROID_LOG_INFO, "HAL" , ## args)
 
 #define PROXY_IF_SANDBOXED(_call)                 \
   do {                                            \
@@ -297,7 +292,10 @@ public:
   HardwareKeyboardInformation GetCurrentInformation() {
     if (mHasValidCache) {
       return mInfo;
-    }    
+    } else {
+      HardwareKeyboardInformation keyboardInfo(false);
+      return keyboardInfo;
+    }
   }
 
   void CacheInformation(const HardwareKeyboardInformation& aInfo) {
@@ -405,39 +403,33 @@ NotifyBatteryChange(const BatteryInformation& aInfo)
 }
 
 void
-RegisterHardwareKeyboardObserver(BatteryObserver* aObserver)
+RegisterHardwareKeyboardObserver(HardwareKeyboardObserver* aObserver)
 {
   AssertMainThread();
-//  sHWKeyboardObservers.AddObserver(aObserver);
+  sHWKeyboardObservers.AddObserver(aObserver);
 }
 
 void
-UnregisterHardwareKeyboardObserver(BatteryObserver* aObserver)
+UnregisterHardwareKeyboardObserver(HardwareKeyboardObserver* aObserver)
 {
   AssertMainThread();
-//  sHWKeyboardObservers.RemoveObserver(aObserver);
+  sHWKeyboardObservers.RemoveObserver(aObserver);
 }
 
 void
-GetCurrentHardwareKeyboardInformation(HardwareKeyboardInformation* aInfo)
+GetCurrentHardwareKeyboardInformation(HardwareKeyboardInformation* aHWKeyboardInfo)
 {
   AssertMainThread();
-//  *aInfo = sHWKeyboardObservers.GetCurrentInformation();
+  *aHWKeyboardInfo = sHWKeyboardObservers.GetCurrentInformation();
 }
 
 
-void 
+void
 NotifyHardwareKeyboardChange(const hal::HardwareKeyboardInformation& aHWKeyboardInfo)
 {
-  if(aHWKeyboardInfo.isConnected()) {
-    LOG("=======NotifyHardwareKeyboardChange======= TRUE");  
-  } else {
-    LOG("=======NotifyHardwareKeyboardChange======= FALSE");  
-  }
-  
-//  AssertMainThread();
-//  sHWKeyboardObservers.CacheInformation(aInfo);
-//  sHWKeyboardObservers.BroadcastCachedInformation();
+  AssertMainThread();
+  sHWKeyboardObservers.CacheInformation(aHWKeyboardInfo);
+  sHWKeyboardObservers.BroadcastCachedInformation();
 }
 
 bool GetScreenEnabled()

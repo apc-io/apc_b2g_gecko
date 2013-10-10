@@ -12,7 +12,7 @@
 #include "nsDOMEventTargetHelper.h"
 #include "android/log.h"
 #define LOG(args...)                                            \
-    __android_log_print(ANDROID_LOG_INFO, "Gonk" , ## args)
+    __android_log_print(ANDROID_LOG_INFO, "HardwareKeyboardManager" , ## args)
 
 
 DOMCI_DATA(HardwareKeyboardManager, mozilla::dom::hardwarekeyboard::HardwareKeyboardManager)
@@ -45,26 +45,32 @@ NS_IMPL_EVENT_HANDLER(HardwareKeyboardManager, hardwarekeyboarddisconnected)
 HardwareKeyboardManager::HardwareKeyboardManager()
   : mIsPlugged(false)
 {
-  //hal::RegisterHardwareKeyboardObserver(this);
-  LOG("object created");
-}
-
-HardwareKeyboardManager::~HardwareKeyboardManager()
-{
-  //hal::UnregisterHardwareKeyboardObserver(this);
 }
 
 void
 HardwareKeyboardManager::Init(nsPIDOMWindow* aWindow)
-{
-  LOG("object init");
+{  
   BindToOwner(aWindow->IsOuterWindow() ?
-    aWindow->GetCurrentInnerWindow() : aWindow);
-  LOG("object init done");
-  
-  //hal::HardwareHardwareKeyboardManagerInformation keyboardInfo;
-  //hal::GetCurrentHardwareKeyboardInformation(&keyboardInfo);
-  //mIsPlugged = keyboardInfo.isPlugged();
+     aWindow->GetCurrentInnerWindow() : aWindow);
+  //BindToOwner(aWindow);
+
+  hal::RegisterHardwareKeyboardObserver(this);
+
+  hal::HardwareKeyboardInformation keyboardInfo;
+  hal::GetCurrentHardwareKeyboardInformation(&keyboardInfo);
+
+  mIsPlugged = keyboardInfo.isConnected();
+  if (mIsPlugged) {
+    LOG("========Get Current Info === TRUE");
+  } else {
+    LOG("========Get Current Info === FALSE");
+  }  
+}
+
+void
+HardwareKeyboardManager::Shutdown()
+{
+  hal::UnregisterHardwareKeyboardObserver(this);
 }
 
 NS_IMETHODIMP
@@ -77,18 +83,18 @@ HardwareKeyboardManager::GetIsPlugged(bool* aIsPlugged)
 
 
 void
-//HardwareKeyboardManager::Notify(const hal::HardwareKeyboardInformation& aEvent)
-HardwareKeyboardManager::Notify()
-{
-  //if (aEvent.status() == HARDWARE_KEYBOARD_PLUG_IN) {
-  //  isPlugged = true;
-  //} else {
-  //  isPlugged = false;
-  //}
+HardwareKeyboardManager::Notify(const hal::HardwareKeyboardInformation& aHardwareKeyboardInfo)
+{ 
+  mIsPlugged = aHardwareKeyboardInfo.isConnected();
+  if (mIsPlugged) {
+    LOG("=====HardwareKeyboardManager::Notify==== TRUE");
+  } else {  
+    LOG("=====HardwareKeyboardManager::Notify==== FALSE");
+  }
 
-  DispatchTrustedEvent(NS_LITERAL_STRING("hardwarekeyboardconnected"));
+  //DispatchTrustedEvent(NS_LITERAL_STRING("hardwarekeyboardconnected"));  
 }
 
-} // namespace system
+} // namespace hardwarekeyboard
 } // namespace dom
 } // namespace mozilla

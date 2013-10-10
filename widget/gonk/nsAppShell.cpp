@@ -803,8 +803,7 @@ nsAppShell::NotifyScreenRotation()
 
 /* static */ void
 nsAppShell::NotifyHardwareKeyboardChange(bool isConnected)
-{
-    LOG("=====nsAppShell::NotifyHardwareKeyboardChange===");
+{    
     hal::HardwareKeyboardInformation keyboard(isConnected);
     hal::NotifyHardwareKeyboardChange(keyboard);
 }

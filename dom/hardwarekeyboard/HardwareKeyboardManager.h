@@ -18,7 +18,7 @@ class nsIScriptContext;
 namespace mozilla {
 
 namespace hal {
-class HardwareKeyboardEvent;
+class HardwareKeyboardInformation;
 } // namespace hal
 
 namespace dom {
@@ -26,7 +26,7 @@ namespace hardwarekeyboard {
 
 class HardwareKeyboardManager : public nsDOMEventTargetHelper
                      , public nsIDOMHardwareKeyboardManager
-//                     , public HardwareKeyboardObserver
+                     , public HardwareKeyboardObserver
 {
 public:
   NS_DECL_ISUPPORTS
@@ -34,13 +34,12 @@ public:
   NS_FORWARD_NSIDOMEVENTTARGET(nsDOMEventTargetHelper::)
 
   HardwareKeyboardManager();
-  virtual ~HardwareKeyboardManager();
 
+  void Shutdown();
   void Init(nsPIDOMWindow *aWindow);
 
   // For IObserver.
-  //void Notify(const hal::HardwareKeyboardInformation& aHardwareKeyboardEvent);
-  void Notify();
+  void Notify(const hal::HardwareKeyboardInformation& aHardwareKeyboardInfo);
 
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HardwareKeyboardManager,
                                            nsDOMEventTargetHelper)
