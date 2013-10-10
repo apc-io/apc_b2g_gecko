@@ -24,6 +24,8 @@
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/ContentParent.h"
 
+ #include "android/log.h"
+
 #ifdef XP_WIN
 #include <process.h>
 #define getpid _getpid
@@ -31,6 +33,9 @@
 
 using namespace mozilla::services;
 using namespace mozilla::dom;
+
+#define LOG(args...)                                            \
+    __android_log_print(ANDROID_LOG_INFO, "HAL" , ## args)
 
 #define PROXY_IF_SANDBOXED(_call)                 \
   do {                                            \
@@ -282,6 +287,44 @@ protected:
 
 static BatteryObserversManager sBatteryObservers;
 
+// class HardwareKeyboardObserversManager : public CachingObserversManager<HardwareKeyboardInformation>
+// {  
+// };
+
+class HardwareKeyboardObserversManager : public ObserversManager<HardwareKeyboardInformation>
+{
+public:
+  HardwareKeyboardInformation GetCurrentInformation() {
+    if (mHasValidCache) {
+      return mInfo;
+    }    
+  }
+
+  void CacheInformation(const HardwareKeyboardInformation& aInfo) {
+    mHasValidCache = true;
+    mInfo = aInfo;
+  }
+
+  void BroadcastCachedInformation() {
+    this->BroadcastInformation(mInfo);
+  }
+
+protected:
+  void EnableNotifications() {
+    //PROXY_IF_SANDBOXED(EnableHardwareKeyboardNotifications());
+  }
+
+  void DisableNotifications() {
+    //PROXY_IF_SANDBOXED(DisableHardwareKeyboardNotifications());
+  }
+
+private:
+  HardwareKeyboardInformation                mInfo;
+  bool                    mHasValidCache;
+};
+
+static HardwareKeyboardObserversManager sHWKeyboardObservers;
+
 class NetworkObserversManager : public CachingObserversManager<NetworkInformation>
 {
 protected:
@@ -359,6 +402,42 @@ NotifyBatteryChange(const BatteryInformation& aInfo)
   AssertMainThread();
   sBatteryObservers.CacheInformation(aInfo);
   sBatteryObservers.BroadcastCachedInformation();
+}
+
+void
+RegisterHardwareKeyboardObserver(BatteryObserver* aObserver)
+{
+  AssertMainThread();
+//  sHWKeyboardObservers.AddObserver(aObserver);
+}
+
+void
+UnregisterHardwareKeyboardObserver(BatteryObserver* aObserver)
+{
+  AssertMainThread();
+//  sHWKeyboardObservers.RemoveObserver(aObserver);
+}
+
+void
+GetCurrentHardwareKeyboardInformation(HardwareKeyboardInformation* aInfo)
+{
+  AssertMainThread();
+//  *aInfo = sHWKeyboardObservers.GetCurrentInformation();
+}
+
+
+void 
+NotifyHardwareKeyboardChange(const hal::HardwareKeyboardInformation& aHWKeyboardInfo)
+{
+  if(aHWKeyboardInfo.isConnected()) {
+    LOG("=======NotifyHardwareKeyboardChange======= TRUE");  
+  } else {
+    LOG("=======NotifyHardwareKeyboardChange======= FALSE");  
+  }
+  
+//  AssertMainThread();
+//  sHWKeyboardObservers.CacheInformation(aInfo);
+//  sHWKeyboardObservers.BroadcastCachedInformation();
 }
 
 bool GetScreenEnabled()

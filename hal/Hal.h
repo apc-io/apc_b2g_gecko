@@ -117,6 +117,29 @@ void GetCurrentBatteryInformation(hal::BatteryInformation* aBatteryInfo);
  */
 void NotifyBatteryChange(const hal::BatteryInformation& aBatteryInfo);
 
+
+/**
+ * Inform the hardware keyboard backend there is a new hardware keyboard observer.
+ * @param aHWKeyboardObserver The observer that should be added.
+ */
+void RegisterHardwareKeyboardObserver(BatteryObserver* aHWKeyboardObserver);
+
+/**
+ * Inform the hardware keyboard backend a hardware keyboard observer unregistered.
+ * @param aHWKeyboardObserver The observer that should be removed.
+ */
+void UnregisterHardwareKeyboardObserver(BatteryObserver* aHWKeyboardObserver);
+
+/**
+ * Returns the current hardware keyboard information.
+ */
+void GetCurrentHardwareKeyboardInformation(hal::HardwareKeyboardInformation* aHWKeyboardInfo);
+/**
+ * Notify of a change in the hardware keyboard state.
+ * @param aHWKeyboardInfo The new hw keyboard information.
+ */
+void NotifyHardwareKeyboardChange(const hal::HardwareKeyboardInformation& aHWKeyboardInfo);
+
 /**
  * Determine whether the device's screen is currently enabled.
  */

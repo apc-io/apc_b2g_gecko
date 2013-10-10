@@ -76,6 +76,7 @@ bool gDrawRequest = false;
 static nsAppShell *gAppShell = NULL;
 static int epollfd = 0;
 static int signalfds[2] = {0};
+static const uint32_t HARDWARE_KEYBOARD_DEVICE = INPUT_DEVICE_CLASS_EXTERNAL | INPUT_DEVICE_CLASS_KEYBOARD | INPUT_DEVICE_CLASS_ALPHAKEY;
 
 NS_IMPL_ISUPPORTS_INHERITED1(nsAppShell, nsBaseAppShell, nsIObserver)
 
@@ -573,6 +574,13 @@ void GeckoInputDispatcher::notifySwitch(const NotifySwitchArgs* args)
 
 void GeckoInputDispatcher::notifyDeviceReset(const NotifyDeviceResetArgs* args)
 {
+    int32_t deviceId = args->deviceId;
+    uint32_t classes = args->classes;
+    bool devicePluginState = args->devicePluginState;
+
+    if (classes == HARDWARE_KEYBOARD_DEVICE) {
+        gAppShell->NotifyHardwareKeyboardChange(devicePluginState);
+    }
 }
 
 int32_t GeckoInputDispatcher::injectInputEvent(
@@ -791,4 +799,12 @@ nsAppShell::NotifyScreenRotation()
     gAppShell->mReader->requestRefreshConfiguration(InputReaderConfiguration::CHANGE_DISPLAY_INFO);
 
     hal::NotifyScreenConfigurationChange(nsScreenGonk::GetConfiguration());
+}
+
+/* static */ void
+nsAppShell::NotifyHardwareKeyboardChange(bool isConnected)
+{
+    LOG("=====nsAppShell::NotifyHardwareKeyboardChange===");
+    hal::HardwareKeyboardInformation keyboard(isConnected);
+    hal::NotifyHardwareKeyboardChange(keyboard);
 }

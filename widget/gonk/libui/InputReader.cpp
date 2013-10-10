@@ -390,6 +390,7 @@ void InputReader::addDeviceLocked(nsecs_t when, int32_t deviceId) {
 
     InputDevice* device = createDeviceLocked(deviceId, name, classes);
     device->configure(when, &mConfig, 0);
+    device->setDevicePluginState(true);
     device->reset(when);
 
     if (device->isIgnored()) {
@@ -428,6 +429,7 @@ void InputReader::removeDeviceLocked(nsecs_t when, int32_t deviceId) {
                 device->getId(), device->getName().string(), device->getSources());
     }
 
+    device->setDevicePluginState(false);
     device->reset(when);
     delete device;
 }
@@ -958,6 +960,10 @@ void InputDevice::configure(nsecs_t when, const InputReaderConfiguration* config
     }
 }
 
+void InputDevice::setDevicePluginState(bool state) {
+    mDevicePluginState = state;
+}
+
 void InputDevice::reset(nsecs_t when) {
     size_t numMappers = mMappers.size();
     for (size_t i = 0; i < numMappers; i++) {
@@ -1087,7 +1093,8 @@ void InputDevice::fadePointer() {
 }
 
 void InputDevice::notifyReset(nsecs_t when) {
-    NotifyDeviceResetArgs args(when, mId);
+//    NotifyDeviceResetArgs args(when, mId);
+    NotifyDeviceResetArgs args(when, mId, mClasses, mDevicePluginState);
     mContext->getListener()->notifyDeviceReset(&args);
 }
 

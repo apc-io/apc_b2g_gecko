@@ -36,6 +36,9 @@ struct BatteryInformation {
   bool   charging;
   double remainingTime;
 };
+struct HardwareKeyboardInformation {
+  bool   isConnected;
+};
 
 struct LightConfiguration {
   LightType light;

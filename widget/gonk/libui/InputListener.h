@@ -138,10 +138,14 @@ struct NotifySwitchArgs : public NotifyArgs {
 struct NotifyDeviceResetArgs : public NotifyArgs {
     nsecs_t eventTime;
     int32_t deviceId;
+    uint32_t classes;
+    bool devicePluginState;
 
     inline NotifyDeviceResetArgs() { }
 
     NotifyDeviceResetArgs(nsecs_t eventTime, int32_t deviceId);
+
+    NotifyDeviceResetArgs(nsecs_t eventTime, int32_t deviceId, uint32_t classes, bool devicePluginState);
 
     NotifyDeviceResetArgs(const NotifyDeviceResetArgs& other);
 
