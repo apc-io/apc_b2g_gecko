@@ -1159,9 +1159,6 @@ Navigator::GetBattery(nsIDOMBatteryManager** aBattery)
 
     mBatteryManager = new battery::BatteryManager();
     mBatteryManager->Init(win);
-
-    mHardwareKeyboardManager = new hardwarekeyboard::HardwareKeyboardManager();
-    mHardwareKeyboardManager->Init(win);
   }
 
   NS_ADDREF(*aBattery = mBatteryManager);

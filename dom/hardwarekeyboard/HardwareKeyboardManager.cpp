@@ -14,6 +14,12 @@
 #define LOG(args...)                                            \
     __android_log_print(ANDROID_LOG_INFO, "HardwareKeyboardManager" , ## args)
 
+/**
+ * We have to use macros here because our leak analysis tool things we are
+ * leaking strings when we have |static const nsString|. Sad :(
+ */
+#define HW_KEYBOARD_CONNECTED_EVENT_NAME           NS_LITERAL_STRING("hardwarekeyboardconnected")
+#define HW_KEYBOARD_DISCONNECTED_EVENT_NAME        NS_LITERAL_STRING("hardwarekeyboarddisconnected")
 
 DOMCI_DATA(HardwareKeyboardManager, mozilla::dom::hardwarekeyboard::HardwareKeyboardManager)
 
@@ -49,10 +55,10 @@ HardwareKeyboardManager::HardwareKeyboardManager()
 
 void
 HardwareKeyboardManager::Init(nsPIDOMWindow* aWindow)
-{  
-  BindToOwner(aWindow->IsOuterWindow() ?
-     aWindow->GetCurrentInnerWindow() : aWindow);
-  //BindToOwner(aWindow);
+{
+  // BindToOwner(aWindow->IsOuterWindow() ?
+  //    aWindow->GetCurrentInnerWindow() : aWindow);
+  BindToOwner(aWindow);
 
   hal::RegisterHardwareKeyboardObserver(this);
 
@@ -60,11 +66,6 @@ HardwareKeyboardManager::Init(nsPIDOMWindow* aWindow)
   hal::GetCurrentHardwareKeyboardInformation(&keyboardInfo);
 
   mIsPlugged = keyboardInfo.isConnected();
-  if (mIsPlugged) {
-    LOG("========Get Current Info === TRUE");
-  } else {
-    LOG("========Get Current Info === FALSE");
-  }  
 }
 
 void
@@ -84,15 +85,13 @@ HardwareKeyboardManager::GetIsPlugged(bool* aIsPlugged)
 
 void
 HardwareKeyboardManager::Notify(const hal::HardwareKeyboardInformation& aHardwareKeyboardInfo)
-{ 
+{
   mIsPlugged = aHardwareKeyboardInfo.isConnected();
   if (mIsPlugged) {
-    LOG("=====HardwareKeyboardManager::Notify==== TRUE");
-  } else {  
-    LOG("=====HardwareKeyboardManager::Notify==== FALSE");
+    DispatchTrustedEvent(HW_KEYBOARD_CONNECTED_EVENT_NAME);
+  } else {
+    DispatchTrustedEvent(HW_KEYBOARD_DISCONNECTED_EVENT_NAME);
   }
-
-  //DispatchTrustedEvent(NS_LITERAL_STRING("hardwarekeyboardconnected"));  
 }
 
 } // namespace hardwarekeyboard

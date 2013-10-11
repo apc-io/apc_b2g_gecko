@@ -113,7 +113,8 @@ struct UserInputData {
     uint64_t timeMs;
     enum {
         MOTION_DATA,
-        KEY_DATA
+        KEY_DATA,
+        HARDWARE_KEYBOARD_RESET
     } type;
     int32_t action;
     int32_t flags;
@@ -498,6 +499,9 @@ GeckoInputDispatcher::dispatchOnce()
                           data.timeMs,
                           data.key.charCode);
         break;
+    case UserInputData::HARDWARE_KEYBOARD_RESET:
+        gAppShell->NotifyHardwareKeyboardChange(data.metaState);
+        break;
     }
 }
 
@@ -578,8 +582,17 @@ void GeckoInputDispatcher::notifyDeviceReset(const NotifyDeviceResetArgs* args)
     uint32_t classes = args->classes;
     bool devicePluginState = args->devicePluginState;
 
+
     if (classes == HARDWARE_KEYBOARD_DEVICE) {
-        gAppShell->NotifyHardwareKeyboardChange(devicePluginState);
+        UserInputData data;
+        data.timeMs = nanosecsToMillisecs(args->eventTime);
+        data.type = UserInputData::HARDWARE_KEYBOARD_RESET;
+        data.metaState = devicePluginState;
+        {
+            MutexAutoLock lock(mQueueLock);
+            mEventQueue.push(data);
+        }
+        gAppShell->NotifyNativeEvent();
     }
 }
 

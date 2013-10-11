@@ -34,6 +34,9 @@ void EnableBatteryNotifications();
  */
 void DisableBatteryNotifications();
 
+void EnableHardwareKeyboardNotifications();
+void DisableHardwareKeyboardNotifications();
+
 /**
  * Enables network notifications from the backend.
  */

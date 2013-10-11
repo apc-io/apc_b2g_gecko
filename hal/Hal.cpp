@@ -309,11 +309,11 @@ public:
 
 protected:
   void EnableNotifications() {
-    //PROXY_IF_SANDBOXED(EnableHardwareKeyboardNotifications());
+    PROXY_IF_SANDBOXED(EnableHardwareKeyboardNotifications());
   }
 
   void DisableNotifications() {
-    //PROXY_IF_SANDBOXED(DisableHardwareKeyboardNotifications());
+    PROXY_IF_SANDBOXED(DisableHardwareKeyboardNotifications());
   }
 
 private:
