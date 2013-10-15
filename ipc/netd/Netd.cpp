@@ -184,7 +184,7 @@ NetdClient::OnFileCanReadWithoutBlocking(int aFd)
         errno = 0;
         int responseCode = strtol(mReceiveBuffer, nullptr, 10);
         // TODO, Bug 783966, handle InterfaceChange(600) and BandwidthControl(601).
-        if (!errno && responseCode < 600) {
+        if (!errno) {
           NetdCommand* response = new NetdCommand();
           // Passing all the response message, including the line terminator.
           response->mSize = mReceivedIndex + 1;
