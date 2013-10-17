@@ -390,7 +390,7 @@ void InputReader::addDeviceLocked(nsecs_t when, int32_t deviceId) {
 
     InputDevice* device = createDeviceLocked(deviceId, name, classes);
     device->configure(when, &mConfig, 0);
-    device->setDevicePluginState(true);
+    device->setResetReason(DEVICE_ADDED);
     device->reset(when);
 
     if (device->isIgnored()) {
@@ -429,7 +429,7 @@ void InputReader::removeDeviceLocked(nsecs_t when, int32_t deviceId) {
                 device->getId(), device->getName().string(), device->getSources());
     }
 
-    device->setDevicePluginState(false);
+    device->setResetReason(DEVICE_REMOVED);
     device->reset(when);
     delete device;
 }
@@ -892,7 +892,7 @@ bool InputReaderThread::threadLoop() {
 InputDevice::InputDevice(InputReaderContext* context, int32_t id, const String8& name,
         uint32_t classes) :
         mContext(context), mId(id), mName(name), mClasses(classes),
-        mSources(0), mIsExternal(false), mDropUntilNextSync(false) {
+        mSources(0), mIsExternal(false), mDropUntilNextSync(false), mResetReason(UNKNOWN) {
 }
 
 InputDevice::~InputDevice() {
@@ -960,8 +960,8 @@ void InputDevice::configure(nsecs_t when, const InputReaderConfiguration* config
     }
 }
 
-void InputDevice::setDevicePluginState(bool state) {
-    mDevicePluginState = state;
+void InputDevice::setResetReason(RESET_REASON resetReason) {
+    mResetReason = resetReason;
 }
 
 void InputDevice::reset(nsecs_t when) {
@@ -1094,7 +1094,7 @@ void InputDevice::fadePointer() {
 
 void InputDevice::notifyReset(nsecs_t when) {
 //    NotifyDeviceResetArgs args(when, mId);
-    NotifyDeviceResetArgs args(when, mId, mClasses, mDevicePluginState);
+    NotifyDeviceResetArgs args(when, mId, mClasses, mResetReason);
     mContext->getListener()->notifyDeviceReset(&args);
 }
 

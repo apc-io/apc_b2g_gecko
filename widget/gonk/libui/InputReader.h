@@ -482,7 +482,7 @@ public:
         return value;
     }
 
-    void setDevicePluginState(bool state);
+    void setResetReason(RESET_REASON resetReason);
 
 private:
     InputReaderContext* mContext;
@@ -495,7 +495,7 @@ private:
     uint32_t mSources;
     bool mIsExternal;
     bool mDropUntilNextSync;
-    bool mDevicePluginState;
+    RESET_REASON mResetReason;
 
     typedef int32_t (InputMapper::*GetStateFunc)(uint32_t sourceMask, int32_t code);
     int32_t getState(uint32_t sourceMask, int32_t code, GetStateFunc getStateFunc);

@@ -580,14 +580,17 @@ void GeckoInputDispatcher::notifyDeviceReset(const NotifyDeviceResetArgs* args)
 {
     int32_t deviceId = args->deviceId;
     uint32_t classes = args->classes;
-    bool devicePluginState = args->devicePluginState;
+    RESET_REASON resetReason = args->resetReason;
 
-
-    if (classes == HARDWARE_KEYBOARD_DEVICE) {
+    if (((resetReason == DEVICE_ADDED) || (resetReason == DEVICE_REMOVED)) && (classes == HARDWARE_KEYBOARD_DEVICE)) {
         UserInputData data;
         data.timeMs = nanosecsToMillisecs(args->eventTime);
         data.type = UserInputData::HARDWARE_KEYBOARD_RESET;
-        data.metaState = devicePluginState;
+        if (resetReason == DEVICE_ADDED) {
+            data.metaState = true;
+        } else if (resetReason == DEVICE_REMOVED) {
+            data.metaState = false;
+        }
         {
             MutexAutoLock lock(mQueueLock);
             mEventQueue.push(data);
