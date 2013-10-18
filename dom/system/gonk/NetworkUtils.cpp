@@ -192,6 +192,11 @@ CommandFunc NetworkUtils::sNetworkInterfaceStatsChain[] = {
   NetworkUtils::networkInterfaceStatsSuccess
 };
 
+CommandFunc NetworkUtils::sNetworkInterfaceGetCfgChain[] = {
+  NetworkUtils::networkInterfaceGetCfg,
+  NetworkUtils::networkInterfaceGetCfgSuccess
+};
+
 CommandFunc NetworkUtils::sNetworkInterfaceEnableAlarmChain[] = {
   NetworkUtils::enableAlarm,
   NetworkUtils::setQuota,
@@ -841,6 +846,16 @@ void NetworkUtils::setInterfaceDns(CommandChain* aChain,
   doCommand(command, aChain, aCallback);
 }
 
+void NetworkUtils::networkInterfaceGetCfg(CommandChain* aChain,
+                                      CommandCallback aCallback,
+                                      NetworkResultOptions& aOptions)
+{
+  char command[MAX_COMMAND_SIZE];
+  snprintf(command, MAX_COMMAND_SIZE - 1, "interface getcfg %s", GET_CHAR(mIfname));
+
+  doCommand(command, aChain, aCallback);
+}
+
 #undef GET_CHAR
 #undef GET_FIELD
 
@@ -976,6 +991,18 @@ void NetworkUtils::setDnsFail(NetworkParams& aOptions, NetworkResultOptions& aRe
   postMessage(aOptions, aResult);
 }
 
+void NetworkUtils::networkInterfaceGetCfgSuccess(CommandChain* aChain,
+                                           CommandCallback aCallback,
+                                           NetworkResultOptions& aResult)
+{
+  postMessage(aChain->getParams(), aResult);
+}
+
+void NetworkUtils::networkInterfaceGetCfgFail(NetworkParams& aOptions, NetworkResultOptions& aResult)
+{
+  postMessage(aOptions, aResult);
+}
+
 #undef ASSIGN_FIELD
 #undef ASSIGN_FIELD_VALUE
 
@@ -1040,6 +1067,8 @@ void NetworkUtils::ExecuteCommand(NetworkParams aOptions)
     enableUsbRndis(aOptions);
   } else if (aOptions.mCmd.EqualsLiteral("updateUpStream")) {
     updateUpStream(aOptions);
+  } else if (aOptions.mCmd.EqualsLiteral("getNetworkInterfaceCfg")) {
+    getNetworkInterfaceCfg(aOptions);
   } else {
     WARN("unknon message");
     return;
@@ -1384,6 +1413,11 @@ bool NetworkUtils::getNetworkInterfaceStats(NetworkParams& aOptions)
 
   RUN_CHAIN(aOptions, sNetworkInterfaceStatsChain, networkInterfaceStatsFail);
   return  true;
+}
+
+bool NetworkUtils::getNetworkInterfaceCfg(NetworkParams& aOptions) {
+  RUN_CHAIN(aOptions, sNetworkInterfaceGetCfgChain, networkInterfaceGetCfgFail);
+  return true;
 }
 
 bool NetworkUtils::setNetworkInterfaceAlarm(NetworkParams& aOptions)

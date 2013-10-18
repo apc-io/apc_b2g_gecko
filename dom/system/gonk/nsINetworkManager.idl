@@ -34,6 +34,7 @@ interface nsINetworkInterface : nsISupports
   const long NETWORK_TYPE_WIFI_P2P    = 4;
   const long NETWORK_TYPE_MOBILE_IMS  = 5;
   const long NETWORK_TYPE_MOBILE_DUN  = 6;
+  const long NETWORK_TYPE_ETHERNET    = 7;
 
   /**
    * Network type. One of the NETWORK_TYPE_* constants.

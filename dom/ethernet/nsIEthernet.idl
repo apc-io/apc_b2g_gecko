@@ -1,0 +1,16 @@
+/*
+ * trungnt
+ */
+
+#include "nsIDOMEventTarget.idl"
+#include "nsIDOMDOMRequest.idl"
+#include "nsISupports.idl"
+
+/*interface nsIDOMEventListener;*/
+
+/* basically used in SystemWorkerManager */
+[scriptable, uuid(298ab429-c81a-49c4-a4aa-a8750a496d5b)]
+interface nsIEthernet : nsISupports
+{
+  void shutdown();
+};

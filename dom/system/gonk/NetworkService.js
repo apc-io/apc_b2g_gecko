@@ -121,7 +121,6 @@ NetworkService.prototype = {
   },
 
   // nsINetworkService
-
   getNetworkInterfaceStats: function(networkName, callback) {
     if(DEBUG) debug("getNetworkInterfaceStats for " + networkName);
 
@@ -161,6 +160,33 @@ NetworkService.prototype = {
       callback.networkStatsAvailable(result.success, result.rxBytes,
                                      result.txBytes, result.date);
     });
+  },
+
+  getNetworkInterfaceCfg: function(networkName, callback) {
+    debug("Here is getNetworkInterfaceCfg");
+    if (!networkName || !callback) {
+      debug("Invalid parameters");
+      return false;
+    }
+
+    let params = {
+      cmd: "getNetworkInterfaceCfg",
+      ifname: networkName
+    };
+
+    params.report = true; // what for?
+    params.isAsync = true;
+
+    this.controlMessage(params, function(result) {
+      debug("Got the result from net_worker for cable stats" + result);
+      for (let k in result) {
+        debug("--- result." + k + ": " + result[k]);
+      }
+      let success = result.resultCode >= NETD_COMMAND_OKAY && result.resultCode < NETD_COMMAND_ERROR;
+      callback.interfaceCfgAvailable(success, result);
+    });
+
+    return true;
   },
 
   setNetworkInterfaceAlarm: function(networkName, threshold, callback) {
