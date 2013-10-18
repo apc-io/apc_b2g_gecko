@@ -185,6 +185,8 @@ interface nsIDOMWifiManager : nsISupports
      */
     attribute nsIDOMEventListener onenabled;
     attribute nsIDOMEventListener ondisabled;
+
+    void sayIt();
 };
 
 [scriptable, builtinclass, uuid(f3ef70b0-b2d3-4eb5-8ea4-008f8d330cd6)]

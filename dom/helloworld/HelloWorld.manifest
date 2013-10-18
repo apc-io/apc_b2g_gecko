@@ -1,0 +1,3 @@
+component {f329acd2-f28b-48f1-995f-a5a915239fcb} HelloWorld.js
+contract @mozilla.org/helloworld;1 {f329acd2-f28b-48f1-995f-a5a915239fcb}
+category JavaScript-navigator-property hello @mozilla.org/helloworld;1

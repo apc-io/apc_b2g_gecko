@@ -76,6 +76,8 @@ PARALLEL_DIRS += \
   workers \
   camera \
   audiochannel \
+  ethernet \
+  helloworld \
   $(NULL)
 
 ifdef MOZ_B2G_RIL

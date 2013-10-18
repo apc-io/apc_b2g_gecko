@@ -66,6 +66,7 @@ MAKEFILES_dom="
   dom/network/Makefile
   dom/network/interfaces/Makefile
   dom/network/src/Makefile
+  dom/ethernet/Makefile
   dom/plugins/base/Makefile
   dom/plugins/ipc/Makefile
   dom/power/Makefile
@@ -83,6 +84,7 @@ MAKEFILES_dom="
   dom/system/Makefile
   dom/workers/Makefile
   dom/time/Makefile
+  dom/helloworld/Makefile
 "
 
 MAKEFILES_editor="

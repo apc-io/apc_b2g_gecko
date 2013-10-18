@@ -79,6 +79,8 @@ const BrowserElementIsPreloaded = true;
 
   /* Applications Specific Helper */
   Cc["@mozilla.org/settingsManager;1"].getService(Ci["nsIDOMSettingsManager"]);
+  // for the ethernet
+  // Cc["@mozilla.org/ethernetmanager;1"].getService(Ci["nsIDOMEthernetManager"]);
 
   // This is a produc-specific file that's sometimes unavailable.
   try {

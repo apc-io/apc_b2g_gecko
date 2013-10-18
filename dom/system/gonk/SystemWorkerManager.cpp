@@ -14,6 +14,53 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#define SLOG_ENABLED
+#ifdef SLOG_ENABLED
+
+#include <cstdio>
+#include <android/log.h>
+
+#define SLOG_TAG_WARNING "W"
+#define SLOG_TAG_INFO "I"
+#define SLOG_TAG_DEBUG "D"
+#define SLOG(tag, args...) \
+{ \
+  std::printf("[%s] %s:%s", tag, __FILE__, __PRETTY_FUNCTION__); \
+  std::printf(args); \
+  std::printf("\n"); \
+}
+
+#define ANDRTAG __PRETTY_FUNCTION__
+
+#define SLOGI(...) { \
+  SLOG(SLOG_TAG_INFO, __VA_ARGS__); \
+  __android_log_print(ANDROID_LOG_INFO, ANDRTAG, __VA_ARGS__); \
+}
+
+#define SLOGW(...) {\
+  SLOG(SLOG_TAG_WARNING, __VA_ARGS__); \
+  __android_log_print(ANDROID_LOG_WARN, ANDRTAG, __VA_ARGS__);\
+}
+
+#define SLOGD(...) {\
+  SLOG(SLOG_TAG_DEBUG, __VA_ARGS__); \
+  __android_log_print(ANDROID_LOG_DEBUG, ANDRTAG, __VA_ARGS__);\
+}
+
+// just print the function signature and the file name
+#define SLOGF() {\
+  SLOG(SLOG_TAG_INFO, " "); \
+  __android_log_print(ANDROID_LOG_INFO, __FILE__, "%s", __PRETTY_FUNCTION__); \
+}
+
+#else
+
+#define SLOGI(...)
+#define SLOGW(...)
+#define SLOGD(...)
+#define SLOGF(...)
+
+#endif
 
 #include "SystemWorkerManager.h"
 
@@ -22,6 +69,7 @@
 #include "nsIWifi.h"
 #include "nsIWorkerHolder.h"
 #include "nsIXPConnect.h"
+#include "nsIEthernet.h"
 
 #include "jsfriendapi.h"
 #include "mozilla/dom/workers/Workers.h"
@@ -36,6 +84,7 @@
 #include "nsThreadUtils.h"
 #include "nsRadioInterfaceLayer.h"
 #include "WifiWorker.h"
+#include "EthernetWorker.h"
 
 USING_WORKERS_NAMESPACE
 
@@ -53,6 +102,7 @@ namespace {
 
 NS_DEFINE_CID(kWifiWorkerCID, NS_WIFIWORKER_CID);
 NS_DEFINE_CID(kNetworkManagerCID, NS_NETWORKMANAGER_CID);
+NS_DEFINE_CID(kEthernetWorkerCID, NS_ETHERNETWORKER_CID);
 
 // Doesn't carry a reference, we're owned by services.
 SystemWorkerManager *gInstance = nullptr;
@@ -350,6 +400,7 @@ SystemWorkerManager::~SystemWorkerManager()
 nsresult
 SystemWorkerManager::Init()
 {
+  SLOGI("----");
   if (XRE_GetProcessType() != GeckoProcessType_Default) {
     return NS_ERROR_NOT_AVAILABLE;
   }
@@ -383,6 +434,12 @@ SystemWorkerManager::Init()
   rv = InitNetd(cx);
   NS_ENSURE_SUCCESS(rv, rv);
 #endif
+
+  rv = InitEthernet(cx);
+  if (NS_FAILED(rv)) {
+    NS_WARNING("Failed to initialize Ethernet Networking!");
+    return rv;
+  }
 
   nsCOMPtr<nsIObserverService> obs =
     do_GetService(NS_OBSERVERSERVICE_CONTRACTID);
@@ -426,6 +483,13 @@ SystemWorkerManager::Shutdown()
     wifi = nullptr;
   }
   mWifiWorker = nullptr;
+
+  nsCOMPtr<nsIEthernet> ethernet(do_QueryInterface(mEthernetWorker));
+  if (ethernet) {
+    ethernet->Shutdown();
+    ethernet = nullptr;
+  }
+  mEthernetWorker = nullptr;
 
   nsCOMPtr<nsIObserverService> obs =
     do_GetService(NS_OBSERVERSERVICE_CONTRACTID);
@@ -483,6 +547,11 @@ SystemWorkerManager::GetInterface(const nsIID &aIID, void **aResult)
                               reinterpret_cast<nsINetworkManager**>(aResult));
   }
 #endif
+
+  if (aIID.Equals(NS_GET_IID(nsIEthernet))) {
+    return CallQueryInterface(mEthernetWorker,
+                              reinterpret_cast<nsIEthernet**>(aResult));
+  }
 
   NS_WARNING("Got nothing for the requested IID!");
   return NS_ERROR_NO_INTERFACE;
@@ -567,10 +636,23 @@ SystemWorkerManager::InitNetd(JSContext *cx)
 nsresult
 SystemWorkerManager::InitWifi(JSContext *cx)
 {
+  SLOGI("----");
   nsCOMPtr<nsIWorkerHolder> worker = do_CreateInstance(kWifiWorkerCID);
   NS_ENSURE_TRUE(worker, NS_ERROR_FAILURE);
 
   mWifiWorker = worker;
+  return NS_OK;
+}
+
+nsresult
+SystemWorkerManager::InitEthernet(JSContext *cx)
+{
+  SLOGI("----");
+  nsCOMPtr<nsIWorkerHolder> worker = do_CreateInstance(kEthernetWorkerCID);
+  NS_ENSURE_TRUE(worker, NS_ERROR_FAILURE);
+
+  SLOGI("Done with the init, we'll return then");
+  mEthernetWorker = worker;
   return NS_OK;
 }
 

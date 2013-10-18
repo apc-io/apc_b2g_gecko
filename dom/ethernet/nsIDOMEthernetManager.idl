@@ -1,0 +1,27 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsIDOMEventTarget.idl"
+#include "nsIDOMDOMRequest.idl"
+#include "nsISupports.idl"
+
+/*interface nsIDOMEventListener;*/
+
+[scriptable, uuid(349e6321-7972-4871-9fb7-94bfb855ba43)]
+interface nsIDOMEthernetManager : nsISupports
+{
+  void enable();
+  void disable();
+
+  void connect();
+  void disconnect();
+
+  readonly attribute boolean    enabled;
+  readonly attribute boolean    connected;
+
+  attribute nsIDOMEventListener onenabledchange;
+  attribute nsIDOMEventListener onconnectedchange;
+  /*attribute jsval onenabledchange;
+  attribute jsval onconnectedchange;*/
+};
