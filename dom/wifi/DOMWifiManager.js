@@ -437,6 +437,10 @@ DOMWifiManager.prototype = {
     if (!this._hasPrivileges)
       throw new Components.Exception("Denied", Cr.NS_ERROR_FAILURE);
     this._onDisabled = callback;
+  },
+
+  sayIt: function() {
+    debug("Just say it, this is for test");
   }
 };
 
