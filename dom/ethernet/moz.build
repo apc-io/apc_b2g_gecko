@@ -1,0 +1,30 @@
+# -*- Mode: python; c-basic-offset: 4; indent-tabs-mode: nil; tab-width: 40 -*-
+# vim: set filetype=python:
+
+XPIDL_SOURCES += [
+    'nsIDOMEthernetManager.idl',
+    'nsIEthernet.idl',
+    'nsIEthernetService.idl'
+]
+
+XPIDL_MODULE = 'dom_ethernet'
+
+EXTRA_COMPONENTS += [
+    'DOMEthernetManager.js',
+    'DOMEthernetManager.manifest',
+    'EthernetWorker.js',
+    'EthernetWorker.manifest',
+]
+
+EXTRA_JS_MODULES += [
+    'EthernetUtil.jsm',
+]
+
+if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
+   	SOURCES = [
+   		'EthernetProxyService.cpp',
+       	'EthernetUtils.cpp',
+   	]
+
+FINAL_LIBRARY = 'xul'
+

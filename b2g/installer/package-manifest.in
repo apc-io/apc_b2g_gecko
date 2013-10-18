@@ -178,6 +178,7 @@
 @BINPATH@/components/dom_geolocation.xpt
 @BINPATH@/components/dom_media.xpt
 @BINPATH@/components/dom_network.xpt
+@BINPATH@/components/dom_ethernet.xpt
 #ifdef MOZ_NFC
 @BINPATH@/components/dom_nfc.xpt
 #endif
@@ -412,6 +413,10 @@
 @BINPATH@/components/NetworkStatsServiceProxy.manifest
 @BINPATH@/components/WifiWorker.js
 @BINPATH@/components/WifiWorker.manifest
+@BINPATH@/components/DOMEthernetManager.js
+@BINPATH@/components/DOMEthernetManager.manifest
+@BINPATH@/components/EthernetWorker.js
+@BINPATH@/components/EthernetWorker.manifest
 #endif // MOZ_WIDGET_GONK
 
 ; RIL
