@@ -77,6 +77,37 @@ XPCOMUtils.defineLazyServiceGetter(Services, 'captivePortalDetector',
                                   'nsICaptivePortalDetector');
 #endif
 
+// for (var k in navigator) {
+//   dump("---- navigator." + k + " = " + navigator[k]);
+// };
+
+dump("=========== mozEthernetManager: " + navigator.mozEthernetManager);
+dump("=========== hello: " + navigator.hello);
+var hello = navigator.hello;
+// var hello = navigator.hello.QueryInterface(Components.interfaces.nsIHelloWorld);
+// dump("=========== hello var: " + hello);
+for (let k in hello) {
+  dump("------ hello." + k + " = " + hello[k]);
+}
+
+let wifiManager = navigator.mozWifiManager;
+dump("============ mozWifiManager: " + wifiManager);
+for (let k in wifiManager) {
+  dump("------ wifiManager." + k + " = " + wifiManager[k]);
+}
+
+// dump("---- hello.hello(): " + navigator.hello.hello());
+
+// dump("==================== ok, let's talk about ethernet manager service ========");
+// for (var k in Services) {
+//   dump("---- Services." + k + " = " + Services[k]);
+// }
+
+// for (var k in Services.mozEthernet) {
+//   dump("---- Services.mozEthernet." + k + " = " + Services.mozEthernet[k]);
+// }
+
+
 function getContentWindow() {
   return shell.contentBrowser.contentWindow;
 }

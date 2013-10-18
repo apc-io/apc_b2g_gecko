@@ -183,6 +183,7 @@
 #include "nsIWifiEventInits.h"
 #endif
 
+#include "nsIDOMEthernetManager.h"
 // includes needed for the prototype chain interfaces
 #include "nsIDOMNavigator.h"
 #include "nsIDOMBarProp.h"

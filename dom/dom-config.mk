@@ -37,6 +37,8 @@ DOM_SRCDIRS = \
   layout/xul/base/src \
   layout/xul/base/src/tree/src \
   dom/camera \
+  dom/ethernet \
+  dom/helloworld \
   $(NULL)
 
 ifdef MOZ_B2G_RIL

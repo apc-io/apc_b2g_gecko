@@ -199,6 +199,7 @@
 @BINPATH@/components/dom_power.xpt
 @BINPATH@/components/dom_range.xpt
 @BINPATH@/components/dom_settings.xpt
+@BINPATH@/components/dom_ethernet.xpt
 @BINPATH@/components/dom_permissionsettings.xpt
 @BINPATH@/components/dom_sidebar.xpt
 @BINPATH@/components/dom_mobilemessage.xpt
@@ -384,6 +385,8 @@
 @BINPATH@/components/nsDownloadManagerUI.js
 @BINPATH@/components/nsSidebar.manifest
 @BINPATH@/components/nsSidebar.js
+@BINPATH@/components/HelloWorld.manifest
+@BINPATH@/components/HelloWorld.js
 #ifndef MOZ_WIDGET_GONK
 @BINPATH@/components/extensions.manifest
 @BINPATH@/components/addonManager.js
@@ -447,6 +450,8 @@
 @BINPATH@/components/SettingsManager.manifest
 @BINPATH@/components/SettingsService.js
 @BINPATH@/components/SettingsService.manifest
+@BINPATH@/components/DOMEthernetManager.js
+@BINPATH@/components/DOMEthernetManager.manifest
 #ifdef MOZ_B2G_RIL
 @BINPATH@/components/NetworkManager.manifest
 @BINPATH@/components/NetworkManager.js
