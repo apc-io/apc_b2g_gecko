@@ -1,0 +1,4 @@
+# DOMEthernetManager.js
+component {c7c75ca2-ab41-4507-8293-77ed56a66cd6} DOMEthernetManager.js
+contract @mozilla.org/ethernetmanager;1 {c7c75ca2-ab41-4507-8293-77ed56a66cd6}
+category JavaScript-navigator-property mozEthernetManager @mozilla.org/ethernetmanager;1

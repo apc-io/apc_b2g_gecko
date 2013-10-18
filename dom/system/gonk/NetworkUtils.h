@@ -274,6 +274,7 @@ private:
   bool addSecondaryRoute(NetworkParams& aOptions);
   bool removeSecondaryRoute(NetworkParams& aOptions);
   bool getNetworkInterfaceStats(NetworkParams& aOptions);
+  bool getNetworkInterfaceCfg(NetworkParams& aOptions);
   bool setNetworkInterfaceAlarm(NetworkParams& aOptions);
   bool enableNetworkInterfaceAlarm(NetworkParams& aOptions);
   bool disableNetworkInterfaceAlarm(NetworkParams& aOptions);
@@ -299,6 +300,7 @@ private:
   static CommandFunc sStartDhcpServerChain[];
   static CommandFunc sStopDhcpServerChain[];
   static CommandFunc sNetworkInterfaceStatsChain[];
+  static CommandFunc sNetworkInterfaceGetCfgChain[];
   static CommandFunc sNetworkInterfaceEnableAlarmChain[];
   static CommandFunc sNetworkInterfaceDisableAlarmChain[];
   static CommandFunc sNetworkInterfaceSetAlarmChain[];
@@ -337,6 +339,7 @@ private:
   static void disableNat(PARAMS);
   static void setDefaultInterface(PARAMS);
   static void setInterfaceDns(PARAMS);
+  static void networkInterfaceGetCfg(PARAMS);
   static void wifiTetheringSuccess(PARAMS);
   static void usbTetheringSuccess(PARAMS);
   static void networkInterfaceStatsSuccess(PARAMS);
@@ -344,6 +347,7 @@ private:
   static void updateUpStreamSuccess(PARAMS);
   static void setDhcpServerSuccess(PARAMS);
   static void wifiOperationModeSuccess(PARAMS);
+  static void networkInterfaceGetCfgSuccess(PARAMS);
 #undef PARAMS
 
   /**
@@ -358,6 +362,7 @@ private:
   static void networkInterfaceStatsFail(PARAMS);
   static void networkInterfaceAlarmFail(PARAMS);
   static void setDnsFail(PARAMS);
+  static void networkInterfaceGetCfgFail(PARAMS);
 #undef PARAMS
 
   /**

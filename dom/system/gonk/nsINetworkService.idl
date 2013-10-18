@@ -28,6 +28,13 @@ interface nsINetworkStatsCallback : nsISupports
                              in jsval date);
 };
 
+[scriptable, function, uuid(6d662738-0867-4465-9b1f-9bce96d46ae4)]
+interface nsINetworkInterfaceCfgCallback: nsISupports
+{
+  void interfaceCfgAvailable(in boolean success,
+                              in jsval details);
+};
+
 [scriptable, function, uuid(0706bfa2-ac2d-11e2-9a8d-7b6d988d4767)]
 interface nsINetworkUsageAlarmCallback : nsISupports
 {
@@ -156,6 +163,18 @@ interface nsINetworkService : nsISupports
    *        and the date when stats are retrieved
    */
   void getNetworkInterfaceStats(in DOMString networkName, in nsINetworkStatsCallback callback);
+
+  /**
+   * Get Network interface cfg
+   *
+   * @param networkName
+   *        Select the Network interface to request getcfg
+   *
+   * @param callback
+   *        Callback to notify result and provide cfg
+   *
+   */
+  void getNetworkInterfaceCfg(in DOMString networkName, in nsINetworkInterfaceCfgCallback callback);
 
   /**
    * Set Alarm of usage per interface
