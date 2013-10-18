@@ -189,6 +189,7 @@
 @BINPATH@/components/dom_geolocation.xpt
 @BINPATH@/components/dom_media.xpt
 @BINPATH@/components/dom_network.xpt
+@BINPATH@/components/dom_ethernet.xpt
 @BINPATH@/components/dom_notification.xpt
 @BINPATH@/components/dom_html.xpt
 @BINPATH@/components/dom_indexeddb.xpt
@@ -416,6 +417,10 @@
 @BINPATH@/components/NetworkStatsServiceProxy.manifest
 @BINPATH@/components/WifiWorker.js
 @BINPATH@/components/WifiWorker.manifest
+@BINPATH@/components/DOMEthernetManager.js
+@BINPATH@/components/DOMEthernetManager.manifest
+@BINPATH@/components/EthernetWorker.js
+@BINPATH@/components/EthernetWorker.manifest
 #endif // MOZ_WIDGET_GONK
 
 ; RIL
