@@ -1,0 +1,29 @@
+/*
+ * trungnt
+ */
+
+#include "nsIDOMEventTarget.idl"
+#include "nsIDOMDOMRequest.idl"
+#include "nsISupports.idl"
+
+/*interface nsIDOMEventListener;*/
+
+[scriptable, uuid(349e6321-7972-4871-9fb7-94bfb855ba43)]
+interface nsIDOMEthernetManager : nsISupports
+{
+  void enable();
+  void disable();
+
+  void connect();
+  void disconnect();
+
+  readonly attribute boolean    enabled;
+  readonly attribute boolean    connected;
+  readonly attribute jsval      connection;
+
+  attribute nsIDOMEventListener onenabledchanged;
+  attribute nsIDOMEventListener onconnectedchanged;
+  attribute nsIDOMEventListener connectionupdated;
+  /*attribute jsval onenabledchange;
+  attribute jsval onconnectedchange;*/
+};
