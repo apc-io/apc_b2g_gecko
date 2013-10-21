@@ -76,7 +76,8 @@ bool gDrawRequest = false;
 static nsAppShell *gAppShell = NULL;
 static int epollfd = 0;
 static int signalfds[2] = {0};
-static const uint32_t HARDWARE_KEYBOARD_DEVICE = INPUT_DEVICE_CLASS_EXTERNAL | INPUT_DEVICE_CLASS_KEYBOARD | INPUT_DEVICE_CLASS_ALPHAKEY;
+static const uint32_t HARDWARE_KEYBOARD_DEVICE = INPUT_DEVICE_CLASS_EXTERNAL
+                | INPUT_DEVICE_CLASS_KEYBOARD | INPUT_DEVICE_CLASS_ALPHAKEY;
 
 NS_IMPL_ISUPPORTS_INHERITED1(nsAppShell, nsBaseAppShell, nsIObserver)
 
@@ -500,7 +501,7 @@ GeckoInputDispatcher::dispatchOnce()
                           data.key.charCode);
         break;
     case UserInputData::HARDWARE_KEYBOARD_RESET:
-        gAppShell->NotifyHardwareKeyboardChange(data.metaState);
+        gAppShell->NotifyHardwareKeyboardChange(data.action);
         break;
     }
 }
@@ -580,17 +581,13 @@ void GeckoInputDispatcher::notifyDeviceReset(const NotifyDeviceResetArgs* args)
 {
     int32_t deviceId = args->deviceId;
     uint32_t classes = args->classes;
-    RESET_REASON resetReason = args->resetReason;
+    ResetAction resetAction = args->resetAction;
 
-    if (((resetReason == DEVICE_ADDED) || (resetReason == DEVICE_REMOVED)) && (classes == HARDWARE_KEYBOARD_DEVICE)) {
+    if (((resetAction == RESET_ACTION_ADDED) || (resetAction == RESET_ACTION_REMOVED)) && (classes == HARDWARE_KEYBOARD_DEVICE)) {
         UserInputData data;
         data.timeMs = nanosecsToMillisecs(args->eventTime);
         data.type = UserInputData::HARDWARE_KEYBOARD_RESET;
-        if (resetReason == DEVICE_ADDED) {
-            data.metaState = true;
-        } else if (resetReason == DEVICE_REMOVED) {
-            data.metaState = false;
-        }
+        data.action = resetAction;
         {
             MutexAutoLock lock(mQueueLock);
             mEventQueue.push(data);
@@ -818,8 +815,7 @@ nsAppShell::NotifyScreenRotation()
 }
 
 /* static */ void
-nsAppShell::NotifyHardwareKeyboardChange(bool isConnected)
-{    
-    hal::HardwareKeyboardInformation keyboard(isConnected);
-    hal::NotifyHardwareKeyboardChange(keyboard);
+nsAppShell::NotifyHardwareKeyboardChange(int32_t action)
+{
+    hal::NotifyHardwareKeyboardChange(hal::HardwareKeyboardInformation(action == RESET_ACTION_ADDED));
 }

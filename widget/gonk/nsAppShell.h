@@ -77,7 +77,7 @@ public:
 
     static void NotifyScreenInitialized();
     static void NotifyScreenRotation();
-    static void NotifyHardwareKeyboardChange(bool isConnected);
+    static void NotifyHardwareKeyboardChange(int32_t action);
 
 protected:
     virtual ~nsAppShell();

@@ -10,9 +10,6 @@
 #include "nsDOMEvent.h"
 #include "mozilla/Preferences.h"
 #include "nsDOMEventTargetHelper.h"
-#include "android/log.h"
-#define LOG(args...)                                            \
-    __android_log_print(ANDROID_LOG_INFO, "HardwareKeyboardManager" , ## args)
 
 /**
  * We have to use macros here because our leak analysis tool things we are
@@ -56,8 +53,6 @@ HardwareKeyboardManager::HardwareKeyboardManager()
 void
 HardwareKeyboardManager::Init(nsPIDOMWindow* aWindow)
 {
-  // BindToOwner(aWindow->IsOuterWindow() ?
-  //    aWindow->GetCurrentInnerWindow() : aWindow);
   BindToOwner(aWindow);
 
   hal::RegisterHardwareKeyboardObserver(this);

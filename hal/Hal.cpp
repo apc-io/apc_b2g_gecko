@@ -282,10 +282,6 @@ protected:
 
 static BatteryObserversManager sBatteryObservers;
 
-// class HardwareKeyboardObserversManager : public CachingObserversManager<HardwareKeyboardInformation>
-// {  
-// };
-
 class HardwareKeyboardObserversManager : public ObserversManager<HardwareKeyboardInformation>
 {
 public:

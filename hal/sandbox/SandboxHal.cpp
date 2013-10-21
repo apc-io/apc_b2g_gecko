@@ -510,7 +510,7 @@ public:
 
   void Notify(const BatteryInformation& aBatteryInfo) MOZ_OVERRIDE {
     unused << SendNotifyBatteryChange(aBatteryInfo);
-  }  
+  }
 
   virtual bool
   RecvEnableHardwareKeyboardNotifications() MOZ_OVERRIDE {
