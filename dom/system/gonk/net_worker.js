@@ -15,7 +15,7 @@
 
 "use strict";
 
-const DEBUG = false;
+const DEBUG = true;
 
 const PERSIST_SYS_USB_CONFIG_PROPERTY = "persist.sys.usb.config";
 const SYS_USB_CONFIG_PROPERTY         = "sys.usb.config";
@@ -140,6 +140,40 @@ function networkInterfaceStatsSuccess(params) {
   // Notify the main thread.
   params.txBytes = parseFloat(params.resultReason);
 
+  postMessage(params);
+  return true;
+}
+
+function getEthernetStatsSuccess(params) {
+  debug("Ok, getEthernetStatsSuccess and got the result: " + params.resultReason + " of " + params.ifname);
+  params.config = params.resultReason;
+  params.cableConnected = params.resultReason.indexOf("running") >= 0;
+  let otherConfigs = params.config.trim().split(" ");
+
+  for (let i in otherConfigs) {
+    debug("**** otherConfigs[" + i + "] = " + otherConfigs[i]);
+  }
+  if (otherConfigs.length > 0) {
+    // mac address is the first one
+    params.hwaddr = otherConfigs[0];
+  }
+
+  if (params.cableConnected) {
+    params.ip = libcutils.property_get("dhcp." + params.ifname + ".ipaddress");
+    params.gw = libcutils.property_get("dhcp." + params.ifname + ".gateway");
+    params.dns1 = libcutils.property_get("net.dns1");
+    params.dns2 = libcutils.property_get("net.dns2");
+  }
+
+  for (let k in params) {
+    debug("^^^ params." + k + " = " + params[k]);
+  }
+  debug("Ok, good, send the result back to the main thread");
+  postMessage(params);
+  return true;
+}
+
+function getEthernetStatsFail(params) {
   postMessage(params);
   return true;
 }
@@ -456,6 +490,21 @@ function getTxBytes(params, callback) {
   return doCommand(command, callback);
 }
 
+// ok, here we use 2 new functions instead of 1 new and modifying 1 old
+function requestGetIfaceCfg(params, callback) {
+  let command = "interface getcfg " + params.ifname;
+  return doCommand(command, callback);
+}
+
+function parseGetIfaceCfg(params) {
+  params.config = params.resultReason;
+  if (params.config.indexOf("running") >= 0) {
+    params.running = 1;
+  } else {
+    params.running = 0;
+  }
+}
+
 function escapeQuote(str) {
   str = str.replace(/\\/g, "\\\\");
   return str.replace(/"/g, "\\\"");
@@ -727,6 +776,26 @@ function getNetworkInterfaceStats(params) {
   params.date = new Date();
 
   chain(params, gNetworkInterfaceStatsChain, networkInterfaceStatsFail);
+  return true;
+}
+
+let gEthernetStatsChain = [requestGetIfaceCfg,
+                                getEthernetStatsSuccess];
+
+
+function getEthernetStats(params) {
+  debug("getEthernetStats: " + params.ifname);
+
+  params.cableConnected = false;
+  params.config = "";
+  params.hwaddr = "";
+  params.ip = "";
+  params.gw = "";
+  params.dns1 = "";
+  params.dns2 = "";
+  params.date = new Date();
+  chain(params, gEthernetStatsChain, getEthernetStatsFail);
+
   return true;
 }
 

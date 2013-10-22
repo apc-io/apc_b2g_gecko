@@ -81,20 +81,24 @@ XPCOMUtils.defineLazyServiceGetter(Services, 'captivePortalDetector',
 //   dump("---- navigator." + k + " = " + navigator[k]);
 // };
 
-dump("=========== mozEthernetManager: " + navigator.mozEthernetManager);
-dump("=========== hello: " + navigator.hello);
-var hello = navigator.hello;
-// var hello = navigator.hello.QueryInterface(Components.interfaces.nsIHelloWorld);
-// dump("=========== hello var: " + hello);
-for (let k in hello) {
-  dump("------ hello." + k + " = " + hello[k]);
-}
+// dump("=========== mozEthernetManager: " + navigator.mozEthernetManager);
+// var ethernet = navigator.mozEthernetManager;
+// for (let k in ethernet) {
+//   dump("------ ethernet." + k + " = " + ethernet[k]);
+// }
+// dump("=========== hello: " + navigator.hello);
+// var hello = navigator.hello;
+// // var hello = navigator.hello.QueryInterface(Components.interfaces.nsIHelloWorld);
+// // dump("=========== hello var: " + hello);
+// for (let k in hello) {
+//   dump("------ hello." + k + " = " + hello[k]);
+// }
 
-let wifiManager = navigator.mozWifiManager;
-dump("============ mozWifiManager: " + wifiManager);
-for (let k in wifiManager) {
-  dump("------ wifiManager." + k + " = " + wifiManager[k]);
-}
+// let wifiManager = navigator.mozWifiManager;
+// dump("============ mozWifiManager: " + wifiManager);
+// for (let k in wifiManager) {
+//   dump("------ wifiManager." + k + " = " + wifiManager[k]);
+// }
 
 // dump("---- hello.hello(): " + navigator.hello.hello());
 

@@ -17,6 +17,20 @@ const DEBUG = true; // set to false to suppress debug messages
 const DOMETHERNETMANAGER_CONTRACTID = "@mozilla.org/ethernetmanager;1";
 const DOMETHERNETMANAGER_CID        = Components.ID("{c7c75ca2-ab41-4507-8293-77ed56a66cd6}");
 
+XPCOMUtils.defineLazyServiceGetter(this, "gNetworkManager",
+                                   "@mozilla.org/network/manager;1",
+                                   "nsINetworkManager");
+
+const DEFAULT_ETHERNET_NETWORK_IFACE = "eth0";
+
+const TOPIC_NETD_INTEFACE_CHANGED    = "netd-interface-change";
+const TOPIC_INTERFACE_STATE_CHANGED  = "network-interface-state-changed";
+const TOPIC_INTERFACE_REGISTERED     = "network-interface-registered";
+const TOPIC_INTERFACE_UNREGISTERED   = "network-interface-unregistered";
+const TOPIC_ACTIVE_CHANGED           = "network-active-changed";
+
+const ETHERNET_WORKER = "resource://gre/modules/ethernet_worker.js";
+
 function DOMEthernetManager() {
 }
 
@@ -56,11 +70,17 @@ DOMEthernetManager.prototype = {
 
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIDOMEthernetManager,
                                          Ci.nsIDOMGlobalPropertyInitializer,
+                                         Ci.nsIObserver,
                                          Ci.nsIMessageListener,
                                          Ci.nsISupportsWeakReference]),
 
   // nsIDOMGlobalPropertyInitializer implementation
   init: function(aWindow) {
+    Services.obs.addObserver(this, TOPIC_NETD_INTEFACE_CHANGED, false);
+    Services.obs.addObserver(this, TOPIC_INTERFACE_STATE_CHANGED, false);
+    Services.obs.addObserver(this, TOPIC_INTERFACE_REGISTERED, false);
+    Services.obs.addObserver(this, TOPIC_INTERFACE_UNREGISTERED, false);
+    // Services.obs.addObserver(this, TOPIC_ACTIVE_CHANGED, false);
     debug("Init() with " + aWindow);
     let principal = aWindow.document.nodePrincipal;
     // let secMan = Cc["@mozilla.org/scriptsecuritymanager;1"].getService(Ci.nsIScriptSecurityManager);
@@ -73,16 +93,37 @@ DOMEthernetManager.prototype = {
     // this._hasPrivileges = perm == Ci.nsIPermissionManager.ALLOW_ACTION;
 
     // Maintain this state for synchronous APIs.
-    this._currentNetwork = null;
-    this._connectionStatus = "disconnected";
-    this._enabled = false;
+    // this._connectionStatus = "disconnected";
+    this._cableConnected = false;
+    this._enabled = true;
+    this._hwaddress = "";
+    this._ipaddress = "";
+    this._gw = "";
+    this._dns1 = "";
+    this._dns2 = "";
     this._lastConnectionInfo = null;
     this._connected = false;
+    this._onenabledchange = null;
+    this._onconnectedchange = null;
 
-    const messages = ["EthernetManager:getEnabled:Return:OK", "EthernetManager:getConnected:Return:OK"
-                      ];
+    var controlWorker = new ChromeWorker(ETHERNET_WORKER);
+    controlWorker.onmessage = function(e) {
+      debug("we got the message from controlWorker: " + e.data);
+    }
+
+    controlWorker.onerror = function(e) {
+      debug("eo`, error: " + e);
+    }
+
+    const messages = ["EthernetManager:enable", "EthernetManager:disable",
+                      "EthernetManager:connect", "EthernetManager:disconnect"];
     this.initHelper(aWindow, messages);
-    // this._mm = Cc["@mozilla.org/childprocessmessagemanager;1"].getService(Ci.nsISyncMessageSender);
+
+    this._mm = Cc["@mozilla.org/childprocessmessagemanager;1"].getService(Ci.nsISyncMessageSender);
+
+    this.enable();
+
+    gNetworkManager.getEthernetStats(DEFAULT_ETHERNET_NETWORK_IFACE, this);
 
     // var state = this._mm.sendSyncMessage("WifiManager:getState")[0];
     // if (state) {
@@ -100,10 +141,21 @@ DOMEthernetManager.prototype = {
     //   this._connectionStatus = "disconnected";
     //   this._macAddress = "";
     // }
+    controlWorker.postMessage("Say hello from EthernetManager");
   },
 
   uninit: function() {
     debug("uninit()");
+  },
+
+  observe: function observe(subject, topic, data) {
+    let interfaceName = "[No Interface]";
+    if (subject) {
+      interfaceName = subject.name;
+    }
+    debug("We got the message from " + subject + "(" + interfaceName + ") with topic " + topic + " and the data " + data);
+    // switch (topic) {
+    // }
   },
 
   _sendMessageForRequest: function(name, data, request) {
@@ -117,6 +169,59 @@ DOMEthernetManager.prototype = {
     let msg = aMessage.json;
     if (msg.mid && msg.mid != this._id)
       return;
+  },
+
+  /**
+   * function must be called whenever one of:
+   *  - enabled
+   *  - cableConnected
+   *  - ipaddress
+   * changed
+   */
+  _checkConnection: function() {
+    let ret = this._enabled && this._cableConnected && this._ipaddress != "";
+    if (this._connected != ret) {
+      this._connected = ret;
+      if (this._onconnectedchange) {
+        // trigger event
+        this._onconnectedchange();
+      }
+    }
+
+    if (this._connected) {
+      EthernetNetworkInterface.state = EthernetNetworkInterface.NETWORK_STATE_CONNECTED;
+    } else {
+      EthernetNetworkInterface.state = EthernetNetworkInterface.NETWORK_STATE_DISCONNECTED;
+    }
+
+    gNetworkManager.overrideActive(EthernetNetworkInterface);
+  },
+
+  ethernetStatsAvailable: function nsIEthernetStatsCallback_ethernetStatsAvailable(
+    result, connected, details, date
+    ) {
+    // TODO: we also need to get current ip address to determined if the network is connected
+    // debug("The request result is: " + result);
+    // debug("The connected state is: " + connected);
+    // debug("time of request is: " + date);
+    if (result) {
+      this._cableConnected = connected;
+      // debug("We got the ipaddress: " + details.ip);
+      // for (let k in details) {
+      //   debug("______ details." + k + ": " + details[k]);
+      // }
+      this._hwaddress = details.hwaddress;
+      this._ipaddress = details.ip.trim();
+      this._gw = details.gw;
+      this._dns1 = details.dns1;
+      this._dns2 = details.dns2;
+      this._checkConnection();
+      EthernetNetworkInterface.ip = details.ip.trim();
+      EthernetNetworkInterface.broadcast = "";
+      EthernetNetworkInterface.netmask = "";
+      EthernetNetworkInterface.dns1 = details.dns1;
+      EthernetNetworkInterface.dns2 = details.dns2;
+    }
   },
 
   // _fireStatusChangeEvent: function StatusChangeEvent() {
@@ -150,6 +255,11 @@ DOMEthernetManager.prototype = {
 
   enable: function nsIDOMEthernetManager_enable() {
     debug("enable");
+    if (!EthernetNetworkInterface.registered) {
+      EthernetNetworkInterface.name = DEFAULT_ETHERNET_NETWORK_IFACE;
+      gNetworkManager.registerNetworkInterface(EthernetNetworkInterface);
+      EthernetNetworkInterface.registered = false;
+    }
     var request = this.createRequest();
     this._sendMessageForRequest("EthernetManager:enable", null, request);
     return request;
@@ -190,8 +300,9 @@ DOMEthernetManager.prototype = {
 
   get connected() {
     debug("get connected");
+    // TODO: better method for validating ip address
     return this._connected;
-  }
+  },
 
   // get macAddress() {
   //   if (!this._hasPrivileges)
@@ -237,9 +348,62 @@ DOMEthernetManager.prototype = {
   //     throw new Components.Exception("Denied", Cr.NS_ERROR_FAILURE);
   //   this._onDisabled = callback;
   // }
+  set onenabledchange(callback) {
+    debug("Well, setting  the callback for onenabledchange: " + callback);
+  },
+
+  set onconnectedchange(callback) {
+    debug("Well, setting the callback for onconnectedchange: " + callback);
+  }
 };
 
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory([DOMEthernetManager]);
+
+let EthernetNetworkInterface = {
+
+  QueryInterface: XPCOMUtils.generateQI([Ci.nsINetworkInterface]),
+
+  registered: false,
+
+  // nsINetworkInterface
+
+  NETWORK_STATE_UNKNOWN:       Ci.nsINetworkInterface.NETWORK_STATE_UNKNOWN,
+  NETWORK_STATE_CONNECTING:    Ci.nsINetworkInterface.CONNECTING,
+  NETWORK_STATE_CONNECTED:     Ci.nsINetworkInterface.CONNECTED,
+  NETWORK_STATE_DISCONNECTING: Ci.nsINetworkInterface.DISCONNECTING,
+  NETWORK_STATE_DISCONNECTED:  Ci.nsINetworkInterface.DISCONNECTED,
+
+  state: Ci.nsINetworkInterface.NETWORK_STATE_UNKNOWN,
+
+  NETWORK_TYPE_WIFI:        Ci.nsINetworkInterface.NETWORK_TYPE_WIFI,
+  NETWORK_TYPE_MOBILE:      Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE,
+  NETWORK_TYPE_MOBILE_MMS:  Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE_MMS,
+  NETWORK_TYPE_MOBILE_SUPL: Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE_SUPL,
+  NETWORK_TYPE_ETHERNET:    Ci.nsINetworkInterface.NETWORK_TYPE_ETHERNET,
+
+  type: Ci.nsINetworkInterface.NETWORK_TYPE_ETHERNET,
+
+  name: null,
+
+  // For now we do our own DHCP. In the future this should be handed off
+  // to the Network Manager.
+  dhcp: false,
+
+  ip: null,
+
+  netmask: null,
+
+  broadcast: null,
+
+  dns1: null,
+
+  dns2: null,
+
+  httpProxyHost: null,
+
+  httpProxyPort: null,
+
+};
 
 let debug;
 if (DEBUG) {

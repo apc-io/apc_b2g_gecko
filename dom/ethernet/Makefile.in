@@ -31,7 +31,9 @@ EXTRA_COMPONENTS = \
 #  DOMWifiManager.manifest \
 #  $(NULL)
 
-#EXTRA_JS_MODULES = \
+EXTRA_JS_MODULES = \
+  ethernet_worker.js \
+  $(NULL)
 #  libhardware_legacy.js \
 #  $(NULL)
 #  wifi_worker.js \

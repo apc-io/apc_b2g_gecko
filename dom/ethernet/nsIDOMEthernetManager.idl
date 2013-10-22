@@ -3,21 +3,25 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsIDOMEventTarget.idl"
+#include "nsIDOMDOMRequest.idl"
+#include "nsISupports.idl"
 
-interface nsIDOMEventListener;
+/*interface nsIDOMEventListener;*/
 
-[scriptable, builtinclass, uuid(349e6321-7972-4871-9fb7-94bfb855ba43)]
-interface nsIDOMEthernetManager : nsIDOMEventTarget
+[scriptable, uuid(349e6321-7972-4871-9fb7-94bfb855ba43)]
+interface nsIDOMEthernetManager : nsISupports
 {
-  readonly attribute boolean    enabled;
-  readonly attribute boolean    connected;
-
-  /*[implicit_jscontext] attribute jsval onenabledchange;
-  [implicit_jscontext] attribute jsval onconnectedchange;*/
-
   void enable();
   void disable();
 
   void connect();
   void disconnect();
+
+  readonly attribute boolean    enabled;
+  readonly attribute boolean    connected;
+
+  attribute nsIDOMEventListener onenabledchange;
+  attribute nsIDOMEventListener onconnectedchange;
+  /*attribute jsval onenabledchange;
+  attribute jsval onconnectedchange;*/
 };

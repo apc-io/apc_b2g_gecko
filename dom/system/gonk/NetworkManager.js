@@ -17,7 +17,7 @@ const NETWORKINTERFACE_CONTRACTID = "@mozilla.org/network/interface;1";
 const NETWORKINTERFACE_CID =
   Components.ID("{266c3edd-78f0-4512-8178-2d6fee2d35ee}");
 
-const DEFAULT_PREFERRED_NETWORK_TYPE = Ci.nsINetworkInterface.NETWORK_TYPE_WIFI;
+const DEFAULT_PREFERRED_NETWORK_TYPE = Ci.nsINetworkInterface.NETWORK_TYPE_ETHERNET;
 
 XPCOMUtils.defineLazyServiceGetter(this, "gSettingsService",
                                    "@mozilla.org/settingsService;1",
@@ -388,6 +388,32 @@ NetworkManager.prototype = {
     this.controlMessage(params, function(result) {
       let success = result.resultCode >= NETD_COMMAND_OKAY && result.resultCode < NETD_COMMAND_ERROR;
       callback.networkStatsAvailable(success, result.connType, result.rxBytes, result.txBytes, result.date);
+    });
+
+    return true;
+  },
+
+  getEthernetStats: function getEthernetStats(iface, callback) {
+    if (!iface || !callback) {
+      debug("Invalid parameters");
+      return false;
+    }
+
+    let params = {
+      cmd: "getEthernetStats",
+      ifname: iface
+    };
+
+    params.report = true; // what for?
+    params.isAsync = true;
+
+    this.controlMessage(params, function(result) {
+      debug("Got the result from net_worker for cable stats" + result);
+      for (let k in result) {
+        debug("--- result." + k + ": " + result[k]);
+      }
+      let success = result.resultCode >= NETD_COMMAND_OKAY && result.resultCode < NETD_COMMAND_ERROR;
+      callback.ethernetStatsAvailable(success, result.cableConnected, result, result.date);
     });
 
     return true;
