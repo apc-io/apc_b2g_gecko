@@ -44,7 +44,7 @@ public:
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HardwareKeyboardManager,
                                            nsDOMEventTargetHelper)
 private:
-  bool   mIsPlugged;
+  uint32_t   mNumHWKeyboards;
 };
 
 } // namespace hardwarekeyboard

@@ -10,6 +10,10 @@
 #include "nsDOMEvent.h"
 #include "mozilla/Preferences.h"
 #include "nsDOMEventTargetHelper.h"
+#include "android/log.h"
+
+#define LOG(args...)                                            \
+    __android_log_print(ANDROID_LOG_INFO, "Gonk" , ## args)
 
 /**
  * We have to use macros here because our leak analysis tool things we are
@@ -46,7 +50,7 @@ NS_IMPL_EVENT_HANDLER(HardwareKeyboardManager, hardwarekeyboardconnected)
 NS_IMPL_EVENT_HANDLER(HardwareKeyboardManager, hardwarekeyboarddisconnected)
 
 HardwareKeyboardManager::HardwareKeyboardManager()
-  : mIsPlugged(false)
+  : mNumHWKeyboards(0)
 {
 }
 
@@ -60,7 +64,7 @@ HardwareKeyboardManager::Init(nsPIDOMWindow* aWindow)
   hal::HardwareKeyboardInformation keyboardInfo;
   hal::GetCurrentHardwareKeyboardInformation(&keyboardInfo);
 
-  mIsPlugged = keyboardInfo.isConnected();
+  mNumHWKeyboards = keyboardInfo.numHWKeyboards();
 }
 
 void
@@ -70,10 +74,9 @@ HardwareKeyboardManager::Shutdown()
 }
 
 NS_IMETHODIMP
-HardwareKeyboardManager::GetIsPlugged(bool* aIsPlugged)
+HardwareKeyboardManager::GetHardwareKeyboardPresent(bool* aIsHWKeyboardPresent)
 {
-  *aIsPlugged = mIsPlugged;
-
+  *aIsHWKeyboardPresent = mNumHWKeyboards;
   return NS_OK;
 }
 
@@ -81,12 +84,13 @@ HardwareKeyboardManager::GetIsPlugged(bool* aIsPlugged)
 void
 HardwareKeyboardManager::Notify(const hal::HardwareKeyboardInformation& aHardwareKeyboardInfo)
 {
-  mIsPlugged = aHardwareKeyboardInfo.isConnected();
-  if (mIsPlugged) {
+  uint32_t newNumHWKeyboards = aHardwareKeyboardInfo.numHWKeyboards();
+  if ((newNumHWKeyboards > mNumHWKeyboards) && !mNumHWKeyboards) {
     DispatchTrustedEvent(HW_KEYBOARD_CONNECTED_EVENT_NAME);
-  } else {
+  } else if ((newNumHWKeyboards < mNumHWKeyboards) && !newNumHWKeyboards) {
     DispatchTrustedEvent(HW_KEYBOARD_DISCONNECTED_EVENT_NAME);
   }
+  mNumHWKeyboards = newNumHWKeyboards;
 }
 
 } // namespace hardwarekeyboard

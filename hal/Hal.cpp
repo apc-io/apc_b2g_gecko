@@ -289,7 +289,7 @@ public:
     if (mHasValidCache) {
       return mInfo;
     } else {
-      HardwareKeyboardInformation keyboardInfo(false);
+      HardwareKeyboardInformation keyboardInfo(0);
       return keyboardInfo;
     }
   }

@@ -37,7 +37,7 @@ struct BatteryInformation {
   double remainingTime;
 };
 struct HardwareKeyboardInformation {
-  bool   isConnected;
+  uint32_t numHWKeyboards;
 };
 
 struct LightConfiguration {

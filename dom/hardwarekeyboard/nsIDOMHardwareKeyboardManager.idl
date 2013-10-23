@@ -7,12 +7,12 @@
 [scriptable, builtinclass, uuid(B35437F6-2B3C-11E3-891E-5AD66088709B)]
 interface nsIDOMHardwareKeyboardManager : nsIDOMEventTarget {
   /**
-   * Indicates whether the keyboard are plugged in or not.
+   * Indicates whether the is any hardware keyboard plugged in or not.
    */
-  readonly attribute boolean isPlugged;
+  readonly attribute boolean hardwareKeyboardPresent;
 
   /**
-   * Fired when the keyboard are plugged or unplugged.
+   * Fired when the hardware keyboard are plugged or unplugged.
    *
    */
   [implicit_jscontext] attribute jsval onhardwarekeyboardconnected;

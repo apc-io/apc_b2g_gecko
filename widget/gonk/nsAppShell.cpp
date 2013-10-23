@@ -76,8 +76,6 @@ bool gDrawRequest = false;
 static nsAppShell *gAppShell = NULL;
 static int epollfd = 0;
 static int signalfds[2] = {0};
-static const uint32_t HARDWARE_KEYBOARD_DEVICE = INPUT_DEVICE_CLASS_EXTERNAL
-                | INPUT_DEVICE_CLASS_KEYBOARD | INPUT_DEVICE_CLASS_ALPHAKEY;
 
 NS_IMPL_ISUPPORTS_INHERITED1(nsAppShell, nsBaseAppShell, nsIObserver)
 
@@ -583,7 +581,8 @@ void GeckoInputDispatcher::notifyDeviceReset(const NotifyDeviceResetArgs* args)
     uint32_t classes = args->classes;
     ResetAction resetAction = args->resetAction;
 
-    if (((resetAction == RESET_ACTION_ADDED) || (resetAction == RESET_ACTION_REMOVED)) && (classes == HARDWARE_KEYBOARD_DEVICE)) {
+    if (((resetAction == RESET_ACTION_ADDED) || (resetAction == RESET_ACTION_REMOVED))
+            && (classes & INPUT_DEVICE_CLASS_ALPHAKEY)) {
         UserInputData data;
         data.timeMs = nanosecsToMillisecs(args->eventTime);
         data.type = UserInputData::HARDWARE_KEYBOARD_RESET;
@@ -636,6 +635,7 @@ nsAppShell::nsAppShell()
     : mNativeCallbackRequest(false)
     , mHandlers()
     , mEnableDraw(false)
+    , mNumHWKeyboards(0)
 {
     gAppShell = this;
 }
@@ -814,8 +814,14 @@ nsAppShell::NotifyScreenRotation()
     hal::NotifyScreenConfigurationChange(nsScreenGonk::GetConfiguration());
 }
 
-/* static */ void
+void
 nsAppShell::NotifyHardwareKeyboardChange(int32_t action)
 {
-    hal::NotifyHardwareKeyboardChange(hal::HardwareKeyboardInformation(action == RESET_ACTION_ADDED));
+    //We have filtered to get only RESET_ACTION_ADDED and RESET_ACTION_REMOVED
+    if (action == RESET_ACTION_ADDED) {
+        mNumHWKeyboards++;
+    } else {
+        mNumHWKeyboards--;
+    }
+    hal::NotifyHardwareKeyboardChange(hal::HardwareKeyboardInformation(mNumHWKeyboards));
 }
