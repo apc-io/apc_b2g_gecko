@@ -19,9 +19,12 @@ include $(topsrcdir)/dom/dom-config.mk
 
 XPIDLSRCS = \
   nsIDOMEthernetManager.idl \
+  nsIEthernet.idl \
   $(NULL)
 
 EXTRA_COMPONENTS = \
+  EthernetWorker.js \
+  EthernetWorker.manifest \
   DOMEthernetManager.js \
   DOMEthernetManager.manifest \
   $(NULL)

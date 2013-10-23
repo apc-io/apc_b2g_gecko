@@ -106,17 +106,9 @@ DOMEthernetManager.prototype = {
     this._onenabledchange = null;
     this._onconnectedchange = null;
 
-    var controlWorker = new ChromeWorker(ETHERNET_WORKER);
-    controlWorker.onmessage = function(e) {
-      debug("we got the message from controlWorker: " + e.data);
-    }
-
-    controlWorker.onerror = function(e) {
-      debug("eo`, error: " + e);
-    }
-
     const messages = ["EthernetManager:enable", "EthernetManager:disable",
-                      "EthernetManager:connect", "EthernetManager:disconnect"];
+                      "EthernetManager:connect", "EthernetManager:disconnect",
+                      "EthernetManager:getState"];
     this.initHelper(aWindow, messages);
 
     this._mm = Cc["@mozilla.org/childprocessmessagemanager;1"].getService(Ci.nsISyncMessageSender);
@@ -125,7 +117,7 @@ DOMEthernetManager.prototype = {
 
     gNetworkManager.getEthernetStats(DEFAULT_ETHERNET_NETWORK_IFACE, this);
 
-    // var state = this._mm.sendSyncMessage("WifiManager:getState")[0];
+    this._mm.sendSyncMessage("EthernetManager:getState");
     // if (state) {
     //   this._currentNetwork = state.network;
     //   if (this._currentNetwork)
@@ -141,7 +133,6 @@ DOMEthernetManager.prototype = {
     //   this._connectionStatus = "disconnected";
     //   this._macAddress = "";
     // }
-    controlWorker.postMessage("Say hello from EthernetManager");
   },
 
   uninit: function() {

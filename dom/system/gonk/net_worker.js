@@ -174,6 +174,7 @@ function getEthernetStatsSuccess(params) {
 }
 
 function getEthernetStatsFail(params) {
+  debug("getEthernetStatsFail ..... _>+");
   postMessage(params);
   return true;
 }

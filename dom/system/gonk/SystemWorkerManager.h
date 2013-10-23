@@ -59,6 +59,7 @@ private:
 #ifdef MOZ_WIDGET_GONK
   nsresult InitNetd(JSContext *cx);
 #endif
+  nsresult InitEthernet(JSContext *cx);
   nsresult InitWifi(JSContext *cx);
 
   nsCOMPtr<nsIRadioInterfaceLayer> mRIL;
@@ -66,6 +67,7 @@ private:
   nsCOMPtr<nsIWorkerHolder> mNetdWorker;
 #endif
   nsCOMPtr<nsIWorkerHolder> mWifiWorker;
+  nsCOMPtr<nsIWorkerHolder> mEthernetWorker;
 
   bool mShutdown;
 };

@@ -452,6 +452,8 @@
 @BINPATH@/components/SettingsService.manifest
 @BINPATH@/components/DOMEthernetManager.js
 @BINPATH@/components/DOMEthernetManager.manifest
+@BINPATH@/components/EthernetWorker.js
+@BINPATH@/components/EthernetWorker.manifest
 #ifdef MOZ_B2G_RIL
 @BINPATH@/components/NetworkManager.manifest
 @BINPATH@/components/NetworkManager.js

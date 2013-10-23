@@ -17,7 +17,7 @@ const NETWORKINTERFACE_CONTRACTID = "@mozilla.org/network/interface;1";
 const NETWORKINTERFACE_CID =
   Components.ID("{266c3edd-78f0-4512-8178-2d6fee2d35ee}");
 
-const DEFAULT_PREFERRED_NETWORK_TYPE = Ci.nsINetworkInterface.NETWORK_TYPE_ETHERNET;
+const DEFAULT_PREFERRED_NETWORK_TYPE = Ci.nsINetworkInterface.NETWORK_TYPE_WIFI;
 
 XPCOMUtils.defineLazyServiceGetter(this, "gSettingsService",
                                    "@mozilla.org/settingsService;1",
