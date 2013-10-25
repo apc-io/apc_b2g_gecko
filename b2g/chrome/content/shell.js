@@ -82,7 +82,8 @@ XPCOMUtils.defineLazyServiceGetter(Services, 'captivePortalDetector',
 // };
 
 // dump("=========== mozEthernetManager: " + navigator.mozEthernetManager);
-// var ethernet = navigator.mozEthernetManager;
+// just to test message sending from DOMEthernetManager to EthernetWorker
+var ethernet = navigator.mozEthernetManager;
 // for (let k in ethernet) {
 //   dump("------ ethernet." + k + " = " + ethernet[k]);
 // }

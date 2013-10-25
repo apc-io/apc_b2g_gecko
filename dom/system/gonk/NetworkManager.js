@@ -413,7 +413,7 @@ NetworkManager.prototype = {
         debug("--- result." + k + ": " + result[k]);
       }
       let success = result.resultCode >= NETD_COMMAND_OKAY && result.resultCode < NETD_COMMAND_ERROR;
-      callback.ethernetStatsAvailable(success, result.cableConnected, result, result.date);
+      callback.ethernetStatsAvailable(success, result);
     });
 
     return true;

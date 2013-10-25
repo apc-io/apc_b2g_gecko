@@ -116,9 +116,7 @@ interface nsINetworkStatsCallback : nsISupports
 interface nsIEthernetStatsCallback: nsISupports
 {
   void ethernetStatsAvailable(in boolean success,
-                                   in boolean cableConnected,
-                                   in jsval details,
-                                   in jsval date);
+                              in jsval details);
 };
 
 /**

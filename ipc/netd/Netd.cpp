@@ -1,7 +1,53 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
+#define SLOG_ENABLED
+#ifdef SLOG_ENABLED
 
+#include <cstdio>
+#include <android/log.h>
+
+#define SLOG_TAG_WARNING "W"
+#define SLOG_TAG_INFO "I"
+#define SLOG_TAG_DEBUG "D"
+#define SLOG(tag, args...) \
+{ \
+  std::printf("[%s] %s:%s", tag, __FILE__, __PRETTY_FUNCTION__); \
+  std::printf(args); \
+  std::printf("\n"); \
+}
+
+#define ANDRTAG __PRETTY_FUNCTION__
+
+#define SLOGI(...) { \
+  SLOG(SLOG_TAG_INFO, __VA_ARGS__); \
+  __android_log_print(ANDROID_LOG_INFO, ANDRTAG, __VA_ARGS__); \
+}
+
+#define SLOGW(...) {\
+  SLOG(SLOG_TAG_WARNING, __VA_ARGS__); \
+  __android_log_print(ANDROID_LOG_WARN, ANDRTAG, __VA_ARGS__);\
+}
+
+#define SLOGD(...) {\
+  SLOG(SLOG_TAG_DEBUG, __VA_ARGS__); \
+  __android_log_print(ANDROID_LOG_DEBUG, ANDRTAG, __VA_ARGS__);\
+}
+
+// just print the function signature and the file name
+#define SLOGF() {\
+  SLOG(SLOG_TAG_INFO, " "); \
+  __android_log_print(ANDROID_LOG_INFO, __FILE__, "%s", __PRETTY_FUNCTION__); \
+}
+
+#else
+
+#define SLOGI(...)
+#define SLOGW(...)
+#define SLOGD(...)
+#define SLOGF(...)
+
+#endif
 #include "Netd.h"
 #include <android/log.h>
 #include <cutils/sockets.h>
@@ -151,6 +197,7 @@ NetdClient::OpenSocket()
 void
 NetdClient::OnFileCanReadWithoutBlocking(int aFd)
 {
+  SLOGI("---");
   ssize_t length = 0;
 
   MOZ_ASSERT(aFd == mSocket.get());
@@ -174,6 +221,8 @@ NetdClient::OnFileCanReadWithoutBlocking(int aFd)
       Restart();
       return;
     }
+
+    SLOGI("MEssage: %s", mReceiveBuffer);
 
     while (length-- > 0) {
       MOZ_ASSERT(mReceivedIndex < MAX_COMMAND_SIZE);

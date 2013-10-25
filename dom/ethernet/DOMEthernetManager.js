@@ -17,9 +17,9 @@ const DEBUG = true; // set to false to suppress debug messages
 const DOMETHERNETMANAGER_CONTRACTID = "@mozilla.org/ethernetmanager;1";
 const DOMETHERNETMANAGER_CID        = Components.ID("{c7c75ca2-ab41-4507-8293-77ed56a66cd6}");
 
-XPCOMUtils.defineLazyServiceGetter(this, "gNetworkManager",
-                                   "@mozilla.org/network/manager;1",
-                                   "nsINetworkManager");
+// XPCOMUtils.defineLazyServiceGetter(this, "gNetworkManager",
+//                                    "@mozilla.org/network/manager;1",
+//                                    "nsINetworkManager");
 
 const DEFAULT_ETHERNET_NETWORK_IFACE = "eth0";
 
@@ -106,18 +106,19 @@ DOMEthernetManager.prototype = {
     this._onenabledchange = null;
     this._onconnectedchange = null;
 
+    // this is the messages we used to communicate between this DOM Element and EthernetWorker (the manager backend)
     const messages = ["EthernetManager:enable", "EthernetManager:disable",
                       "EthernetManager:connect", "EthernetManager:disconnect",
-                      "EthernetManager:getState"];
+                      "EthernetManager:getStats"];
     this.initHelper(aWindow, messages);
 
     this._mm = Cc["@mozilla.org/childprocessmessagemanager;1"].getService(Ci.nsISyncMessageSender);
 
     this.enable();
 
-    gNetworkManager.getEthernetStats(DEFAULT_ETHERNET_NETWORK_IFACE, this);
+    // gNetworkManager.getEthernetStats(DEFAULT_ETHERNET_NETWORK_IFACE, this);
 
-    this._mm.sendSyncMessage("EthernetManager:getState");
+    this._mm.sendSyncMessage("EthernetManager:getStats");
     // if (state) {
     //   this._currentNetwork = state.network;
     //   if (this._currentNetwork)
@@ -169,24 +170,24 @@ DOMEthernetManager.prototype = {
    *  - ipaddress
    * changed
    */
-  _checkConnection: function() {
-    let ret = this._enabled && this._cableConnected && this._ipaddress != "";
-    if (this._connected != ret) {
-      this._connected = ret;
-      if (this._onconnectedchange) {
-        // trigger event
-        this._onconnectedchange();
-      }
-    }
+  // _checkConnection: function() {
+  //   let ret = this._enabled && this._cableConnected && this._ipaddress != "";
+  //   if (this._connected != ret) {
+  //     this._connected = ret;
+  //     if (this._onconnectedchange) {
+  //       // trigger event
+  //       this._onconnectedchange();
+  //     }
+  //   }
 
-    if (this._connected) {
-      EthernetNetworkInterface.state = EthernetNetworkInterface.NETWORK_STATE_CONNECTED;
-    } else {
-      EthernetNetworkInterface.state = EthernetNetworkInterface.NETWORK_STATE_DISCONNECTED;
-    }
+  //   if (this._connected) {
+  //     EthernetNetworkInterface.state = EthernetNetworkInterface.NETWORK_STATE_CONNECTED;
+  //   } else {
+  //     EthernetNetworkInterface.state = EthernetNetworkInterface.NETWORK_STATE_DISCONNECTED;
+  //   }
 
-    gNetworkManager.overrideActive(EthernetNetworkInterface);
-  },
+  //   gNetworkManager.overrideActive(EthernetNetworkInterface);
+  // },
 
   ethernetStatsAvailable: function nsIEthernetStatsCallback_ethernetStatsAvailable(
     result, connected, details, date
@@ -246,11 +247,11 @@ DOMEthernetManager.prototype = {
 
   enable: function nsIDOMEthernetManager_enable() {
     debug("enable");
-    if (!EthernetNetworkInterface.registered) {
-      EthernetNetworkInterface.name = DEFAULT_ETHERNET_NETWORK_IFACE;
-      gNetworkManager.registerNetworkInterface(EthernetNetworkInterface);
-      EthernetNetworkInterface.registered = false;
-    }
+    // if (!EthernetNetworkInterface.registered) {
+    //   EthernetNetworkInterface.name = DEFAULT_ETHERNET_NETWORK_IFACE;
+    //   gNetworkManager.registerNetworkInterface(EthernetNetworkInterface);
+    //   EthernetNetworkInterface.registered = false;
+    // }
     var request = this.createRequest();
     this._sendMessageForRequest("EthernetManager:enable", null, request);
     return request;

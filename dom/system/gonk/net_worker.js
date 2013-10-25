@@ -147,6 +147,7 @@ function networkInterfaceStatsSuccess(params) {
 function getEthernetStatsSuccess(params) {
   debug("Ok, getEthernetStatsSuccess and got the result: " + params.resultReason + " of " + params.ifname);
   params.config = params.resultReason;
+  params.up = params.resultReason.indexOf("up") >= 0;
   params.cableConnected = params.resultReason.indexOf("running") >= 0;
   let otherConfigs = params.config.trim().split(" ");
 
@@ -781,12 +782,13 @@ function getNetworkInterfaceStats(params) {
 }
 
 let gEthernetStatsChain = [requestGetIfaceCfg,
-                                getEthernetStatsSuccess];
+                           getEthernetStatsSuccess];
 
 
 function getEthernetStats(params) {
   debug("getEthernetStats: " + params.ifname);
 
+  params.up = false;
   params.cableConnected = false;
   params.config = "";
   params.hwaddr = "";

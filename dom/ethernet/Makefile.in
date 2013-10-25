@@ -36,6 +36,7 @@ EXTRA_COMPONENTS = \
 
 EXTRA_JS_MODULES = \
   ethernet_worker.js \
+  EthernetManager.js \
   $(NULL)
 #  libhardware_legacy.js \
 #  $(NULL)
