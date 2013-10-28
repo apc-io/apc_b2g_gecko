@@ -282,6 +282,43 @@ protected:
 
 static BatteryObserversManager sBatteryObservers;
 
+class HardwareKeyboardObserversManager : public ObserversManager<HardwareKeyboardInformation>
+{
+public:
+  HardwareKeyboardInformation GetCurrentInformation() {
+    if (mHasValidCache) {
+      return mInfo;
+    } else {
+      HardwareKeyboardInformation keyboardInfo(0);
+      return keyboardInfo;
+    }
+  }
+
+  void CacheInformation(const HardwareKeyboardInformation& aInfo) {
+    mHasValidCache = true;
+    mInfo = aInfo;
+  }
+
+  void BroadcastCachedInformation() {
+    this->BroadcastInformation(mInfo);
+  }
+
+protected:
+  void EnableNotifications() {
+    PROXY_IF_SANDBOXED(EnableHardwareKeyboardNotifications());
+  }
+
+  void DisableNotifications() {
+    PROXY_IF_SANDBOXED(DisableHardwareKeyboardNotifications());
+  }
+
+private:
+  HardwareKeyboardInformation                mInfo;
+  bool                    mHasValidCache;
+};
+
+static HardwareKeyboardObserversManager sHWKeyboardObservers;
+
 class NetworkObserversManager : public CachingObserversManager<NetworkInformation>
 {
 protected:
@@ -359,6 +396,36 @@ NotifyBatteryChange(const BatteryInformation& aInfo)
   AssertMainThread();
   sBatteryObservers.CacheInformation(aInfo);
   sBatteryObservers.BroadcastCachedInformation();
+}
+
+void
+RegisterHardwareKeyboardObserver(HardwareKeyboardObserver* aObserver)
+{
+  AssertMainThread();
+  sHWKeyboardObservers.AddObserver(aObserver);
+}
+
+void
+UnregisterHardwareKeyboardObserver(HardwareKeyboardObserver* aObserver)
+{
+  AssertMainThread();
+  sHWKeyboardObservers.RemoveObserver(aObserver);
+}
+
+void
+GetCurrentHardwareKeyboardInformation(HardwareKeyboardInformation* aHWKeyboardInfo)
+{
+  AssertMainThread();
+  *aHWKeyboardInfo = sHWKeyboardObservers.GetCurrentInformation();
+}
+
+
+void
+NotifyHardwareKeyboardChange(const hal::HardwareKeyboardInformation& aHWKeyboardInfo)
+{
+  AssertMainThread();
+  sHWKeyboardObservers.CacheInformation(aHWKeyboardInfo);
+  sHWKeyboardObservers.BroadcastCachedInformation();
 }
 
 bool GetScreenEnabled()

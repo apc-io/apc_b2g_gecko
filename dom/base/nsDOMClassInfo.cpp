@@ -493,6 +493,8 @@ using mozilla::dom::indexedDB::IDBWrapperCache;
 
 #include "nsIDOMBatteryManager.h"
 #include "BatteryManager.h"
+#include "nsIDOMHardwareKeyboardManager.h"
+#include "HardwareKeyboardManager.h"
 #include "nsIDOMPowerManager.h"
 #include "nsIDOMWakeLock.h"
 #include "nsIDOMSmsManager.h"
@@ -1506,6 +1508,9 @@ static nsDOMClassInfoData sClassInfoData[] = {
                            DOM_DEFAULT_SCRIPTABLE_FLAGS)
 
   NS_DEFINE_CLASSINFO_DATA(BatteryManager, nsDOMGenericSH,
+                           DOM_DEFAULT_SCRIPTABLE_FLAGS)
+
+  NS_DEFINE_CLASSINFO_DATA(HardwareKeyboardManager, nsDOMGenericSH,
                            DOM_DEFAULT_SCRIPTABLE_FLAGS)
 
   NS_DEFINE_CLASSINFO_DATA(MozPowerManager, nsDOMGenericSH,
@@ -2526,6 +2531,7 @@ nsDOMClassInfo::Init()
     DOM_CLASSINFO_MAP_ENTRY(nsIDOMClientInformation)
     DOM_CLASSINFO_MAP_CONDITIONAL_ENTRY(nsINavigatorBattery,
                                         battery::BatteryManager::HasSupport())
+    DOM_CLASSINFO_MAP_ENTRY(nsINavigatorHardwareKeyboardManager)
     DOM_CLASSINFO_MAP_ENTRY(nsIDOMMozNavigatorSms)
     DOM_CLASSINFO_MAP_ENTRY(nsIDOMMozNavigatorMobileMessage)
 #ifdef MOZ_MEDIA_NAVIGATOR
@@ -4145,6 +4151,11 @@ nsDOMClassInfo::Init()
 
   DOM_CLASSINFO_MAP_BEGIN(BatteryManager, nsIDOMBatteryManager)
      DOM_CLASSINFO_MAP_ENTRY(nsIDOMBatteryManager)
+     DOM_CLASSINFO_MAP_ENTRY(nsIDOMEventTarget)
+  DOM_CLASSINFO_MAP_END
+
+  DOM_CLASSINFO_MAP_BEGIN(HardwareKeyboardManager, nsIDOMHardwareKeyboardManager)
+     DOM_CLASSINFO_MAP_ENTRY(nsIDOMHardwareKeyboardManager)
      DOM_CLASSINFO_MAP_ENTRY(nsIDOMEventTarget)
   DOM_CLASSINFO_MAP_END
 

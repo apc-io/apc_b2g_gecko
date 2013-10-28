@@ -46,6 +46,7 @@ MAKEFILES_dom="
   dom/apps/src/Makefile
   dom/base/Makefile
   dom/battery/Makefile
+  dom/hardwarekeyboard/Makefile
   dom/bindings/Makefile
   dom/browser-element/Makefile
   dom/contacts/Makefile

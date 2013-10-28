@@ -112,7 +112,8 @@ struct UserInputData {
     uint64_t timeMs;
     enum {
         MOTION_DATA,
-        KEY_DATA
+        KEY_DATA,
+        HARDWARE_KEYBOARD_RESET
     } type;
     int32_t action;
     int32_t flags;
@@ -497,6 +498,9 @@ GeckoInputDispatcher::dispatchOnce()
                           data.timeMs,
                           data.key.charCode);
         break;
+    case UserInputData::HARDWARE_KEYBOARD_RESET:
+        gAppShell->NotifyHardwareKeyboardChange(data.action);
+        break;
     }
 }
 
@@ -573,6 +577,22 @@ void GeckoInputDispatcher::notifySwitch(const NotifySwitchArgs* args)
 
 void GeckoInputDispatcher::notifyDeviceReset(const NotifyDeviceResetArgs* args)
 {
+    int32_t deviceId = args->deviceId;
+    uint32_t classes = args->classes;
+    ResetAction resetAction = args->resetAction;
+
+    if (((resetAction == RESET_ACTION_ADDED) || (resetAction == RESET_ACTION_REMOVED))
+            && (classes & INPUT_DEVICE_CLASS_ALPHAKEY)) {
+        UserInputData data;
+        data.timeMs = nanosecsToMillisecs(args->eventTime);
+        data.type = UserInputData::HARDWARE_KEYBOARD_RESET;
+        data.action = resetAction;
+        {
+            MutexAutoLock lock(mQueueLock);
+            mEventQueue.push(data);
+        }
+        gAppShell->NotifyNativeEvent();
+    }
 }
 
 int32_t GeckoInputDispatcher::injectInputEvent(
@@ -615,6 +635,7 @@ nsAppShell::nsAppShell()
     : mNativeCallbackRequest(false)
     , mHandlers()
     , mEnableDraw(false)
+    , mNumHWKeyboards(0)
 {
     gAppShell = this;
 }
@@ -791,4 +812,16 @@ nsAppShell::NotifyScreenRotation()
     gAppShell->mReader->requestRefreshConfiguration(InputReaderConfiguration::CHANGE_DISPLAY_INFO);
 
     hal::NotifyScreenConfigurationChange(nsScreenGonk::GetConfiguration());
+}
+
+void
+nsAppShell::NotifyHardwareKeyboardChange(int32_t action)
+{
+    //We have filtered to get only RESET_ACTION_ADDED and RESET_ACTION_REMOVED
+    if (action == RESET_ACTION_ADDED) {
+        mNumHWKeyboards++;
+    } else {
+        mNumHWKeyboards--;
+    }
+    hal::NotifyHardwareKeyboardChange(hal::HardwareKeyboardInformation(mNumHWKeyboards));
 }

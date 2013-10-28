@@ -74,6 +74,7 @@ public:
     virtual bool ProcessNextNativeEvent(bool maywait);
 
     void NotifyNativeEvent();
+    void NotifyHardwareKeyboardChange(int32_t action);
 
     static void NotifyScreenInitialized();
     static void NotifyScreenRotation();
@@ -96,6 +97,7 @@ private:
     // and can stop the boot animation
     bool mEnableDraw;
     nsTArray<FdHandler> mHandlers;
+    uint32_t mNumHWKeyboards;
 
     android::sp<android::EventHub>               mEventHub;
     android::sp<GeckoInputReaderPolicy> mReaderPolicy;

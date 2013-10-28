@@ -13,6 +13,7 @@
 #include "nsIDOMNavigatorDesktopNotification.h"
 #include "nsIDOMClientInformation.h"
 #include "nsINavigatorBattery.h"
+#include "nsINavigatorHardwareKeyboardManager.h"
 #include "nsIDOMNavigatorSms.h"
 #include "nsIDOMNavigatorMobileMessage.h"
 #include "nsIDOMNavigatorNetwork.h"
@@ -65,6 +66,10 @@ namespace battery {
 class BatteryManager;
 } // namespace battery
 
+namespace hardwarekeyboard {
+class HardwareKeyboardManager;
+} // namespace hardwarekeyboard
+
 class SmsManager;
 class MobileMessageManager;
 
@@ -95,6 +100,7 @@ class Navigator : public nsIDOMNavigator
                 , public nsIDOMNavigatorGeolocation
                 , public nsIDOMNavigatorDesktopNotification
                 , public nsINavigatorBattery
+                , public nsINavigatorHardwareKeyboardManager
                 , public nsIDOMMozNavigatorSms
                 , public nsIDOMMozNavigatorMobileMessage
 #ifdef MOZ_MEDIA_NAVIGATOR
@@ -132,6 +138,7 @@ public:
   NS_DECL_NSIDOMNAVIGATORGEOLOCATION
   NS_DECL_NSIDOMNAVIGATORDESKTOPNOTIFICATION
   NS_DECL_NSINAVIGATORBATTERY
+  NS_DECL_NSINAVIGATORHARDWAREKEYBOARDMANAGER
   NS_DECL_NSIDOMMOZNAVIGATORSMS
   NS_DECL_NSIDOMMOZNAVIGATORMOBILEMESSAGE
 #ifdef MOZ_MEDIA_NAVIGATOR
@@ -193,6 +200,7 @@ private:
   nsRefPtr<nsGeolocation> mGeolocation;
   nsRefPtr<nsDesktopNotificationCenter> mNotification;
   nsRefPtr<battery::BatteryManager> mBatteryManager;
+  nsRefPtr<hardwarekeyboard::HardwareKeyboardManager> mHardwareKeyboardManager;
   nsRefPtr<power::PowerManager> mPowerManager;
   nsRefPtr<SmsManager> mSmsManager;
   nsRefPtr<MobileMessageManager> mMobileMessageManager;

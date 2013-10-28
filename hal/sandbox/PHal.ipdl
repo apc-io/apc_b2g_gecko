@@ -36,6 +36,9 @@ struct BatteryInformation {
   bool   charging;
   double remainingTime;
 };
+struct HardwareKeyboardInformation {
+  uint32_t numHWKeyboards;
+};
 
 struct LightConfiguration {
   LightType light;
@@ -106,6 +109,7 @@ sync protocol PHal {
     manager PContent;
 
 child:
+    NotifyHardwareKeyboardChange(HardwareKeyboardInformation aInfo);
     NotifyBatteryChange(BatteryInformation aBatteryInfo);
     NotifyNetworkChange(NetworkInformation aNetworkInfo);
     NotifyWakeLockChange(WakeLockInformation aWakeLockInfo);
@@ -122,6 +126,9 @@ parent:
     DisableBatteryNotifications();
     sync GetCurrentBatteryInformation()
       returns (BatteryInformation aBatteryInfo);
+
+    EnableHardwareKeyboardNotifications();
+    DisableHardwareKeyboardNotifications();
 
     EnableNetworkNotifications();
     DisableNetworkNotifications();
