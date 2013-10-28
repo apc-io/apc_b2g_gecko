@@ -84,7 +84,6 @@ MAKEFILES_dom="
   dom/system/Makefile
   dom/workers/Makefile
   dom/time/Makefile
-  dom/helloworld/Makefile
 "
 
 MAKEFILES_editor="

@@ -385,8 +385,6 @@
 @BINPATH@/components/nsDownloadManagerUI.js
 @BINPATH@/components/nsSidebar.manifest
 @BINPATH@/components/nsSidebar.js
-@BINPATH@/components/HelloWorld.manifest
-@BINPATH@/components/HelloWorld.js
 #ifndef MOZ_WIDGET_GONK
 @BINPATH@/components/extensions.manifest
 @BINPATH@/components/addonManager.js
