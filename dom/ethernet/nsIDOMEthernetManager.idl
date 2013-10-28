@@ -19,9 +19,11 @@ interface nsIDOMEthernetManager : nsISupports
 
   readonly attribute boolean    enabled;
   readonly attribute boolean    connected;
+  readonly attribute jsval      connection;
 
-  attribute nsIDOMEventListener onenabledchange;
-  attribute nsIDOMEventListener onconnectedchange;
+  attribute nsIDOMEventListener onenabledchanged;
+  attribute nsIDOMEventListener onconnectedchanged;
+  attribute nsIDOMEventListener connectionupdated;
   /*attribute jsval onenabledchange;
   attribute jsval onconnectedchange;*/
 };

@@ -161,7 +161,7 @@ function getEthernetStatsSuccess(params) {
 
   if (params.cableConnected) {
     params.ip = libcutils.property_get("dhcp." + params.ifname + ".ipaddress");
-    params.gw = libcutils.property_get("dhcp." + params.ifname + ".gateway");
+    params.gateway = libcutils.property_get("dhcp." + params.ifname + ".gateway");
     params.dns1 = libcutils.property_get("net.dns1");
     params.dns2 = libcutils.property_get("net.dns2");
   }
@@ -793,7 +793,7 @@ function getEthernetStats(params) {
   params.config = "";
   params.hwaddr = "";
   params.ip = "";
-  params.gw = "";
+  params.gateway = "";
   params.dns1 = "";
   params.dns2 = "";
   params.date = new Date();

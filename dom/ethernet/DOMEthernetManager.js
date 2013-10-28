@@ -76,7 +76,7 @@ DOMEthernetManager.prototype = {
 
   // nsIDOMGlobalPropertyInitializer implementation
   init: function(aWindow) {
-    Services.obs.addObserver(this, TOPIC_NETD_INTEFACE_CHANGED, false);
+    // Services.obs.addObserver(this, TOPIC_NETD_INTEFACE_CHANGED, false);
     Services.obs.addObserver(this, TOPIC_INTERFACE_STATE_CHANGED, false);
     Services.obs.addObserver(this, TOPIC_INTERFACE_REGISTERED, false);
     Services.obs.addObserver(this, TOPIC_INTERFACE_UNREGISTERED, false);
@@ -91,49 +91,34 @@ DOMEthernetManager.prototype = {
 
     // Only pages with perm set can use the wifi manager.
     // this._hasPrivileges = perm == Ci.nsIPermissionManager.ALLOW_ACTION;
+    this._hasPrivileges = true; // just allow anyone for now
 
     // Maintain this state for synchronous APIs.
     // this._connectionStatus = "disconnected";
-    this._cableConnected = false;
     this._enabled = true;
-    this._hwaddress = "";
-    this._ipaddress = "";
-    this._gw = "";
-    this._dns1 = "";
-    this._dns2 = "";
-    this._lastConnectionInfo = null;
-    this._connected = false;
-    this._onenabledchange = null;
-    this._onconnectedchange = null;
+    this._connected = true;
+    this._connection = null;
+    this._onEnabledChanged = null;
+    this._onConnectedChanged = null;
+    this._onConnectionUpdated = null;
 
     // this is the messages we used to communicate between this DOM Element and EthernetWorker (the manager backend)
     const messages = ["EthernetManager:enable", "EthernetManager:disable",
                       "EthernetManager:connect", "EthernetManager:disconnect",
-                      "EthernetManager:getStats"];
+                      "EthernetManager:getEnabled", "EthernetManager:getConnected",
+                      "EthernetManager:getConnection"];
     this.initHelper(aWindow, messages);
 
     this._mm = Cc["@mozilla.org/childprocessmessagemanager;1"].getService(Ci.nsISyncMessageSender);
 
-    this.enable();
-
-    // gNetworkManager.getEthernetStats(DEFAULT_ETHERNET_NETWORK_IFACE, this);
-
-    this._mm.sendSyncMessage("EthernetManager:getStats");
-    // if (state) {
-    //   this._currentNetwork = state.network;
-    //   if (this._currentNetwork)
-    //     exposeCurrentNetwork(this._currentNetwork);
-    //   this._lastConnectionInfo = state.connectionInfo;
-    //   this._enabled = state.enabled;
-    //   this._connectionStatus = state.status;
-    //   this._macAddress = state.macAddress;
-    // } else {
-    //   this._currentNetwork = null;
-    //   this._lastConnectionInfo = null;
-    //   this._enabled = false;
-    //   this._connectionStatus = "disconnected";
-    //   this._macAddress = "";
-    // }
+    this._enabled = this._mm.sendSyncMessage("EthernetManager:getEnabled");
+    debug("---- so, got the getEnabled: " + this._enabled);
+    for (let k in this._enabled) {
+      debug("----- enabled." + k + ": " + this._enabled[k]);
+    }
+    if (this._enabled) {
+      // this._connection = this._mm.sendSyncMessage("EthernetManager:getConnection");
+    }
   },
 
   uninit: function() {
@@ -142,7 +127,7 @@ DOMEthernetManager.prototype = {
 
   observe: function observe(subject, topic, data) {
     let interfaceName = "[No Interface]";
-    if (subject) {
+    if (subject && subject.name) {
       interfaceName = subject.name;
     }
     debug("We got the message from " + subject + "(" + interfaceName + ") with topic " + topic + " and the data " + data);
@@ -161,59 +146,6 @@ DOMEthernetManager.prototype = {
     let msg = aMessage.json;
     if (msg.mid && msg.mid != this._id)
       return;
-  },
-
-  /**
-   * function must be called whenever one of:
-   *  - enabled
-   *  - cableConnected
-   *  - ipaddress
-   * changed
-   */
-  // _checkConnection: function() {
-  //   let ret = this._enabled && this._cableConnected && this._ipaddress != "";
-  //   if (this._connected != ret) {
-  //     this._connected = ret;
-  //     if (this._onconnectedchange) {
-  //       // trigger event
-  //       this._onconnectedchange();
-  //     }
-  //   }
-
-  //   if (this._connected) {
-  //     EthernetNetworkInterface.state = EthernetNetworkInterface.NETWORK_STATE_CONNECTED;
-  //   } else {
-  //     EthernetNetworkInterface.state = EthernetNetworkInterface.NETWORK_STATE_DISCONNECTED;
-  //   }
-
-  //   gNetworkManager.overrideActive(EthernetNetworkInterface);
-  // },
-
-  ethernetStatsAvailable: function nsIEthernetStatsCallback_ethernetStatsAvailable(
-    result, connected, details, date
-    ) {
-    // TODO: we also need to get current ip address to determined if the network is connected
-    // debug("The request result is: " + result);
-    // debug("The connected state is: " + connected);
-    // debug("time of request is: " + date);
-    if (result) {
-      this._cableConnected = connected;
-      // debug("We got the ipaddress: " + details.ip);
-      // for (let k in details) {
-      //   debug("______ details." + k + ": " + details[k]);
-      // }
-      this._hwaddress = details.hwaddress;
-      this._ipaddress = details.ip.trim();
-      this._gw = details.gw;
-      this._dns1 = details.dns1;
-      this._dns2 = details.dns2;
-      this._checkConnection();
-      EthernetNetworkInterface.ip = details.ip.trim();
-      EthernetNetworkInterface.broadcast = "";
-      EthernetNetworkInterface.netmask = "";
-      EthernetNetworkInterface.dns1 = details.dns1;
-      EthernetNetworkInterface.dns2 = details.dns2;
-    }
   },
 
   // _fireStatusChangeEvent: function StatusChangeEvent() {
@@ -247,11 +179,6 @@ DOMEthernetManager.prototype = {
 
   enable: function nsIDOMEthernetManager_enable() {
     debug("enable");
-    // if (!EthernetNetworkInterface.registered) {
-    //   EthernetNetworkInterface.name = DEFAULT_ETHERNET_NETWORK_IFACE;
-    //   gNetworkManager.registerNetworkInterface(EthernetNetworkInterface);
-    //   EthernetNetworkInterface.registered = false;
-    // }
     var request = this.createRequest();
     this._sendMessageForRequest("EthernetManager:enable", null, request);
     return request;
@@ -284,6 +211,8 @@ DOMEthernetManager.prototype = {
   // connected: true
   get enabled() {
     debug("get enabled");
+    if (!this._hasPrivileges)
+      throw new Components.Exception("Denied", Cr.NS_ERROR_FAILURE);
     return this._enabled;
     // if (!this._hasPrivileges)
     //   throw new Components.Exception("Denied", Cr.NS_ERROR_FAILURE);
@@ -292,8 +221,17 @@ DOMEthernetManager.prototype = {
 
   get connected() {
     debug("get connected");
+    if (!this._hasPrivileges)
+      throw new Components.Exception("Denied", Cr.NS_ERROR_FAILURE);
     // TODO: better method for validating ip address
     return this._connected;
+  },
+
+  get connection() {
+    debug("Get connection");
+    if (!this._hasPrivileges)
+      throw new Components.Exception("Denied", Cr.NS_ERROR_FAILURE);
+    return this._connection;
   },
 
   // get macAddress() {
@@ -340,12 +278,25 @@ DOMEthernetManager.prototype = {
   //     throw new Components.Exception("Denied", Cr.NS_ERROR_FAILURE);
   //   this._onDisabled = callback;
   // }
-  set onenabledchange(callback) {
-    debug("Well, setting  the callback for onenabledchange: " + callback);
+  set onenabledchanged(callback) {
+    if (!this._hasPrivileges)
+      throw new Components.Exception("Denied", Cr.NS_ERROR_FAILURE);
+    debug("Well, setting  the callback for onenabledchanged: " + callback);
+    this._onEnabledChanged = callback;
   },
 
-  set onconnectedchange(callback) {
-    debug("Well, setting the callback for onconnectedchange: " + callback);
+  set onconnectedchanged(callback) {
+    if (!this._hasPrivileges)
+      throw new Components.Exception("Denied", Cr.NS_ERROR_FAILURE);
+    debug("Well, setting the callback for onconnectedchanged: " + callback);
+    this._onConnectedChanged = callback;
+  },
+
+  set onconnectionupdated(callback) {
+    if (!this._hasPrivileges)
+      throw new Components.Exception("Denied", Cr.NS_ERROR_FAILURE);
+    debug("Well, settings the callback for onconnectionupdated: " + callback);
+    this._onConnectionUpdated = callback;
   }
 };
 

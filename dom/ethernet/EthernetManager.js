@@ -86,20 +86,25 @@ this.EthernetManager = {
 
     // setup interfaces
     this._onInterfaceAdded = function(iface) {
+      if (iface) {
+        gNetworkManager.registerNetworkInterface(iface);
+      }
+
+      if (this.settingEnabled && !iface.up) {
+        debug("The interface is down, make it up then: " + iface.name);
+        iface.needRenew = true;
+        this.enableInterface(iface.name);
+      }
+
       if (iface.name == DEFAULT_ETHERNET_NETWORK_IFACE) {
         this.currentIfname = iface.name; // just always set this for now
         // check to enable
-        if (this.settingEnabled && !iface.up) {
-          debug("The interface is down, make it up then: " + iface.name);
-          iface.needRenew = true;
-          this.enableInterface(iface.name);
-        }
-
-        return true;
+        gNetworkManager.overrideActive(iface);
       }
 
-      return false;
+      return true;
     }
+
     this.initInterface(DEFAULT_ETHERNET_NETWORK_IFACE);
 
     // setup observer
@@ -108,6 +113,11 @@ this.EthernetManager = {
 
   shutdown: function EthernetManager_shutdown() {
     debug("shutdown");
+    for (ifname in this.networkInterfaces) {
+      let iface = this.networkInterfaces[ifname];
+      gNetworkManager.unregisterNetworkInterface(iface);
+      delete this.networkInterfaces[ifname];
+    }
     // how to stop controlWorker?
   },
 
@@ -363,11 +373,11 @@ this.EthernetManager = {
 
     updateProperty("up", "up");
     updateProperty("cableConnected", "cableConnected");
-    updateProperty("connected", "connected");
+    updateProperty("state", "state");
     updateProperty("hwaddress", "hwaddress");
     updateProperty("ip", "ipaddress", "ipaddr_str");
-    updateProperty("gw", "gw", "gateway_str");
-    updateProperty("mask", "mask", "mask_str");
+    updateProperty("gateway", "gateway", "gateway_str");
+    updateProperty("netmask", "netmask", "mask_str");
     updateProperty("broadcast", "broadcast", "broadcast_str");
     updateProperty("dns1", "dns1", "dns1_str");
     updateProperty("dns2", "dns2", "dns2_str");
@@ -377,19 +387,27 @@ this.EthernetManager = {
 
   createInterface: function EthernetManager_createInterface(ifname, data) {
     let iface = {
+      QueryInterface: XPCOMUtils.generateQI([Ci.nsINetworkInterface]),
+      type: Ci.nsINetworkInterface.NETWORK_TYPE_ETHERNET,
       name: ifname,
       up: (data && data.up != null) ? data.up : false,
       cableConnected: data ? data.cableConnected : false,
-      connected: data ? data.connected : false, // the state managed by this Manager
+      state: data ? data.state : Ci.nsINetworkInterface.NETWORK_STATE_UNKNOWN,
+      // connected: data ? data.connected : false, // the state managed by this Manager // let's change this to state
+      //   // For now we do our own DHCP. In the future this should be handed off
+      //   // to the Network Manager. this is copied from WifiManager.
+      dhcp: false,
       hwaddress: data ? data.hwaddress : null,
       ip: data ? data.ipaddress : null,
-      gw: data ? data.gw : null,
-      mask: data ? data.mask : null,
+      gateway: data ? data.gateway : null,
+      netmask: data ? data.netmask : null,
       broadcast: data ? data.broadcast : null,
       dns1: data ? data.dns1 : null,
       dns2: data ? data.dns2 : null,
+      httpProxyHost: null,
+      httpProxyPort: null,
       // other property,
-      useDhcp: true,
+      useDhcp: true, // don't misunderstand this with nsINetworkInterface.dhcp
       needRenew: false // if the inteface is just up => need a special treat
     };
 
@@ -441,7 +459,9 @@ this.EthernetManager = {
   	if (details.hwaddress == kInvalidHWAddr) {
   	  debug("Well, the device " + details.ifname + " is not available");
   	}
-    details.connected = (details.up == true && details.cableConnected == true && details.ipaddress);
+    details.state = (details.up == true && details.cableConnected == true && details.ipaddress)
+                        ? Ci.nsINetworkInterface.NETWORK_STATE_UP
+                        : Ci.nsINetworkInterface.NETWORK_STATE_DOWN;
     // TODO: integrate this with nsINetworkInterface so that we can register this with the NetworkManager
   	var iface = this.createInterface(details.ifname, details);
 
@@ -482,7 +502,9 @@ this.NetUtilsCallbacks = {
     dumpObj(result);
     if (Utils.validateStatus(result)) {
       debug("NetUtilsCallbacks_onDhcpConnected: good, we got the connection of " + result.ifname);
-      result.connected = result.ipaddr_str != "";
+      result.state = result.ipaddr_str != ""
+                     ? Ci.nsINetworkInterface.NETWORK_STATE_UP
+                     : Ci.nsINetworkInterface.NETWORK_STATE_DOWN;
       EthernetManager.updateInterface(result.ifname, result);
     } else {
       debug("NetUtilsCallbacks_onDhcpConnected: bad, unable to start dhcp on: " + result.ifname);
@@ -494,7 +516,7 @@ this.NetUtilsCallbacks = {
     if (Utils.validateStatus(result)) {
       debug("NetUtilsCallbacks_onDhcpDisconnected: good, got disconnect for: " + result.ifname);
       let iface = EthernetManager.getInterface(result.ifname);
-      iface.connected = false;
+      iface.state = Ci.nsINetworkInterface.NETWORK_STATE_DOWN;
       dumpObj(iface);
     } else {
       debug("NetUtilsCallbacks_onDhcpDisconnected: bad, unable to stop dhcp for " + result.ifname);

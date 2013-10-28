@@ -23,8 +23,11 @@ var EthernetWorker = (function() {
   // setting up message listeners
   this._mm = Cc["@mozilla.org/parentprocessmessagemanager;1"]
              .getService(Ci.nsIMessageListenerManager);
-  const messages = ["EthernetManager:getStats", 
-                    "child-process-shutdown"];
+  const messages = ["EthernetManager:enable", "EthernetManager:disable",
+                    "EthernetManager:connect", "EthernetManager:disconnect",
+                    "EthernetManager:getEnabled", "EthernetManager:getConnected",
+                    "EthernetManager:getConnection"];
+                    // "child-process-shutdown"];
 
   messages.forEach((function(msgName) {
     this._mm.addMessageListener(msgName, this);
@@ -52,12 +55,20 @@ EthernetWorker.prototype = {
     for (let k in aMessage) {
       debug(",,,,,,,, aMessage." + k + ": " + aMessage[k]);
     }
+    switch (aMessage.name) {
+      case "EthernetManager:getEnabled":
+        return this.getEnabled();
+    }
   },
 
   shutdown: function nsIEthernet_shutdown() {
     debug("This is the nsIEthernet_shutdown function");
     EthernetManager.shutdown();
   },
+
+  getEnabled: function() {
+    return true;
+  }
 };
 
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory([EthernetWorker]);
