@@ -2063,7 +2063,7 @@ void KeyboardInputMapper::process(const RawEvent* rawEvent) {
                 keyCode = AKEYCODE_UNKNOWN;
                 flags = 0;
             }
-            processKey(rawEvent->when, rawEvent->value != 0, keyCode, scanCode, flags);
+            processKey(rawEvent->when, rawEvent->value != 0, keyCode, scanCode, flags, rawEvent->deviceId);
         }
         break;
     }
@@ -2089,7 +2089,7 @@ bool KeyboardInputMapper::isKeyboardOrGamepadKey(int32_t scanCode) {
 }
 
 void KeyboardInputMapper::processKey(nsecs_t when, bool down, int32_t keyCode,
-        int32_t scanCode, uint32_t policyFlags) {
+        int32_t scanCode, uint32_t policyFlags, uint32_t deviceId) {
 
     if (down) {
         // Rotate key codes according to orientation if needed.
@@ -2162,9 +2162,12 @@ void KeyboardInputMapper::processKey(nsecs_t when, bool down, int32_t keyCode,
         getContext()->fadePointer();
     }
 
+    char16_t charCode;
+    // now we'll get char code here
+    charCode = getEventHub()->getCharCode(deviceId, keyCode, newMetaState);
     NotifyKeyArgs args(when, getDeviceId(), mSource, policyFlags,
             down ? AKEY_EVENT_ACTION_DOWN : AKEY_EVENT_ACTION_UP,
-            AKEY_EVENT_FLAG_FROM_SYSTEM, keyCode, scanCode, newMetaState, downTime);
+            AKEY_EVENT_FLAG_FROM_SYSTEM, keyCode, scanCode, newMetaState, downTime, charCode);
     getListener()->notifyKey(&args);
 }
 

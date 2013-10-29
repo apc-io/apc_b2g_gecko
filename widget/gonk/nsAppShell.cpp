@@ -134,6 +134,7 @@ struct UserInputData {
         struct {
             int32_t keyCode;
             int32_t scanCode;
+            char16_t charCode;
         } key;
         struct {
             int32_t touchCount;
@@ -217,12 +218,14 @@ sendTouchEvent(UserInputData& data, bool* captured)
 
 static nsEventStatus
 sendKeyEventWithMsg(uint32_t keyCode,
+                    char16_t charCode,
                     KeyNameIndex keyNameIndex,
                     uint32_t msg,
                     uint64_t timeMs)
 {
     WidgetKeyboardEvent event(true, msg, nullptr);
     event.keyCode = keyCode;
+    event.charCode = charCode;
     event.mKeyNameIndex = keyNameIndex;
     event.location = nsIDOMKeyEvent::DOM_KEY_LOCATION_MOBILE;
     event.time = timeMs;
@@ -230,26 +233,26 @@ sendKeyEventWithMsg(uint32_t keyCode,
 }
 
 static void
-sendKeyEvent(uint32_t keyCode, KeyNameIndex keyNameIndex, bool down,
-             uint64_t timeMs)
+sendKeyEvent(uint32_t keyCode, char16_t charCode, KeyNameIndex keyNameIndex,
+             bool down, uint64_t timeMs)
 {
     EventFlags extraFlags;
     nsEventStatus status =
-        sendKeyEventWithMsg(keyCode, keyNameIndex,
+        sendKeyEventWithMsg(keyCode, charCode, keyNameIndex,
                             down ? NS_KEY_DOWN : NS_KEY_UP, timeMs);
     if (down && status != nsEventStatus_eConsumeNoDefault) {
-        sendKeyEventWithMsg(keyCode, keyNameIndex, NS_KEY_PRESS, timeMs);
+        sendKeyEventWithMsg(keyCode, charCode, keyNameIndex, NS_KEY_PRESS, timeMs);
     }
 }
 
 static void
-maybeSendKeyEvent(int keyCode, bool pressed, uint64_t timeMs)
+maybeSendKeyEvent(int keyCode, char16_t charCode, bool pressed, uint64_t timeMs)
 {
     uint32_t DOMKeyCode =
         (keyCode < ArrayLength(kKeyMapping)) ? kKeyMapping[keyCode] : 0;
     KeyNameIndex DOMKeyNameIndex = GetKeyNameIndex(keyCode);
     if (DOMKeyCode || DOMKeyNameIndex != KEY_NAME_INDEX_Unidentified) {
-        sendKeyEvent(DOMKeyCode, DOMKeyNameIndex, pressed, timeMs);
+        sendKeyEvent(DOMKeyCode, charCode, DOMKeyNameIndex, pressed, timeMs);
     } else {
         VERBOSE_LOG("Got unknown key event code. type 0x%04x code 0x%04x value %d",
                     keyCode, pressed);
@@ -552,6 +555,7 @@ GeckoInputDispatcher::dispatchOnce()
     }
     case UserInputData::KEY_DATA:
         maybeSendKeyEvent(data.key.keyCode,
+                          data.key.charCode,
                           data.action == AKEY_EVENT_ACTION_DOWN,
                           data.timeMs);
         break;
@@ -581,6 +585,7 @@ GeckoInputDispatcher::notifyKey(const NotifyKeyArgs* args)
     data.metaState = args->metaState;
     data.key.keyCode = args->keyCode;
     data.key.scanCode = args->scanCode;
+    data.key.charCode = args->charCode;
     {
         MutexAutoLock lock(mQueueLock);
         mEventQueue.push(data);
