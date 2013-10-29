@@ -743,7 +743,7 @@ pref("network.activity.blipIntervalMilliseconds", 250);
 // In some environments, such as the emulator or hardware with other network
 // connectivity, this is not desireable, however, in which case this pref
 // can be flipped to false.
-pref("network.gonk.manage-offline-status", true);
+pref("network.gonk.manage-offline-status", false);
 
 pref("jsloader.reuseGlobal", true);
 
