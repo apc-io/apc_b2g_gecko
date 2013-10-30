@@ -306,6 +306,7 @@ var shell = {
     window.addEventListener('mozfullscreenchange', this);
     window.addEventListener('MozAfterPaint', this);
     window.addEventListener('sizemodechange', this);
+    window.addEventListener('mousemove', this, true);
     this.contentBrowser.addEventListener('mozbrowserloadstart', this, true);
 
     CustomEventManager.init();
@@ -329,6 +330,7 @@ var shell = {
   },
 
   stop: function shell_stop() {
+    window.removeEventListener('mousemove', this, true);
     window.removeEventListener('keydown', this, true);
     window.removeEventListener('keypress', this, true);
     window.removeEventListener('keyup', this, true);
@@ -524,6 +526,14 @@ var shell = {
         this.sendChromeEvent({
           type: 'system-first-paint'
         });
+        break;
+      case 'mousemove':
+        var cursor = document.getElementById("cursor");
+        if (cursor.style.display == "none") {
+          cursor.style.display = "block";
+        }
+        cursor.style.left = (evt.screenX + 3) + "px";
+        cursor.style.top = (evt.screenY + 3) + "px";
         break;
     }
   },

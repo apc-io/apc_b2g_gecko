@@ -607,18 +607,18 @@ GeckoInputDispatcher::dispatchOnce()
 
     switch (data.type) {
     case UserInputData::MOTION_DATA: {
+        int32_t motionAction = data.action & AMOTION_EVENT_ACTION_MASK;
         nsEventStatus status = nsEventStatus_eIgnore;
-        if ((data.action & AMOTION_EVENT_ACTION_MASK) !=
-            AMOTION_EVENT_ACTION_HOVER_MOVE) {
+        if (motionAction != AMOTION_EVENT_ACTION_HOVER_MOVE) {
             bool captured;
             status = sendTouchEvent(data, &captured);
-            if (captured) {
+            if (captured && (motionAction != AMOTION_EVENT_ACTION_MOVE)) {
                 return;
             }
         }
 
         uint32_t msg;
-        switch (data.action & AMOTION_EVENT_ACTION_MASK) {
+        switch (motionAction) {
         case AMOTION_EVENT_ACTION_DOWN:
             msg = NS_MOUSE_BUTTON_DOWN;
             break;
