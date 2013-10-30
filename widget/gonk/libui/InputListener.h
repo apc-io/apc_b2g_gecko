@@ -132,15 +132,30 @@ struct NotifySwitchArgs : public NotifyArgs {
 };
 
 
+/*
+ * Detail reset reason.
+ *
+ */
+enum ResetAction {
+    RESET_ACTION_UNKNOWN = 0,
+    RESET_ACTION_ADDED = 1,
+    RESET_ACTION_REMOVED = 2,
+    RESET_ACTION_RECONFIGURED = 3,
+};
+
 /* Describes a device reset event, such as when a device is added,
  * reconfigured, or removed. */
 struct NotifyDeviceResetArgs : public NotifyArgs {
     nsecs_t eventTime;
     int32_t deviceId;
+    uint32_t classes;
+    ResetAction resetAction;
 
     inline NotifyDeviceResetArgs() { }
 
     NotifyDeviceResetArgs(nsecs_t eventTime, int32_t deviceId);
+
+    NotifyDeviceResetArgs(nsecs_t eventTime, int32_t deviceId, uint32_t classes, ResetAction resetAction);
 
     NotifyDeviceResetArgs(const NotifyDeviceResetArgs& other);
 
