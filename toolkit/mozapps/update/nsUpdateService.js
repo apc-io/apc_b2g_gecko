@@ -113,6 +113,9 @@ const FILE_LAST_LOG       = "last-update.log";
 const FILE_BACKUP_LOG     = "backup-update.log";
 const FILE_UPDATE_LOCALE  = "update.locale";
 
+const DIR_FOTA_UPDATES    = "/data/local/tmp/";
+const FILE_FOTA_UPDATES_ARCHIVE = "update.zip";
+
 const STATE_NONE            = "null";
 const STATE_DOWNLOADING     = "downloading";
 const STATE_PENDING         = "pending";
@@ -315,6 +318,12 @@ XPCOMUtils.defineLazyGetter(this, "gABI", function aus_gABI() {
 XPCOMUtils.defineLazyGetter(this, "gProductModel", function aus_gProductModel() {
   Cu.import("resource://gre/modules/systemlibs.js");
   return libcutils.property_get("ro.product.model");
+});
+
+// this is used for APC 8950 only, since Via uses buildTags for system version
+XPCOMUtils.defineLazyGetter(this, "gBuildTags", function aus_gBuildTags() {
+  Cu.import("resource://gre/modules/systemlibs.js");
+  return libcutils.property_get("ro.build.tags");
 });
 #endif
 
@@ -2641,6 +2650,17 @@ UpdateService.prototype = {
     var lastPingCode = PING_BGUC_NO_COMPAT_UPDATE_FOUND;
 
     updates.forEach(function(aUpdate) {
+      if (aUpdate.isOSUpdate) {
+        // this comparison is used for VIA APC 8950 only
+        if (vc.compare(aUpdate.displayVersion, gBuildTags) < 0 ||
+            vc.compare(aUpdate.displayVersion, gBuildTags) == 0) {
+          return;
+        } else {
+          // this is for the appVersion comparing, since appVersion is usless with system update, we'll fake it here.
+          aUpdate.appVersion = Services.appinfo.version;
+          majorUpdate = aUpdate;
+        }
+      }
       // Ignore updates for older versions of the application and updates for
       // the same version of the application with the same build ID.
       if (vc.compare(aUpdate.appVersion, Services.appinfo.version) < 0 ||
@@ -4498,18 +4518,23 @@ Downloader.prototype = {
         LOG("Downloader:onStopRequest - attempting to stage update: " +
             this._update.name);
 
-        // Initiate the update in the background
-        try {
-          Cc["@mozilla.org/updates/update-processor;1"].
-            createInstance(Ci.nsIUpdateProcessor).
-            processUpdate(this._update);
-        } catch (e) {
-          // Fail gracefully in case the application does not support the update
-          // processor service.
-          LOG("Downloader:onStopRequest - failed to stage update. Exception: " +
-              e);
-          if (this.background) {
-            shouldShowPrompt = true;
+        if (this._update.isOSUpdate) {
+          this.prepareFOTAUpdate(this._update);
+          this.doFOTAUpdate(this._update);
+        } else {
+          // Initiate the update in the background
+          try {
+            Cc["@mozilla.org/updates/update-processor;1"].
+              createInstance(Ci.nsIUpdateProcessor).
+              processUpdate(this._update);
+          } catch (e) {
+            // Fail gracefully in case the application does not support the update
+            // processor service.
+            LOG("Downloader:onStopRequest - failed to stage update. Exception: " +
+                e);
+            if (this.background) {
+              shouldShowPrompt = true;
+            }
           }
         }
       }
@@ -4542,6 +4567,26 @@ Downloader.prototype = {
     } else {
       // Prevent leaking the update object (bug 454964)
       this._update = null;
+    }
+  },
+
+  prepareFOTAUpdate: function AUS_prepareFOTAUpdate(update) {
+    var updateDir = getUpdatesDir();
+    var patchFile = getFileFromUpdateLink(updateDir);
+    var destDir = new FileUtils.File(DIR_FOTA_UPDATES);
+    patchFile.moveTo(destDir, FILE_FOTA_UPDATES_ARCHIVE);
+  },
+
+  doFOTAUpdate: function AUS_doFOTAUpdate(update) {
+    var fotaArchive = new FileUtils.File(DIR_FOTA_UPDATES + FILE_FOTA_UPDATES_ARCHIVE);
+
+    if (fotaArchive.exists()) {
+      var mozUpdateDir = getUpdatesDir();
+      writeStatusFile(mozUpdateDir, STATE_APPLIED);
+
+      var recoveryService = Cc["@mozilla.org/recovery-service;1"].
+                            getService(Ci.nsIRecoveryService);
+      recoveryService.installFotaUpdate(fotaArchive.path);
     }
   },
 
