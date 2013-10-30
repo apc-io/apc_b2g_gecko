@@ -28,6 +28,7 @@
 #include "nsScreenManagerGonk.h"
 #include "nsIdleServiceGonk.h"
 #include "nsTransferable.h"
+#include "nsMouseController.h"
 
 #include "nsHTMLFormatConverter.h"
 #include "nsXULAppAPI.h"
@@ -52,6 +53,7 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(PuppetScreenManager)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsHTMLFormatConverter)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIdleServiceGonk, nsIdleServiceGonk::GetInstance)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsTransferable)
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsMouseController)
 
 NS_DEFINE_NAMED_CID(NS_APPSHELL_CID);
 NS_DEFINE_NAMED_CID(NS_WINDOW_CID);
@@ -61,6 +63,7 @@ NS_DEFINE_NAMED_CID(NS_HTMLFORMATCONVERTER_CID);
 NS_DEFINE_NAMED_CID(NS_IDLE_SERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_TRANSFERABLE_CID);
 NS_DEFINE_NAMED_CID(NS_GFXINFO_CID);
+NS_DEFINE_NAMED_CID(NS_MOUSECONTROLLER_CID);
 
 static nsresult
 ScreenManagerConstructor(nsISupports *aOuter, REFNSIID aIID, void **aResult)
@@ -79,6 +82,7 @@ static const mozilla::Module::CIDEntry kWidgetCIDs[] = {
     { &kNS_IDLE_SERVICE_CID, false, nullptr, nsIdleServiceGonkConstructor },
     { &kNS_TRANSFERABLE_CID, false, nullptr, nsTransferableConstructor },
     { &kNS_GFXINFO_CID, false, nullptr, mozilla::widget::GfxInfoConstructor },
+    { &kNS_MOUSECONTROLLER_CID, false, nullptr, nsMouseControllerConstructor },
     { nullptr }
 };
 
@@ -91,6 +95,7 @@ static const mozilla::Module::ContractIDEntry kWidgetContracts[] = {
     { "@mozilla.org/widget/idleservice;1", &kNS_IDLE_SERVICE_CID },
     { "@mozilla.org/widget/transferable;1", &kNS_TRANSFERABLE_CID },
     { "@mozilla.org/gfx/info;1", &kNS_GFXINFO_CID },
+    { "@mozilla.org/hw/mousecontroller;1", &kNS_MOUSECONTROLLER_CID },
     { nullptr }
 };
 
