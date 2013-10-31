@@ -28,6 +28,9 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "cutils/properties.h"
+#include <stdio.h>
+
 #include "base/basictypes.h"
 #include "nscore.h"
 #include "MediaResourceManagerService.h"
@@ -823,5 +826,14 @@ nsAppShell::NotifyHardwareKeyboardChange(int32_t action)
     } else {
         mNumHWKeyboards--;
     }
+    
+    nsCOMPtr<nsIObserverService> os = GetObserverService();
+    char buffer [2];
+    sprintf (buffer, "%d", mNumHWKeyboards);
+    property_set("hardware.keyboard.count", buffer);
+    if (os) {
+        os->NotifyObservers(NULL, "hardware-keyboard-change", NULL);
+    }
+    
     hal::NotifyHardwareKeyboardChange(hal::HardwareKeyboardInformation(mNumHWKeyboards));
 }

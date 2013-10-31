@@ -56,15 +56,21 @@ MozKeyboard.prototype = {
                      .getInterface(Ci.nsIDOMWindowUtils);
     this.innerWindowID = this._utils.currentInnerWindowID;
     this._focusHandler = null;
+    
+    Cu.import("resource://gre/modules/systemlibs.js");
+    this._onhardwarekeyboard = null;
+    Services.obs.addObserver(this, 'hardware-keyboard-change', false);
   },
 
   uninit: function mozKeyboardUninit() {
     Services.obs.removeObserver(this, "inner-window-destroyed");
+    Services.obs.removeObserver(this, "hardware-keyboard-change");
     cpmm.removeMessageListener('Keyboard:FocusChange', this);
 
     this._window = null;
     this._utils = null;
     this._focusHandler = null;
+    this._onhardwarekeyboard = null;
   },
 
   sendKey: function mozKeyboardSendKey(keyCode, charCode) {
@@ -113,6 +119,21 @@ MozKeyboard.prototype = {
   get onfocuschange() {
     return this._focusHandler;
   },
+  
+  get hardwarekeyboard() {
+    if (parseInt(libcutils.property_get("hardware.keyboard.count"), 10) > 0) {
+      return true;
+    } else {
+      return false;
+    }
+  },
+  
+  set onhardwarekeyboard(val) {
+    this._onhardwarekeyboard = val;
+  },
+  get onhardwarekeyboard() {
+    return this._onhardwarekeyboard;
+  },
 
   replaceSurroundingText: function mozKeyboardReplaceSurroundingText(
     text, beforeLength, afterLength) {
@@ -138,6 +159,15 @@ MozKeyboard.prototype = {
   },
 
   observe: function mozKeyboardObserve(subject, topic, data) {
+    if (topic == 'hardware-keyboard-change') {
+      let handler = this._onhardwarekeyboard;
+      if (handler && (handler instanceof Ci.nsIDOMEventListener)) {
+        let evt = new this._window.CustomEvent("hardwarekeyboard", ObjectWrapper.wrap({}, this._window));
+        handler.handleEvent(evt);
+      }
+      return;
+    };
+    
     let wId = subject.QueryInterface(Ci.nsISupportsPRUint64).data;
     if (wId == this.innerWindowID)
       this.uninit();

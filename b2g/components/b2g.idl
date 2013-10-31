@@ -40,6 +40,10 @@ interface nsIB2GKeyboard : nsISupports
   void removeFocus();
 
   attribute nsIDOMEventListener onfocuschange;
+  
+  attribute boolean hardwarekeyboard;
+  
+  attribute nsIDOMEventListener onhardwarekeyboard;
 
   /*
    * Replace text around the beginning of the current selection range of the
