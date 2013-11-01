@@ -140,6 +140,7 @@ LOCAL_INCLUDES += [
     '../battery',
     '../bluetooth',
     '../events',
+    '../hardwarekeyboard',
     '../media',
     '../network/src',
     '../src/geolocation',

@@ -54,6 +54,7 @@ LOCAL_INCLUDES += [
     '/dom/camera',
     '/dom/events',
     '/dom/file',
+    '/dom/hardwarekeyboard',
     '/dom/indexedDB',
     '/dom/src/geolocation',
     '/dom/workers',
