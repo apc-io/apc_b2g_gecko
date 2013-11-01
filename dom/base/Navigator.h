@@ -55,6 +55,10 @@ namespace battery {
 class BatteryManager;
 } // namespace battery
 
+namespace hardwarekeyboard {
+class HardwareKeyboardManager;
+} // namespace hardwarekeyboard
+
 #ifdef MOZ_B2G_FM
 class FMRadio;
 #endif
@@ -156,6 +160,7 @@ public:
   // The XPCOM GetDoNotTrack is ok
   Geolocation* GetGeolocation(ErrorResult& aRv);
   battery::BatteryManager* GetBattery(ErrorResult& aRv);
+  hardwarekeyboard::HardwareKeyboardManager* GetHardwareKeyboardManager(ErrorResult& aRv);
   already_AddRefed<Promise> GetDataStores(const nsAString &aName,
                                           ErrorResult& aRv);
   bool Vibrate(uint32_t aDuration);
@@ -324,6 +329,7 @@ private:
   nsRefPtr<Geolocation> mGeolocation;
   nsRefPtr<DesktopNotificationCenter> mNotification;
   nsRefPtr<battery::BatteryManager> mBatteryManager;
+  nsRefPtr<hardwarekeyboard::HardwareKeyboardManager> mHardwareKeyboardManager;
 #ifdef MOZ_B2G_FM
   nsRefPtr<FMRadio> mFMRadio;
 #endif

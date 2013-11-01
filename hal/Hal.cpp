@@ -289,6 +289,44 @@ protected:
 
 static BatteryObserversManager sBatteryObservers;
 
+class HardwareKeyboardObserversManager : public ObserversManager<HardwareKeyboardList>
+{
+public:
+  HardwareKeyboardList GetCurrentInformation() {
+    return mHWKeyboardList;
+  }
+
+  void UpdateHWKeyboardList(const HardwareKeyboardInformation& aInfo) {
+    if (aInfo.isConnected() && !mHWKeyboardList.hwKeyboards().Contains(aInfo)) {
+      mHWKeyboardList.hwKeyboards().AppendElement(aInfo);
+    } else {
+      HardwareKeyboardInformation keyboard = aInfo;
+      keyboard.isConnected() = true;
+      if (mHWKeyboardList.hwKeyboards().Contains(keyboard)) {
+        mHWKeyboardList.hwKeyboards().RemoveElement(keyboard);
+      }
+    }
+  }
+
+  void BroadcastStatus() {
+      this->BroadcastInformation(mHWKeyboardList);
+  }
+
+protected:
+  void EnableNotifications() {
+    PROXY_IF_SANDBOXED(EnableHardwareKeyboardNotifications());
+  }
+
+  void DisableNotifications() {
+    PROXY_IF_SANDBOXED(DisableHardwareKeyboardNotifications());
+  }
+
+private:
+  HardwareKeyboardList mHWKeyboardList;
+};
+
+static HardwareKeyboardObserversManager sHWKeyboardObservers;
+
 class NetworkObserversManager : public CachingObserversManager<NetworkInformation>
 {
 protected:
@@ -366,6 +404,35 @@ NotifyBatteryChange(const BatteryInformation& aInfo)
   AssertMainThread();
   sBatteryObservers.CacheInformation(aInfo);
   sBatteryObservers.BroadcastCachedInformation();
+}
+
+void
+RegisterHardwareKeyboardObserver(HardwareKeyboardObserver* aObserver)
+{
+  AssertMainThread();
+  sHWKeyboardObservers.AddObserver(aObserver);
+}
+
+void
+UnregisterHardwareKeyboardObserver(HardwareKeyboardObserver* aObserver)
+{
+  AssertMainThread();
+  sHWKeyboardObservers.RemoveObserver(aObserver);
+}
+
+void
+GetCurrentHardwareKeyboardList(hal::HardwareKeyboardList* aHWKeyboardList)
+{
+  AssertMainThread();
+  *aHWKeyboardList = sHWKeyboardObservers.GetCurrentInformation();
+}
+
+void
+NotifyHardwareKeyboardChange(const hal::HardwareKeyboardInformation& aHWKeyboardInfo)
+{
+  AssertMainThread();
+  sHWKeyboardObservers.UpdateHWKeyboardList(aHWKeyboardInfo);
+  sHWKeyboardObservers.BroadcastStatus();
 }
 
 bool GetScreenEnabled()
