@@ -15,6 +15,7 @@
 #include "nsTArray.h"
 #include "prlog.h"
 #include "mozilla/dom/battery/Types.h"
+#include "mozilla/dom/hardwarekeyboard/Types.h"
 #include "mozilla/dom/network/Types.h"
 #include "mozilla/dom/power/Types.h"
 #include "mozilla/hal_sandbox/PHal.h"
@@ -113,6 +114,28 @@ void GetCurrentBatteryInformation(hal::BatteryInformation* aBatteryInfo);
  * @param aBatteryInfo The new battery information.
  */
 void NotifyBatteryChange(const hal::BatteryInformation& aBatteryInfo);
+
+/**
+ * Inform the hardware keyboard backend there is a new hardware keyboard observer.
+ * @param aHWKeyboardObserver The observer that should be added.
+ */
+void RegisterHardwareKeyboardObserver(HardwareKeyboardObserver* aHWKeyboardObserver);
+
+/**
+ * Inform the hardware keyboard backend a hardware keyboard observer unregistered.
+ * @param aHWKeyboardObserver The observer that should be removed.
+ */
+void UnregisterHardwareKeyboardObserver(HardwareKeyboardObserver* aHWKeyboardObserver);
+
+/**
+ * Returns the current list of hardware keyboard information.
+ */
+void GetCurrentHardwareKeyboardList(hal::HardwareKeyboardList* aHWKeyboardList);
+/**
+ * Notify of a change in the hardware keyboard state.
+ * @param aHWKeyboardInfo The new hw keyboard information.
+ */
+void NotifyHardwareKeyboardChange(const hal::HardwareKeyboardInformation& aHWKeyboardInfo);
 
 /**
  * Determine whether the device's screen is currently enabled.

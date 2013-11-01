@@ -25,6 +25,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Telemetry.h"
 #include "BatteryManager.h"
+#include "HardwareKeyboardManager.h"
 #include "mozilla/dom/PowerManager.h"
 #include "nsIDOMWakeLock.h"
 #include "nsIPowerManagerService.h"
@@ -137,6 +138,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Navigator)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mGeolocation)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mNotification)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mBatteryManager)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mHardwareKeyboardManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPowerManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMobileMessageManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTelephony)
@@ -191,6 +193,11 @@ Navigator::Invalidate()
   if (mBatteryManager) {
     mBatteryManager->Shutdown();
     mBatteryManager = nullptr;
+  }
+
+  if (mHardwareKeyboardManager) {
+    mHardwareKeyboardManager->Shutdown();
+    mHardwareKeyboardManager = nullptr;
   }
 
 #ifdef MOZ_B2G_FM
@@ -1089,6 +1096,27 @@ Navigator::GetBattery(ErrorResult& aRv)
   }
 
   return mBatteryManager;
+}
+
+//*****************************************************************************
+//    Navigator::nsINavigatorHardwareKeyboardManager
+//*****************************************************************************
+hardwarekeyboard::HardwareKeyboardManager*
+Navigator::GetHardwareKeyboardManager(ErrorResult& aRv)
+{
+  if (!mHardwareKeyboardManager) {
+    if (!mWindow) {
+      aRv.Throw(NS_ERROR_UNEXPECTED);
+      return nullptr;
+    }
+
+    NS_ENSURE_TRUE(mWindow->GetDocShell(), nullptr);
+
+    mHardwareKeyboardManager = new hardwarekeyboard::HardwareKeyboardManager();
+    mHardwareKeyboardManager->Init(mWindow);
+  }
+
+  return mHardwareKeyboardManager;
 }
 
 already_AddRefed<Promise>

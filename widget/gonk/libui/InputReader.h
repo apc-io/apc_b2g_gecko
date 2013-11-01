@@ -571,6 +571,8 @@ public:
         return value;
     }
 
+    void setResetAction(ResetAction resetAction);
+
 private:
     InputReaderContext* mContext;
     int32_t mId;
@@ -584,6 +586,7 @@ private:
     uint32_t mSources;
     bool mIsExternal;
     bool mDropUntilNextSync;
+    ResetAction mResetAction;
 
     typedef int32_t (InputMapper::*GetStateFunc)(uint32_t sourceMask, int32_t code);
     int32_t getState(uint32_t sourceMask, int32_t code, GetStateFunc getStateFunc);
