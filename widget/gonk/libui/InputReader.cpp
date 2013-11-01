@@ -394,6 +394,7 @@ void InputReader::addDeviceLocked(nsecs_t when, int32_t deviceId) {
 
     InputDevice* device = createDeviceLocked(deviceId, identifier, classes);
     device->configure(when, &mConfig, 0);
+    device->setResetAction(RESET_ACTION_ADDED);
     device->reset(when);
 
     if (device->isIgnored()) {
@@ -428,6 +429,7 @@ void InputReader::removeDeviceLocked(nsecs_t when, int32_t deviceId) {
                 device->getId(), device->getName().string(), device->getSources());
     }
 
+    device->setResetAction(RESET_ACTION_REMOVED);
     device->reset(when);
     delete device;
 }
@@ -883,7 +885,7 @@ InputDevice::InputDevice(InputReaderContext* context, int32_t id, int32_t genera
         const InputDeviceIdentifier& identifier, uint32_t classes) :
         mContext(context), mId(id), mGeneration(generation),
         mIdentifier(identifier), mClasses(classes),
-        mSources(0), mIsExternal(false), mDropUntilNextSync(false) {
+        mSources(0), mIsExternal(false), mDropUntilNextSync(false), mResetAction(RESET_ACTION_UNKNOWN) {
 }
 
 InputDevice::~InputDevice() {
@@ -971,6 +973,10 @@ void InputDevice::configure(nsecs_t when, const InputReaderConfiguration* config
             mSources |= mapper->getSources();
         }
     }
+}
+
+void InputDevice::setResetAction(ResetAction resetAction) {
+    mResetAction = resetAction;
 }
 
 void InputDevice::reset(nsecs_t when) {
@@ -1125,7 +1131,7 @@ void InputDevice::bumpGeneration() {
 }
 
 void InputDevice::notifyReset(nsecs_t when) {
-    NotifyDeviceResetArgs args(when, mId);
+    NotifyDeviceResetArgs args(when, mId, mClasses, mResetAction);
     mContext->getListener()->notifyDeviceReset(&args);
 }
 
