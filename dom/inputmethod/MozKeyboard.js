@@ -297,6 +297,8 @@ MozInputMethod.prototype = {
   _inputcontext: null,
   _layouts: {},
   _window: null,
+  _onhardwarekeyboard: null,
+  _hardwarekeyboard: false,
 
   classID: Components.ID("{4607330d-e7d2-40a4-9eb8-43967eae0142}"),
 
@@ -326,6 +328,8 @@ MozInputMethod.prototype = {
     cpmm.addMessageListener('Keyboard:SelectionChange', this);
     cpmm.addMessageListener('Keyboard:GetContext:Result:OK', this);
     cpmm.addMessageListener('Keyboard:LayoutsChange', this);
+    Services.obs.addObserver(this, 'hardware-keyboard-count-changed', false);
+    this._hardwarekeyboard = Services.hwKeyboardObserver.count > 0;
   },
 
   uninit: function mozInputMethodUninit() {
@@ -334,9 +338,11 @@ MozInputMethod.prototype = {
     cpmm.removeMessageListener('Keyboard:SelectionChange', this);
     cpmm.removeMessageListener('Keyboard:GetContext:Result:OK', this);
     cpmm.removeMessageListener('Keyboard:LayoutsChange', this);
+    Services.obs.removeObserver(this, "hardware-keyboard-count-changed");
 
     this._window = null;
     this._mgmt = null;
+    this._onhardwarekeyboard = null;
   },
 
   receiveMessage: function mozInputMethodReceiveMsg(msg) {
@@ -371,6 +377,17 @@ MozInputMethod.prototype = {
   },
 
   observe: function mozInputMethodObserve(subject, topic, data) {
+    if (topic == 'hardware-keyboard-count-changed') {
+      if ((Services.hwKeyboardObserver.count > 0) != this._hardwarekeyboard) {
+        this._hardwarekeyboard = (Services.hwKeyboardObserver.count > 0);
+        let handler = this._onhardwarekeyboard;
+        if (handler) {
+          let evt = new this._window.CustomEvent("hardwarekeyboard", ObjectWrapper.wrap({}, this._window));
+          handler(evt);
+        }
+      }
+      return;
+    }
     let wId = subject.QueryInterface(Ci.nsISupportsPRUint64).data;
     if (wId == this.innerWindowID)
       this.uninit();
@@ -393,6 +410,18 @@ MozInputMethod.prototype = {
 
   set oninputcontextchange(handler) {
     this.__DOM_IMPL__.setEventHandler("oninputcontextchange", handler);
+  },
+
+  get onhardwarekeyboard() {
+    return this._onhardwarekeyboard;
+  },
+
+  set onhardwarekeyboard(handler) {
+    this._onhardwarekeyboard = handler;
+  },
+
+  get hardwarekeyboard() {
+    return this._hardwarekeyboard;
   },
 
   get oninputcontextchange() {
