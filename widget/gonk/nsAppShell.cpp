@@ -28,6 +28,9 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "cutils/properties.h"
+#include <stdio.h>
+
 #include "base/basictypes.h"
 #include "nscore.h"
 #ifdef MOZ_OMX_DECODER
@@ -125,9 +128,11 @@ struct UserInputData {
     uint64_t timeMs;
     enum {
         MOTION_DATA,
-        KEY_DATA
+        KEY_DATA,
+        HARDWARE_KEYBOARD_RESET
     } type;
     int32_t action;
+    int32_t deviceId;
     int32_t flags;
     int32_t metaState;
     union {
@@ -559,6 +564,9 @@ GeckoInputDispatcher::dispatchOnce()
                           data.action == AKEY_EVENT_ACTION_DOWN,
                           data.timeMs);
         break;
+    case UserInputData::HARDWARE_KEYBOARD_RESET:
+        gAppShell->NotifyHardwareKeyboardChange(data.deviceId, data.action);
+        break;
     }
 }
 
@@ -652,6 +660,23 @@ void GeckoInputDispatcher::notifySwitch(const NotifySwitchArgs* args)
 
 void GeckoInputDispatcher::notifyDeviceReset(const NotifyDeviceResetArgs* args)
 {
+    int32_t deviceId = args->deviceId;
+    uint32_t classes = args->classes;
+    ResetAction resetAction = args->resetAction;
+    //Process action Added and Removed of EXTERNAL HW Keyboard
+    if (((resetAction == RESET_ACTION_ADDED) || (resetAction == RESET_ACTION_REMOVED))
+        && (classes & INPUT_DEVICE_CLASS_ALPHAKEY) && (classes & INPUT_DEVICE_CLASS_EXTERNAL)) {
+        UserInputData data;
+        data.timeMs = nanosecsToMillisecs(args->eventTime);
+        data.type = UserInputData::HARDWARE_KEYBOARD_RESET;
+        data.deviceId = deviceId;
+        data.action = resetAction;
+        {
+            MutexAutoLock lock(mQueueLock);
+            mEventQueue.push(data);
+        }
+        gAppShell->NotifyNativeEvent();
+    }
 }
 
 int32_t GeckoInputDispatcher::injectInputEvent(
@@ -888,4 +913,28 @@ nsAppShell::NotifyScreenRotation()
     gAppShell->mReader->requestRefreshConfiguration(InputReaderConfiguration::CHANGE_DISPLAY_INFO);
 
     hal::NotifyScreenConfigurationChange(nsScreenGonk::GetConfiguration());
+}
+
+/* static */ void
+nsAppShell::NotifyHardwareKeyboardChange(int32_t deviceId, int32_t action)
+{
+
+    nsCOMPtr<nsIObserverService> os = GetObserverService();
+    char buffer [1];
+    char value[1];
+    property_get("hardware.keyboard.count", value, "0");
+    int hwKeyboardCount = value[0] - '0';
+    if (action == RESET_ACTION_ADDED) {
+        hwKeyboardCount++;
+    } else {
+        hwKeyboardCount--;
+    }
+    LOG("nsAppShell::NotifyHardwareKeyboardChange=================== %d", hwKeyboardCount);
+    sprintf (buffer, "%d", hwKeyboardCount);
+    property_set("hardware.keyboard.count", buffer);
+    if (os) {
+        os->NotifyObservers(NULL, "hardware-keyboard-change", NULL);
+    }
+    
+    //hal::NotifyHardwareKeyboardChange(hal::HardwareKeyboardInformation(deviceId, (action == RESET_ACTION_ADDED)));
 }
