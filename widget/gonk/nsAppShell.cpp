@@ -199,6 +199,27 @@ UserInputData::DOMModifiers() const
 }
 
 static void
+sendWheelEvent(UserInputData& data)
+{
+    WidgetWheelEvent wheelEvent(true, NS_WHEEL_WHEEL, nullptr);
+    wheelEvent.deltaMode = nsIDOMWheelEvent::DOM_DELTA_LINE;
+    ::Touch touch = data.motion.touches[0];
+    float vscroll = touch.coords.getAxisValue(AMOTION_EVENT_AXIS_VSCROLL);
+    //Set scroll up or down by three lines.
+    //TODO: should check orientation portrait or landscape here
+    if (vscroll > 0)
+        wheelEvent.deltaY = wheelEvent.lineOrPageDeltaY = -3;
+    else
+        wheelEvent.deltaY = wheelEvent.lineOrPageDeltaY = 3;
+
+    wheelEvent.refPoint.x = nscoord(touch.coords.getX());
+    wheelEvent.refPoint.y = nscoord(touch.coords.getY());
+    wheelEvent.time = data.timeMs;
+    nsWindow::DispatchInputEvent(wheelEvent);
+    return;
+}
+
+static void
 sendMouseEvent(uint32_t msg, UserInputData& data, bool forwardToChildren)
 {
     WidgetMouseEvent event(true, msg, nullptr,
@@ -704,6 +725,11 @@ GeckoInputDispatcher::dispatchOnce()
             if (captured && (motionAction != AMOTION_EVENT_ACTION_MOVE)) {
                 return;
             }
+        }
+
+        if (motionAction == AMOTION_EVENT_ACTION_SCROLL) {
+            sendWheelEvent(data);
+            break;
         }
 
         uint32_t msg;
