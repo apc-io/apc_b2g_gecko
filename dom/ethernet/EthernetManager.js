@@ -10,9 +10,13 @@ const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 
-const ETHERNETWORKER_WORKER     = "resource://gre/modules/ethernet_worker.js";
+const kEthernetWorkerWorkerPath = "resource://gre/modules/ethernet_worker.js";
 
+const kNetdInterfaceChangedTopic         = "netd-interface-change";
 const kNetworkInterfaceStateChangedTopic = "network-interface-state-changed";
+const kNetworkInterfaceRegisteredTopic   = "network-interface-registered";
+const kNetworkInterfaceUnregisteredTopic = "network-interface-unregistered";
+const kNetworkActiveChangedTopic         = "network-active-changed";
 
 // Settings DB path for ETHERNET
 const SETTINGS_ETHERNET_ENABLED            = "ethernet.enabled";
@@ -33,10 +37,10 @@ const NETWORK_INTERFACE_DOWN = "down";
 const DEFAULT_ETHERNET_NETWORK_IFACE = "eth0";
 
 const TOPIC_NETD_INTEFACE_CHANGED    = "netd-interface-change";
-const TOPIC_INTERFACE_STATE_CHANGED  = "network-interface-state-changed";
-const TOPIC_INTERFACE_REGISTERED     = "network-interface-registered";
-const TOPIC_INTERFACE_UNREGISTERED   = "network-interface-unregistered";
-const TOPIC_ACTIVE_CHANGED           = "network-active-changed";
+// const TOPIC_INTERFACE_STATE_CHANGED  = "network-interface-state-changed";
+// const TOPIC_INTERFACE_REGISTERED     = "network-interface-registered";
+// const TOPIC_INTERFACE_UNREGISTERED   = "network-interface-unregistered";
+// const TOPIC_ACTIVE_CHANGED           = "network-active-changed";
 
 const kNetdIfaceLinkStateMsg  = "Iface linkstate";
 const kInvalidHWAddr = "00:00:00:00:00:00";
@@ -83,26 +87,28 @@ this.EthernetManager = {
     this.getStartupPreferences();
 
     // setup worker(s)
-    this.controlWorker = new ChromeWorker(ETHERNETWORKER_WORKER);
+    this.controlWorker = new ChromeWorker(kEthernetWorkerWorkerPath);
     this.controlWorker.onmessage = this.onmessage;
     this.controlWorker.onerror = this.onerror;
 
     // setup interfaces
     this._onInterfaceAdded = function(iface) {
-      if (iface) {
-        gNetworkManager.registerNetworkInterface(iface);
-      }
+      // if (iface) {
+      //   gNetworkManager.registerNetworkInterface(iface);
+      // }
 
       if (this.settingEnabled && !iface.up) {
         debug("The interface is down, make it up then: " + iface.name);
         iface.needRenew = true;
         this.enableInterface(iface.name);
+
+        return true; // no way it is connected to go further
       }
 
-      if (iface.name == DEFAULT_ETHERNET_NETWORK_IFACE) {
-        this.currentIfname = iface.name; // just always set this for now
-        // check to enable
-        gNetworkManager.overrideActive(iface);
+      if (iface.name == DEFAULT_ETHERNET_NETWORK_IFACE &&
+          iface.state == Ci.nsINetworkInterface.NETWORK_STATE_CONNECTED) {
+        debug("Well, we got default network and it is connected");
+        NetUtilsCallbacks.onConnected(iface.name);
       }
 
       return true;
@@ -212,6 +218,10 @@ this.EthernetManager = {
         this._onInterfaceAdded(iface);
       }
 
+      Services.obs.notifyObservers(iface,
+                                   kNetworkInterfaceStateChangedTopic,
+                                   false);
+
     	return true;
     }
 
@@ -268,6 +278,10 @@ this.EthernetManager = {
       debug("EthernetManager_connect: we do not support static ip for now");
     }
 
+    // Services.obs.notifyObservers(iface,
+    //                              kNetworkInterfaceStateChangedTopic,
+    //                              false);
+
     return true;
   },
 
@@ -292,6 +306,9 @@ this.EthernetManager = {
       debug("EthernetManager_disconnect: we do not support static ip for now");
     }
 
+    // Services.obs.notifyObservers(iface,
+    //                              kNetworkInterfaceStateChangedTopic,
+    //                              false);
     return true;
   },
 
@@ -362,57 +379,80 @@ this.EthernetManager = {
       if (srcProp in data) {
         debug("EthernetManager_updateInterface: updating iface." + targetProp + " with data." + srcProp);
         iface[targetProp] = data[srcProp];
-        return;
+        return true;
       }
 
-      if (orSrcProp && orSrcProp in data) {
-        debug("EthernetManager_updateInterface: updating iface." + targetProp + " with data." + orSrcProp);
-        iface[targetProp] = data[orSrcProp];
-        return;
-      }
+      // if (orSrcProp && orSrcProp in data) {
+      //   debug("EthernetManager_updateInterface: updating iface." + targetProp + " with data." + orSrcProp);
+      //   iface[targetProp] = data[orSrcProp];
+      //   return true;
+      // }
 
       debug("EthernetManager_updateInterface: no new data for iface." + targetProp);
+      false;
     }
 
     updateProperty("up", "up");
     updateProperty("cableConnected", "cableConnected");
-    updateProperty("state", "state");
+    let stateChanged = updateProperty("state", "state");
     updateProperty("hwaddress", "hwaddress");
-    updateProperty("ip", "ipaddress", "ipaddr_str");
-    updateProperty("gateway", "gateway", "gateway_str");
-    updateProperty("netmask", "netmask", "mask_str");
-    updateProperty("broadcast", "broadcast", "broadcast_str");
-    updateProperty("dns1", "dns1", "dns1_str");
-    updateProperty("dns2", "dns2", "dns2_str");
+    updateProperty("ip", "ip", "ipaddr_str");
+    updateProperty("gateway", "gateway_str");
+    updateProperty("netmask", "mask_str");
+    updateProperty("broadcast", "broadcast_str");
+    updateProperty("dns1", "dns1_str");
+    updateProperty("dns2", "dns2_str");
+
+    if (stateChanged) {
+      Services.obs.notifyObservers(iface,
+                                   kNetworkInterfaceStateChangedTopic,
+                                   false);
+    }
 
     return true;
   },
 
   createInterface: function EthernetManager_createInterface(ifname, data) {
+    // let state = Ci.nsINetworkInterface.NETWORK_STATE_UNKNOWN;
+    // if (data.state) {
+    //   state = data.state;
+    // } else if (data.ip) {
+    //   state = data.ip != "" ? Ci.nsINetworkInterface.NETWORK_STATE_CONNECTED
+    //                                : Ci.nsINetworkInterface.NETWORK_STATE_DISCONNECTED;
+    // }
+
+    // for (let k in data) {
+    //   debug("Well, let's see the data ============" + k + " = " + data[k]);
+    // }
+
     let iface = {
       QueryInterface: XPCOMUtils.generateQI([Ci.nsINetworkInterface]),
       type: Ci.nsINetworkInterface.NETWORK_TYPE_ETHERNET,
       name: ifname,
       up: (data && data.up != null) ? data.up : false,
       cableConnected: data ? data.cableConnected : false,
-      state: data ? data.state : Ci.nsINetworkInterface.NETWORK_STATE_UNKNOWN,
+      state: data && data.state ? data.state : Ci.nsINetworkInterface.NETWORK_STATE_UNKNOWN,
       // connected: data ? data.connected : false, // the state managed by this Manager // let's change this to state
       //   // For now we do our own DHCP. In the future this should be handed off
       //   // to the Network Manager. this is copied from WifiManager.
       dhcp: false,
-      hwaddress: data ? data.hwaddress : null,
-      ip: data ? data.ipaddress : null,
-      gateway: data ? data.gateway : null,
-      netmask: data ? data.netmask : null,
-      broadcast: data ? data.broadcast : null,
-      dns1: data ? data.dns1 : null,
-      dns2: data ? data.dns2 : null,
+      hwaddress: data ? data.hwaddr : null,
+      ip: data ? data.ip : null,
+      gateway: data ? data.gateway_str : null,
+      netmask: data ? data.mask_str : null,
+      broadcast: data ? data.broadcast_str : null,
+      dns1: data ? data.dns1_str : null,
+      dns2: data ? data.dns2_str : null,
       httpProxyHost: null,
       httpProxyPort: null,
       // other property,
       useDhcp: true, // don't misunderstand this with nsINetworkInterface.dhcp
       needRenew: false // if the inteface is just up => need a special treat
     };
+
+    // for (let k in iface) {
+    //   debug("Let's see when create iface -----------" + k + " = " + iface[k]);
+    // }
 
     return iface;
   },
@@ -462,9 +502,9 @@ this.EthernetManager = {
   	if (details.hwaddress == kInvalidHWAddr) {
   	  debug("Well, the device " + details.ifname + " is not available");
   	}
-    details.state = (details.up == true && details.cableConnected == true && details.ipaddress)
-                        ? Ci.nsINetworkInterface.NETWORK_STATE_UP
-                        : Ci.nsINetworkInterface.NETWORK_STATE_DOWN;
+    details.state = (details.up == true && details.cableConnected == true && details.ip)
+                        ? Ci.nsINetworkInterface.NETWORK_STATE_CONNECTED
+                        : Ci.nsINetworkInterface.NETWORK_STATE_DISCONNECTED;
     // TODO: integrate this with nsINetworkInterface so that we can register this with the NetworkManager
   	var iface = this.createInterface(details.ifname, details);
 
@@ -506,11 +546,32 @@ this.NetUtilsCallbacks = {
     if (Utils.validateStatus(result)) {
       debug("NetUtilsCallbacks_onDhcpConnected: good, we got the connection of " + result.ifname);
       result.state = result.ipaddr_str != ""
-                     ? Ci.nsINetworkInterface.NETWORK_STATE_UP
-                     : Ci.nsINetworkInterface.NETWORK_STATE_DOWN;
+                     ? Ci.nsINetworkInterface.NETWORK_STATE_CONNECTED
+                     : Ci.nsINetworkInterface.NETWORK_STATE_DISCONNECTED;
       EthernetManager.updateInterface(result.ifname, result);
+
+      if (result.state == Ci.nsINetworkInterface.NETWORK_STATE_CONNECTED) {
+        NetUtilsCallbacks.onConnected(result.ifname);
+      } else {
+        NetUtilsCallbacks.onDisconnected(result.ifname);
+      }
     } else {
       debug("NetUtilsCallbacks_onDhcpConnected: bad, unable to start dhcp on: " + result.ifname);
+    }
+  },
+
+  onConnected: function NetUtilsCallbacks_onConnected(ifname) {
+    debug("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
+    if (ifname == DEFAULT_ETHERNET_NETWORK_IFACE) {
+      debug("Ok, onConnected, prepare xxx ============");
+      EthernetManager.currentIfname = ifname;
+      let iface = EthernetManager.getCurrentInterface();
+      gNetworkManager.registerNetworkInterface(iface);
+      // gNetworkManager.overrideActive(iface);
+    } else {
+      if (EthernetManager.currentIfname == null) {
+        EthernetManager.currentIfname = ifname;
+      }
     }
   },
 
@@ -518,11 +579,25 @@ this.NetUtilsCallbacks = {
     dumpObj(result);
     if (Utils.validateStatus(result)) {
       debug("NetUtilsCallbacks_onDhcpDisconnected: good, got disconnect for: " + result.ifname);
-      let iface = EthernetManager.getInterface(result.ifname);
-      iface.state = Ci.nsINetworkInterface.NETWORK_STATE_DOWN;
-      dumpObj(iface);
+      result.state = Ci.nsINetworkInterface.NETWORK_STATE_DISCONNECTED;
+      EthernetManager.updateInterface(result.ifname, result);
+      // dumpObj(iface);
+      NetUtilsCallbacks.onDisconnected(result.ifname);
     } else {
       debug("NetUtilsCallbacks_onDhcpDisconnected: bad, unable to stop dhcp for " + result.ifname);
+    }
+  },
+
+  onDisconnected: function NetUtilsCallbacks_onDisconnected(ifname) {
+    if (ifname == EthernetManager.currentIfname) {
+      EthernetManager.currentIfname = null; // should we?
+    }
+
+    if (ifname == DEFAULT_ETHERNET_NETWORK_IFACE) {
+      debug("Ok, onDisconnected, prepare xxx ================");
+      let iface = EthernetManager.getInterface(ifname);
+      gNetworkManager.unregisterNetworkInterface(iface);
+      // gNetworkManager.overrideActive(null); // ok, assume that only us using this feature
     }
   },
 };

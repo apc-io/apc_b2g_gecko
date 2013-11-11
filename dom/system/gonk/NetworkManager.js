@@ -103,7 +103,7 @@ const DEFAULT_WIFI_DHCPSERVER_ENDIP    = "192.168.1.30";
 
 const MANUAL_PROXY_CONFIGURATION = 1;
 
-const DEBUG = false;
+const DEBUG = true;
 
 function netdResponseType(code) {
   return Math.floor(code/100)*100;
@@ -576,12 +576,17 @@ NetworkManager.prototype = {
             this._overriddenActive.name);
       // The override was just set, so reconfigure the network.
       if (this.active != this._overriddenActive) {
+        debug("Ok, let's override active ===============");
         this.active = this._overriddenActive;
         this.setDefaultRouteAndDNS(oldActive);
         Services.obs.notifyObservers(this.active, TOPIC_ACTIVE_CHANGED, null);
+      } else {
+        debug("Poor you, nothing to override =================");
       }
       return;
     }
+
+    debug("Just, no override network :)");
 
     // The active network is already our preferred type.
     if (this.active &&

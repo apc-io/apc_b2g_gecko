@@ -24,9 +24,9 @@ self.onmessage = function(e) {
   var id = data.id;
   var cmd = data.cmd;
 
-  for (let k in data) {
-  	debug(">>>>>>> data." + k + ": " + data[k]);
-  }
+  // for (let k in data) {
+  // 	debug(">>>>>>> data." + k + ": " + data[k]);
+  // }
 
   switch (cmd) {
   case "ifc_enable":

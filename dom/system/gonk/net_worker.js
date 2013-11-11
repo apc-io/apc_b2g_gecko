@@ -173,9 +173,9 @@ function getEthernetStatsSuccess(params) {
 
   if (params.cableConnected) {
     params.ip = libcutils.property_get("dhcp." + params.ifname + ".ipaddress");
-    params.gateway = libcutils.property_get("dhcp." + params.ifname + ".gateway");
-    params.dns1 = libcutils.property_get("net.dns1");
-    params.dns2 = libcutils.property_get("net.dns2");
+    params.gateway_str = libcutils.property_get("dhcp." + params.ifname + ".gateway");
+    params.dns1_str = libcutils.property_get("net.dns1");
+    params.dns2_str = libcutils.property_get("net.dns2");
   }
 
   for (let k in params) {
@@ -311,6 +311,7 @@ function setDefaultRouteAndDNS(options) {
   let dns2_str = options.dns2_str || ifprops.dns2_str;
   let gateway = netHelpers.stringToIP(gateway_str);
 
+  dump("=========== set default route to " + options.ifname + " with gateway: " + gateway + "(" + gateway_str + ")");
   libnetutils.ifc_set_default_route(options.ifname, gateway);
   libcutils.property_set("net.dns1", dns1_str);
   libcutils.property_set("net.dns2", dns2_str);
@@ -997,9 +998,9 @@ function getEthernetStats(params) {
   params.config = "";
   params.hwaddr = "";
   params.ip = "";
-  params.gateway = "";
-  params.dns1 = "";
-  params.dns2 = "";
+  params.gateway_str = "";
+  params.dns1_str = "";
+  params.dns2_str = "";
   params.date = new Date();
   chain(params, gEthernetStatsChain, getEthernetStatsFail);
 
