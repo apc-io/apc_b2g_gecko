@@ -799,10 +799,6 @@ function RadioInterface(options) {
   lock.get(kSettingsTimezoneAutoUpdateEnabled, this);
 
   // Set "time.clock.automatic-update.available" to false when starting up.
-  // debug("---------- gNetworkManager.active = " + gNetworkManager.active);
-  // let networkAvail = (gNetworkManager.active && 
-  //   gNetworkManager.active.state == Ci.nsINetworkInterface.NETWORK_STATE_CONNECTED);
-  // debug("---------- so, we'll set isClockAutoUpdateAvailable to " + networkAvail);
   this.setClockAutoUpdateAvailable(false);
 
   // Set "time.timezone.automatic-update.available" to false when starting up.
@@ -2218,9 +2214,6 @@ RadioInterface.prototype = {
             network.type != Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE) {
           return;
         }
-
-        // this should be set to true
-        // this.setClockAutoUpdateAvailable(true);
 
         // If the network comes from RIL, make sure the RIL service is matched.
         if (subject instanceof Ci.nsIRilNetworkInterface) {
