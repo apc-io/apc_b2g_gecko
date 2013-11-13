@@ -1645,9 +1645,11 @@ RadioInterface.prototype = {
       }
       return;
     }
+    // ethernet and wifi, can be consider as the same here, right?
     let wifi_active = false;
     if (gNetworkManager.active &&
-        gNetworkManager.active.type == Ci.nsINetworkInterface.NETWORK_TYPE_WIFI) {
+        (gNetworkManager.active.type == Ci.nsINetworkInterface.NETWORK_TYPE_WIFI) ||
+        (gNetworkManager.active.type == Ci.nsINetworkInterface.NETWORK_TYPE_ETHERNET) ){
       wifi_active = true;
     }
 
@@ -2199,13 +2201,16 @@ RadioInterface.prototype = {
         this._sntp.updateOffset(offset);
         break;
       case kNetworkInterfaceStateChangedTopic:
+        debug("^^^^^^^^^^^^^^^^^^^^^ networkInterface is changed!");
         let network = subject.QueryInterface(Ci.nsINetworkInterface);
         if (network.state != Ci.nsINetworkInterface.NETWORK_STATE_CONNECTED) {
+          debug("Network is not connected");
           return;
         }
 
         // SNTP can only update when we have mobile or Wifi connections.
         if (network.type != Ci.nsINetworkInterface.NETWORK_TYPE_WIFI &&
+            network.type != Ci.nsINetworkInterface.NETWORK_TYPE_ETHERNET &&
             network.type != Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE) {
           return;
         }
@@ -2220,7 +2225,10 @@ RadioInterface.prototype = {
 
         // SNTP won't update unless the SNTP is already expired.
         if (this._sntp.isExpired()) {
+          debug("*** *Will update");
           this._sntp.request();
+        } else {
+          debug("*** won't update");
         }
         break;
       case kScreenStateChangedTopic:
