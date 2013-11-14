@@ -26,10 +26,6 @@
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/ContentParent.h"
 
- #include "android/log.h"
- #define LOG(args...)                                            \
-    __android_log_print(ANDROID_LOG_INFO, "HAL" , ## args)
-
 #ifdef XP_WIN
 #include <process.h>
 #define getpid _getpid
