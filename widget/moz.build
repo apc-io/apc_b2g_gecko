@@ -76,6 +76,7 @@ XPIDL_SOURCES += [
     'nsIFormatConverter.idl',
     'nsIGfxInfo.idl',
     'nsIGfxInfoDebug.idl',
+    'nsIHWKeyboardObserver.idl',
     'nsIIdleService.idl',
     'nsIIdleServiceInternal.idl',
     'nsIIMEPicker.idl',

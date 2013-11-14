@@ -65,6 +65,10 @@ XPCOMUtils.defineLazyServiceGetter(Services, 'captivePortalDetector',
                                   'nsICaptivePortalDetector');
 #endif
 
+XPCOMUtils.defineLazyServiceGetter(Services, 'hwKeyboardObserver', 
+                                  '@mozilla.org/hw/keyboardobserver;1',
+                                  'nsIHWKeyboardObserver');
+
 function getContentWindow() {
   return shell.contentBrowser.contentWindow;
 }

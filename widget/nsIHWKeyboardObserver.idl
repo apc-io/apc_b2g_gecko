@@ -1,0 +1,10 @@
+#include "nsISupports.idl"
+
+
+[scriptable, uuid(a847a11e-f63b-4024-8c66-07341cc34260)]
+interface nsIHWKeyboardObserver: nsISupports
+{
+    readonly attribute int16_t count;
+
+	void notifyHWKeyboardChanged(in bool isAdded);
+};

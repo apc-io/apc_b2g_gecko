@@ -53,6 +53,7 @@
 #include "nsWindow.h"
 #include "OrientationObserver.h"
 #include "GonkMemoryPressureMonitoring.h"
+#include "nsIHWKeyboardObserver.h"
 
 #include "android/log.h"
 #include "libui/EventHub.h"
@@ -666,6 +667,8 @@ void GeckoInputDispatcher::notifyDeviceReset(const NotifyDeviceResetArgs* args)
     //Process action Added and Removed of EXTERNAL HW Keyboard
     if (((resetAction == RESET_ACTION_ADDED) || (resetAction == RESET_ACTION_REMOVED))
         && (classes & INPUT_DEVICE_CLASS_ALPHAKEY) && (classes & INPUT_DEVICE_CLASS_EXTERNAL)) {
+    //if (((resetAction == RESET_ACTION_ADDED) || (resetAction == RESET_ACTION_REMOVED))
+         //&& (classes & INPUT_DEVICE_CLASS_EXTERNAL)) {
         UserInputData data;
         data.timeMs = nanosecsToMillisecs(args->eventTime);
         data.type = UserInputData::HARDWARE_KEYBOARD_RESET;
@@ -918,23 +921,13 @@ nsAppShell::NotifyScreenRotation()
 /* static */ void
 nsAppShell::NotifyHardwareKeyboardChange(int32_t deviceId, int32_t action)
 {
-
-    nsCOMPtr<nsIObserverService> os = GetObserverService();
-    char buffer [1];
-    char value[1];
-    property_get("hardware.keyboard.count", value, "0");
-    int hwKeyboardCount = value[0] - '0';
+    static nsCOMPtr<nsIHWKeyboardObserver> hwKbObs = do_GetService("@mozilla.org/hw/keyboardobserver;1");
+    if (hwKbObs == 0) {
+        return;
+    }
     if (action == RESET_ACTION_ADDED) {
-        hwKeyboardCount++;
+        hwKbObs->NotifyHWKeyboardChanged(true);
     } else {
-        hwKeyboardCount--;
+        hwKbObs->NotifyHWKeyboardChanged(false);
     }
-    LOG("nsAppShell::NotifyHardwareKeyboardChange=================== %d", hwKeyboardCount);
-    sprintf (buffer, "%d", hwKeyboardCount);
-    property_set("hardware.keyboard.count", buffer);
-    if (os) {
-        os->NotifyObservers(NULL, "hardware-keyboard-change", NULL);
-    }
-    
-    //hal::NotifyHardwareKeyboardChange(hal::HardwareKeyboardInformation(deviceId, (action == RESET_ACTION_ADDED)));
 }

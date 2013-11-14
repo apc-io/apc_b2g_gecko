@@ -328,8 +328,8 @@ MozInputMethod.prototype = {
     cpmm.addMessageListener('Keyboard:GetContext:Result:OK', this);
     cpmm.addMessageListener('Keyboard:LayoutsChange', this);
     
-    Cu.import("resource://gre/modules/systemlibs.js");
-    Services.obs.addObserver(this, 'hardware-keyboard-change', false);
+    Services.obs.addObserver(this, 'hardware-keyboard-count-changed', false);
+    
   },
 
   uninit: function mozInputMethodUninit() {
@@ -338,7 +338,7 @@ MozInputMethod.prototype = {
     cpmm.removeMessageListener('Keyboard:SelectionChange', this);
     cpmm.removeMessageListener('Keyboard:GetContext:Result:OK', this);
     cpmm.removeMessageListener('Keyboard:LayoutsChange', this);
-    Services.obs.removeObserver(this, "hardware-keyboard-change");
+    Services.obs.removeObserver(this, "hardware-keyboard-count-changed");
 
     this._window = null;
     this._mgmt = null;
@@ -377,14 +377,13 @@ MozInputMethod.prototype = {
   },
 
   observe: function mozInputMethodObserve(subject, topic, data) {
-    if (topic == 'hardware-keyboard-change') {
+    if (topic == 'hardware-keyboard-count-changed') {
+      dump("MozKeyboard::observer::hardware-keyboard-count-change");
       let handler = this._onhardwarekeyboard;
       if (handler) {
         let evt = new this._window.CustomEvent("hardwarekeyboard", ObjectWrapper.wrap({}, this._window));
         handler(evt);
       }
-      dump("MozKeyboard::observer::hardware-keyboard-change=====================================");
-      dump(libcutils.property_get("hardware.keyboard.count"));
       return;
     }
     
@@ -421,7 +420,7 @@ MozInputMethod.prototype = {
   },
   
   get hardwarekeyboard() {
-    if (parseInt(libcutils.property_get("hardware.keyboard.count"), 10) > 0) {
+    if (Services.hwKeyboardObserver.count > 0) {
       return true;
     } else {
       return false;
