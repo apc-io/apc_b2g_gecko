@@ -298,6 +298,7 @@ MozInputMethod.prototype = {
   _layouts: {},
   _window: null,
   _onhardwarekeyboard: null,
+  _hardwarekeyboard: false,
 
   classID: Components.ID("{4607330d-e7d2-40a4-9eb8-43967eae0142}"),
 
@@ -329,6 +330,8 @@ MozInputMethod.prototype = {
     cpmm.addMessageListener('Keyboard:LayoutsChange', this);
     
     Services.obs.addObserver(this, 'hardware-keyboard-count-changed', false);
+    
+    this._hardwarekeyboard = Services.hwKeyboardObserver.count > 0;
     
   },
 
@@ -379,10 +382,13 @@ MozInputMethod.prototype = {
   observe: function mozInputMethodObserve(subject, topic, data) {
     if (topic == 'hardware-keyboard-count-changed') {
       dump("MozKeyboard::observer::hardware-keyboard-count-change");
-      let handler = this._onhardwarekeyboard;
-      if (handler) {
-        let evt = new this._window.CustomEvent("hardwarekeyboard", ObjectWrapper.wrap({}, this._window));
-        handler(evt);
+      if ((Services.hwKeyboardObserver.count > 0) != this._hardwarekeyboard) {
+        this._hardwarekeyboard = (Services.hwKeyboardObserver.count > 0);
+        let handler = this._onhardwarekeyboard;
+        if (handler) {
+          let evt = new this._window.CustomEvent("hardwarekeyboard", ObjectWrapper.wrap({}, this._window));
+          handler(evt);
+        }
       }
       return;
     }
@@ -420,11 +426,13 @@ MozInputMethod.prototype = {
   },
   
   get hardwarekeyboard() {
-    if (Services.hwKeyboardObserver.count > 0) {
+    dump("MozKeyboard::getHardwareKeyboard::count = " + Services.hwKeyboardObserver.count);
+    /*if (Services.hwKeyboardObserver.count > 0) {
       return true;
     } else {
       return false;
-    }
+    }*/
+    return this._hardwarekeyboard;
   },
 
   get oninputcontextchange() {
