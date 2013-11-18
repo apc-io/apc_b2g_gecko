@@ -63,7 +63,7 @@ NS_IMETHODIMP nsHWKeyboardObserver::NotifyHWKeyboardChanged(bool isAdded)
     mCount--;
   }
   NS_DispatchToMainThread(hwKbEvent);
-  
+
   return NS_OK;
 }
 

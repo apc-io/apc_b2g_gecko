@@ -19,7 +19,7 @@ interface MozInputMethod : EventTarget {
   // Note that if the app saves the original context, it might get
   // void; implementation decides when to void the input context.
   attribute EventHandler oninputcontextchange;
-  
+
   attribute EventHandler onhardwarekeyboard;
   readonly attribute boolean hardwarekeyboard;
 

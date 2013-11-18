@@ -328,11 +328,8 @@ MozInputMethod.prototype = {
     cpmm.addMessageListener('Keyboard:SelectionChange', this);
     cpmm.addMessageListener('Keyboard:GetContext:Result:OK', this);
     cpmm.addMessageListener('Keyboard:LayoutsChange', this);
-    
     Services.obs.addObserver(this, 'hardware-keyboard-count-changed', false);
-    
     this._hardwarekeyboard = Services.hwKeyboardObserver.count > 0;
-    
   },
 
   uninit: function mozInputMethodUninit() {
@@ -392,7 +389,6 @@ MozInputMethod.prototype = {
       }
       return;
     }
-    
     let wId = subject.QueryInterface(Ci.nsISupportsPRUint64).data;
     if (wId == this.innerWindowID)
       this.uninit();
@@ -416,15 +412,15 @@ MozInputMethod.prototype = {
   set oninputcontextchange(handler) {
     this.__DOM_IMPL__.setEventHandler("oninputcontextchange", handler);
   },
-  
+
   get onhardwarekeyboard() {
     return this._onhardwarekeyboard;
   },
-  
+
   set onhardwarekeyboard(handler) {
     this._onhardwarekeyboard = handler;
   },
-  
+
   get hardwarekeyboard() {
     dump("MozKeyboard::getHardwareKeyboard::count = " + Services.hwKeyboardObserver.count);
     /*if (Services.hwKeyboardObserver.count > 0) {
