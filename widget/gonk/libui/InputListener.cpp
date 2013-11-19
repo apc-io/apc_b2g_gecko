@@ -122,17 +122,11 @@ void NotifySwitchArgs::notify(const sp<InputListenerInterface>& listener) const 
 // --- NotifyDeviceResetArgs ---
 
 NotifyDeviceResetArgs::NotifyDeviceResetArgs(nsecs_t eventTime, int32_t deviceId) :
-        eventTime(eventTime), deviceId(deviceId), classes(0), resetAction(RESET_ACTION_UNKNOWN)  {
-}
-
-NotifyDeviceResetArgs::NotifyDeviceResetArgs(nsecs_t eventTime, int32_t deviceId
-            , uint32_t classes, ResetAction resetAction) :
-        eventTime(eventTime), deviceId(deviceId), classes(classes), resetAction(resetAction) {
+        eventTime(eventTime), deviceId(deviceId) {
 }
 
 NotifyDeviceResetArgs::NotifyDeviceResetArgs(const NotifyDeviceResetArgs& other) :
-        eventTime(other.eventTime), deviceId(other.deviceId), classes(other.classes)
-            , resetAction(other.resetAction) {
+        eventTime(other.eventTime), deviceId(other.deviceId) {
 }
 
 void NotifyDeviceResetArgs::notify(const sp<InputListenerInterface>& listener) const {

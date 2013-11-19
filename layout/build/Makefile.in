@@ -44,7 +44,6 @@ SHARED_LIBRARY_LIBS = \
 	$(DEPTH)/dom/devicestorage/$(LIB_PREFIX)domdevicestorage_s.$(LIB_SUFFIX) \
 	$(DEPTH)/dom/encoding/$(LIB_PREFIX)domencoding_s.$(LIB_SUFFIX) \
 	$(DEPTH)/dom/file/$(LIB_PREFIX)domfile_s.$(LIB_SUFFIX) \
-	$(DEPTH)/dom/hardwarekeyboard/$(LIB_PREFIX)dom_hardwarekeyboard_s.$(LIB_SUFFIX) \
 	$(DEPTH)/dom/power/$(LIB_PREFIX)dom_power_s.$(LIB_SUFFIX) \
 	$(DEPTH)/dom/quota/$(LIB_PREFIX)domquota_s.$(LIB_SUFFIX) \
 	$(DEPTH)/dom/network/src/$(LIB_PREFIX)dom_network_s.$(LIB_SUFFIX) \

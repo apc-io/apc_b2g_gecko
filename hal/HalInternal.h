@@ -35,16 +35,6 @@ void EnableBatteryNotifications();
 void DisableBatteryNotifications();
 
 /**
- * Enables hardware keyboard notifications from the backend.
- */
-void EnableHardwareKeyboardNotifications();
-
-/**
- * Disables hardware keyboard notifications from the backend.
- */
-void DisableHardwareKeyboardNotifications();
-
-/**
  * Enables network notifications from the backend.
  */
 void EnableNetworkNotifications();

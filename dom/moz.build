@@ -50,7 +50,6 @@ PARALLEL_DIRS += [
     'encoding',
     'file',
     'fmradio',
-    'hardwarekeyboard',
     'media',
     'messages',
     'power',

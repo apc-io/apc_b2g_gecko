@@ -783,16 +783,6 @@ GetTimezone()
 }
 
 void
-EnableHardwareKeyboardNotifications()
-{
-}
-
-void
-DisableHardwareKeyboardNotifications()
-{
-}
-
-void
 EnableSystemClockChangeNotifications()
 {
 }
