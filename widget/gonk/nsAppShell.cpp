@@ -667,8 +667,6 @@ void GeckoInputDispatcher::notifyDeviceReset(const NotifyDeviceResetArgs* args)
     //Process action Added and Removed of EXTERNAL HW Keyboard
     if (((resetAction == RESET_ACTION_ADDED) || (resetAction == RESET_ACTION_REMOVED))
         && (classes & INPUT_DEVICE_CLASS_ALPHAKEY) && (classes & INPUT_DEVICE_CLASS_EXTERNAL)) {
-    //if (((resetAction == RESET_ACTION_ADDED) || (resetAction == RESET_ACTION_REMOVED))
-         //&& (classes & INPUT_DEVICE_CLASS_EXTERNAL)) {
         UserInputData data;
         data.timeMs = nanosecsToMillisecs(args->eventTime);
         data.type = UserInputData::HARDWARE_KEYBOARD_RESET;

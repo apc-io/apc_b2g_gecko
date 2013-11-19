@@ -378,7 +378,6 @@ MozInputMethod.prototype = {
 
   observe: function mozInputMethodObserve(subject, topic, data) {
     if (topic == 'hardware-keyboard-count-changed') {
-      dump("MozKeyboard::observer::hardware-keyboard-count-change");
       if ((Services.hwKeyboardObserver.count > 0) != this._hardwarekeyboard) {
         this._hardwarekeyboard = (Services.hwKeyboardObserver.count > 0);
         let handler = this._onhardwarekeyboard;
@@ -422,12 +421,6 @@ MozInputMethod.prototype = {
   },
 
   get hardwarekeyboard() {
-    dump("MozKeyboard::getHardwareKeyboard::count = " + Services.hwKeyboardObserver.count);
-    /*if (Services.hwKeyboardObserver.count > 0) {
-      return true;
-    } else {
-      return false;
-    }*/
     return this._hardwarekeyboard;
   },
 
