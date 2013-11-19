@@ -923,9 +923,5 @@ nsAppShell::NotifyHardwareKeyboardChange(int32_t deviceId, int32_t action)
     if (hwKbObs == 0) {
         return;
     }
-    if (action == RESET_ACTION_ADDED) {
-        hwKbObs->NotifyHWKeyboardChanged(true);
-    } else {
-        hwKbObs->NotifyHWKeyboardChanged(false);
-    }
+    hwKbObs->NotifyHWKeyboardChanged(action == RESET_ACTION_ADDED);
 }
