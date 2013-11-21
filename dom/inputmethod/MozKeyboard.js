@@ -328,8 +328,8 @@ MozInputMethod.prototype = {
     cpmm.addMessageListener('Keyboard:SelectionChange', this);
     cpmm.addMessageListener('Keyboard:GetContext:Result:OK', this);
     cpmm.addMessageListener('Keyboard:LayoutsChange', this);
-    Services.obs.addObserver(this, 'hardware-keyboard-count-changed', false);
-    this._hardwarekeyboard = Services.hwKeyboardObserver.count > 0;
+    Services.obs.addObserver(this, 'hardware-keyboard-present-changed', false);
+    this._hardwarekeyboard = Services.hwKeyboardObserver.present;
   },
 
   uninit: function mozInputMethodUninit() {
@@ -338,7 +338,7 @@ MozInputMethod.prototype = {
     cpmm.removeMessageListener('Keyboard:SelectionChange', this);
     cpmm.removeMessageListener('Keyboard:GetContext:Result:OK', this);
     cpmm.removeMessageListener('Keyboard:LayoutsChange', this);
-    Services.obs.removeObserver(this, "hardware-keyboard-count-changed");
+    Services.obs.removeObserver(this, "hardware-keyboard-present-changed");
 
     this._window = null;
     this._mgmt = null;
@@ -377,9 +377,10 @@ MozInputMethod.prototype = {
   },
 
   observe: function mozInputMethodObserve(subject, topic, data) {
-    if (topic == 'hardware-keyboard-count-changed') {
-      if ((Services.hwKeyboardObserver.count > 0) != this._hardwarekeyboard) {
-        this._hardwarekeyboard = (Services.hwKeyboardObserver.count > 0);
+    if (topic == 'hardware-keyboard-present-changed') {
+      if (Services.hwKeyboardObserver.present != this._hardwarekeyboard) {
+        this._hardwarekeyboard = Services.hwKeyboardObserver.present;
+        dump("is hardware keyboard available: " + this._hardwarekeyboard);
         let handler = this._onhardwarekeyboard;
         if (handler) {
           let evt = new this._window.CustomEvent("hardwarekeyboard", ObjectWrapper.wrap({}, this._window));
