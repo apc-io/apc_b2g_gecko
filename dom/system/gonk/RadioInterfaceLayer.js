@@ -2201,10 +2201,8 @@ RadioInterface.prototype = {
         this._sntp.updateOffset(offset);
         break;
       case kNetworkInterfaceStateChangedTopic:
-        debug("^^^^^^^^^^^^^^^^^^^^^ networkInterface is changed!");
         let network = subject.QueryInterface(Ci.nsINetworkInterface);
         if (network.state != Ci.nsINetworkInterface.NETWORK_STATE_CONNECTED) {
-          debug("Network is not connected");
           return;
         }
 
@@ -2225,10 +2223,7 @@ RadioInterface.prototype = {
 
         // SNTP won't update unless the SNTP is already expired.
         if (this._sntp.isExpired()) {
-          debug("*** *Will update");
           this._sntp.request();
-        } else {
-          debug("*** won't update");
         }
         break;
       case kScreenStateChangedTopic:
