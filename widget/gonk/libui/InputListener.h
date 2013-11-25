@@ -62,13 +62,12 @@ struct NotifyKeyArgs : public NotifyArgs {
     int32_t scanCode;
     int32_t metaState;
     nsecs_t downTime;
-    char16_t charCode;
 
     inline NotifyKeyArgs() { }
 
     NotifyKeyArgs(nsecs_t eventTime, int32_t deviceId, uint32_t source, uint32_t policyFlags,
             int32_t action, int32_t flags, int32_t keyCode, int32_t scanCode,
-            int32_t metaState, nsecs_t downTime, char16_t charCode = 0);
+            int32_t metaState, nsecs_t downTime);
 
     NotifyKeyArgs(const NotifyKeyArgs& other);
 

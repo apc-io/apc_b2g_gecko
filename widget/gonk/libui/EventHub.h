@@ -217,7 +217,6 @@ public:
      */
     virtual int32_t getScanCodeState(int32_t deviceId, int32_t scanCode) const = 0;
     virtual int32_t getKeyCodeState(int32_t deviceId, int32_t keyCode) const = 0;
-    virtual char16_t getCharCode(int32_t deviceId, int32_t keyCode, int32_t metaState) const = 0;
     virtual int32_t getSwitchState(int32_t deviceId, int32_t sw) const = 0;
     virtual status_t getAbsoluteAxisValue(int32_t deviceId, int32_t axis,
             int32_t* outValue) const = 0;
@@ -283,7 +282,6 @@ public:
 
     virtual int32_t getScanCodeState(int32_t deviceId, int32_t scanCode) const;
     virtual int32_t getKeyCodeState(int32_t deviceId, int32_t keyCode) const;
-    char16_t getCharCode(int32_t deviceId, int32_t keyCode, int32_t metaState) const;
     virtual int32_t getSwitchState(int32_t deviceId, int32_t sw) const;
     virtual status_t getAbsoluteAxisValue(int32_t deviceId, int32_t axis, int32_t* outValue) const;
 

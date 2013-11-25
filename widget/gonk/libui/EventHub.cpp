@@ -374,20 +374,6 @@ int32_t EventHub::getKeyCodeState(int32_t deviceId, int32_t keyCode) const {
     return AKEY_STATE_UNKNOWN;
 }
 
-char16_t EventHub::getCharCode(int32_t deviceId, int32_t keyCode, int32_t metaState) const
-{
-    Device * d = mDevices.valueFor(deviceId);
-    if (d == 0) {
-        return 0;
-    }
-
-    if (d->keyMap.haveKeyCharacterMap()) {
-        return d->keyMap.keyCharacterMap->getCharacter(keyCode, metaState);
-    }
-
-    return 0;
-}
-
 int32_t EventHub::getSwitchState(int32_t deviceId, int32_t sw) const {
     if (sw >= 0 && sw <= SW_MAX) {
         AutoMutex _l(mLock);
