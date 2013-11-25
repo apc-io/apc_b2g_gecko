@@ -43,7 +43,8 @@ public class Tab {
     private Bitmap mFavicon;
     private String mFaviconUrl;
     private int mFaviconSize;
-    private boolean mFeedsEnabled;
+    private boolean mHasFeeds;
+    private boolean mHasOpenSearch;
     private JSONObject mIdentityData;
     private boolean mReaderEnabled;
     private BitmapDrawable mThumbnail;
@@ -98,7 +99,8 @@ public class Tab {
         mFavicon = null;
         mFaviconUrl = null;
         mFaviconSize = 0;
-        mFeedsEnabled = false;
+        mHasFeeds = false;
+        mHasOpenSearch = false;
         mIdentityData = null;
         mReaderEnabled = false;
         mEnteringReaderMode = false;
@@ -236,8 +238,12 @@ public class Tab {
         return mFaviconUrl;
     }
 
-    public boolean getFeedsEnabled() {
-        return mFeedsEnabled;
+    public boolean hasFeeds() {
+        return mHasFeeds;
+    }
+
+    public boolean hasOpenSearch() {
+        return mHasOpenSearch;
     }
 
     public String getSecurityMode() {
@@ -308,9 +314,16 @@ public class Tab {
     }
 
     public synchronized void updateTitle(String title) {
-        // Keep the title unchanged while entering reader mode
-        if (mEnteringReaderMode)
+        // Keep the title unchanged while entering reader mode.
+        if (mEnteringReaderMode) {
             return;
+        }
+
+        // If there was a title, but it hasn't changed, do nothing.
+        if (mTitle != null &&
+            TextUtils.equals(mTitle, title)) {
+            return;
+        }
 
         mTitle = (title == null ? "" : title);
         Tabs.getInstance().notifyListeners(this, Tabs.TabEvents.TITLE);
@@ -359,8 +372,15 @@ public class Tab {
         return mFaviconLoadId;
     }
 
-    public void updateFavicon(Bitmap favicon) {
+    /**
+     * Returns true if the favicon changed.
+     */
+    public boolean updateFavicon(Bitmap favicon) {
+        if (mFavicon == favicon) {
+            return false;
+        }
         mFavicon = favicon;
+        return true;
     }
 
     public synchronized void updateFaviconURL(String faviconUrl, int size) {
@@ -386,8 +406,12 @@ public class Tab {
         mFaviconSize = 0;
     }
 
-    public void setFeedsEnabled(boolean feedsEnabled) {
-        mFeedsEnabled = feedsEnabled;
+    public void setHasFeeds(boolean hasFeeds) {
+        mHasFeeds = hasFeeds;
+    }
+
+    public void setHasOpenSearch(boolean hasOpenSearch) {
+        mHasOpenSearch = hasOpenSearch;
     }
 
     public void updateIdentityData(JSONObject identityData) {
@@ -460,7 +484,7 @@ public class Tab {
     }
 
     public void toggleReaderMode() {
-        if (ReaderModeUtils.isAboutReader(mUrl)) {
+        if (AboutPages.isAboutReader(mUrl)) {
             Tabs.getInstance().loadUrl(ReaderModeUtils.getUrlFromAboutReader(mUrl));
         } else if (mReaderEnabled) {
             mEnteringReaderMode = true;
@@ -601,7 +625,8 @@ public class Tab {
 
     void handleLocationChange(JSONObject message) throws JSONException {
         final String uri = message.getString("uri");
-        mEnteringReaderMode = ReaderModeUtils.isEnteringReaderMode(mUrl, uri);
+        final String oldUrl = getURL();
+        mEnteringReaderMode = ReaderModeUtils.isEnteringReaderMode(oldUrl, uri);
         updateURL(uri);
         updateUserSearch(message.getString("userSearch"));
 
@@ -609,13 +634,13 @@ public class Tab {
         if (message.getBoolean("sameDocument")) {
             // We can get a location change event for the same document with an anchor tag
             // Notify listeners so that buttons like back or forward will update themselves
-            Tabs.getInstance().notifyListeners(this, Tabs.TabEvents.LOCATION_CHANGE, uri);
+            Tabs.getInstance().notifyListeners(this, Tabs.TabEvents.LOCATION_CHANGE, oldUrl);
             return;
         }
 
         setContentType(message.getString("contentType"));
         clearFavicon();
-        setFeedsEnabled(false);
+        setHasFeeds(false);
         updateTitle(null);
         updateIdentityData(null);
         setReaderEnabled(false);
@@ -629,11 +654,12 @@ public class Tab {
             setAboutHomePage(HomePager.Page.valueOf(homePage));
         }
 
-        Tabs.getInstance().notifyListeners(this, Tabs.TabEvents.LOCATION_CHANGE, uri);
+        Tabs.getInstance().notifyListeners(this, Tabs.TabEvents.LOCATION_CHANGE, oldUrl);
     }
 
-    private boolean shouldShowProgress(String url) {
-        return "about:home".equals(url) || ReaderModeUtils.isAboutReader(url);
+    private static boolean shouldShowProgress(final String url) {
+        return AboutPages.isAboutHome(url) ||
+               AboutPages.isAboutReader(url);
     }
 
     void handleDocumentStart(boolean showProgress, String url) {

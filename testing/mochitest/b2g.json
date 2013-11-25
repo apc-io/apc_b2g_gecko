@@ -100,6 +100,7 @@
     "content/base/test/test_child_process_shutdown_message.html":"specialpowers.wrap issue, NS_ERROR_XPC_GS_RETURNED_FAILURE",
     "content/base/test/test_messagemanager_assertpermission.html":"specialpowers.wrap issue, NS_ERROR_XPC_GS_RETURNED_FAILURE",
 
+    "content/canvas/test/test_canvas_focusring.html":"specialpowers.wrap",
 
     "content/html/content/test/test_formSubmission.html":"NS_ERROR_FILE_TARGET_DOES_NOT_EXIST",
 
@@ -208,8 +209,12 @@
     "content/base/test/csp/test_CSP_frameancestors.html":"observer not working",
     "content/base/test/csp/test_CSP.html":"observer not working",
     "content/base/test/csp/test_bug836922_npolicies.html":"observer not working",
+    "content/base/test/csp/test_bug886164.html":"observer not working",
     "content/base/test/csp/test_CSP_bug916446.html":"observer not working",
     "content/base/test/csp/test_CSP_bug909029.html":"observer not working",
+    "content/base/test/csp/test_policyuri_regression_from_multipolicy.html":"observer not working",
+    "content/base/test/csp/test_nonce_source.html":"observer not working",
+    "content/base/test/csp/test_CSP_bug941404.html":"observer not working",
 
     "content/base/test/test_CrossSiteXHR_origin.html":"https not working, bug 907770",
     "content/base/test/test_plugin_freezing.html":"",
@@ -256,6 +261,7 @@
     "content/base/test/test_bug424359-2.html":"",
     "content/base/test/test_mixed_content_blocker_bug803225.html":"",
     "content/html/document/test/test_non-ascii-cookie.html":"",
+    "content/html/document/test/test_document.watch.html":"expects document.cookie setting to work",
 
     "docshell/test/navigation/test_bug13871.html":"",
     "docshell/test/navigation/test_bug270414.html":"",
@@ -323,6 +329,7 @@
     "dom/media/tests/mochitest/test_peerConnection_setRemoteAnswerInStable.html":"",
     "dom/media/tests/mochitest/test_peerConnection_setRemoteOfferInHaveLocalOffer.html":"",
     "dom/media/tests/mochitest/test_peerConnection_throwInCallbacks.html":"",
+    "dom/media/tests/ipc/test_ipc.html":"nested ipc not working",
 
     "dom/network/tests/test_networkstats_basics.html":"Will be fixed in bug 858005",
     "dom/permission/tests/test_permission_basics.html":"https not working, bug 907770",
@@ -352,6 +359,7 @@
     "dom/tests/mochitest/geolocation/test_cancelWatch.html":"",
     "dom/tests/mochitest/geolocation/test_clearWatch.html":"",
     "dom/tests/mochitest/geolocation/test_clearWatch_invalid.html":"",
+    "dom/tests/mochitest/geolocation/test_errorcheck.html": "",
     "dom/tests/mochitest/geolocation/test_handlerSpinsEventLoop.html": "showmodaldialog",
     "dom/tests/mochitest/geolocation/test_manyCurrentConcurrent.html":"",
     "dom/tests/mochitest/geolocation/test_manyCurrentSerial.html":"",
@@ -388,6 +396,8 @@
     "dom/tests/mochitest/sessionstorage/test_sessionStorageBase.html":"",
     "dom/tests/mochitest/sessionstorage/test_sessionStorageHttpHttps.html":"needs https to work",
     "dom/tests/mochitest/webapps/test_bug_779982.html":"",
+    "dom/tests/mochitest/whatwg/test_postMessage_closed.html":"bug 894914 - wrong data - got FAIL, expected message",
+
     "dom/workers/test/test_suspend.html":"test timed out, might need more time",
     "dom/workers/test/test_xhr_parameters.html":"",
     "dom/workers/test/test_xhr_system.html":"",

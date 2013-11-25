@@ -119,6 +119,16 @@ public:
     mCompositor = aCompositor;
   }
 
+  void OnActorDestroy()
+  {
+    Iterator end = TilesEnd();
+    for (Iterator it = TilesBegin(); it != end; ++it) {
+      if (it->mDeprecatedTextureHost) {
+        it->mDeprecatedTextureHost->OnActorDestroy();
+      }
+    }
+  }
+
 protected:
   TiledTexture ValidateTile(TiledTexture aTile,
                             const nsIntPoint& aTileRect,
@@ -202,7 +212,6 @@ public:
                   EffectChain& aEffectChain,
                   float aOpacity,
                   const gfx::Matrix4x4& aTransform,
-                  const gfx::Point& aOffset,
                   const gfx::Filter& aFilter,
                   const gfx::Rect& aClipRect,
                   const nsIntRegion& aScreenRegion,
@@ -212,7 +221,6 @@ public:
   void Composite(EffectChain& aEffectChain,
                  float aOpacity,
                  const gfx::Matrix4x4& aTransform,
-                 const gfx::Point& aOffset,
                  const gfx::Filter& aFilter,
                  const gfx::Rect& aClipRect,
                  const nsIntRegion* aVisibleRegion = nullptr,
@@ -241,15 +249,19 @@ public:
                       Compositor* aCompositor,
                       AttachFlags aFlags = NO_FLAGS) MOZ_OVERRIDE;
 
+  virtual void OnActorDestroy() MOZ_OVERRIDE
+  {
+    mVideoMemoryTiledBuffer.OnActorDestroy();
+    mLowPrecisionVideoMemoryTiledBuffer.OnActorDestroy();
+  }
+
 #ifdef MOZ_DUMP_PAINTING
   virtual void Dump(FILE* aFile=nullptr,
                     const char* aPrefix="",
                     bool aDumpHtml=false) MOZ_OVERRIDE;
 #endif
 
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual void PrintInfo(nsACString& aTo, const char* aPrefix);
-#endif
 
 private:
   void ProcessUploadQueue(nsIntRegion* aNewValidRegion,
@@ -260,7 +272,6 @@ private:
                          const nsIntRegion& aValidRegion,
                          EffectChain& aEffectChain,
                          float aOpacity,
-                         const gfx::Point& aOffset,
                          const gfx::Filter& aFilter,
                          const gfx::Rect& aClipRect,
                          const nsIntRegion& aMaskRegion,

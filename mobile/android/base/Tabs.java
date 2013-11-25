@@ -6,6 +6,7 @@
 package org.mozilla.gecko;
 
 import org.mozilla.gecko.db.BrowserDB;
+import org.mozilla.gecko.favicons.Favicons;
 import org.mozilla.gecko.home.HomePager;
 import org.mozilla.gecko.sync.setup.SyncAccounts;
 import org.mozilla.gecko.util.GeckoEventListener;
@@ -19,6 +20,7 @@ import android.accounts.OnAccountsUpdateListener;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.database.ContentObserver;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Handler;
@@ -100,7 +102,9 @@ public class Tabs implements GeckoEventListener {
         registerEventListener("DOMTitleChanged");
         registerEventListener("Link:Favicon");
         registerEventListener("Link:Feed");
+        registerEventListener("Link:OpenSearch");
         registerEventListener("DesktopMode:Changed");
+        registerEventListener("Tab:ViewportMetadata");
     }
 
     public synchronized void attachToContext(Context context) {
@@ -278,6 +282,9 @@ public class Tabs implements GeckoEventListener {
     }
 
     public synchronized Tab getTab(int id) {
+        if (id == -1)
+            return null;
+
         if (mTabs.size() == 0)
             return null;
 
@@ -300,8 +307,9 @@ public class Tabs implements GeckoEventListener {
         int tabId = tab.getId();
         removeTab(tabId);
 
-        if (nextTab == null)
-            nextTab = loadUrl("about:home", LOADURL_NEW_TAB);
+        if (nextTab == null) {
+            nextTab = loadUrl(AboutPages.HOME, LOADURL_NEW_TAB);
+        }
 
         selectTab(nextTab.getId());
 
@@ -461,14 +469,39 @@ public class Tabs implements GeckoEventListener {
                 tab.updateFaviconURL(message.getString("href"), message.getInt("size"));
                 notifyListeners(tab, TabEvents.LINK_FAVICON);
             } else if (event.equals("Link:Feed")) {
-                tab.setFeedsEnabled(true);
+                tab.setHasFeeds(true);
                 notifyListeners(tab, TabEvents.LINK_FEED);
+            } else if (event.equals("Link:OpenSearch")) {
+                boolean visible = message.getBoolean("visible");
+                tab.setHasOpenSearch(visible);
             } else if (event.equals("DesktopMode:Changed")) {
                 tab.setDesktopMode(message.getBoolean("desktopMode"));
                 notifyListeners(tab, TabEvents.DESKTOP_MODE_CHANGE);
+            } else if (event.equals("Tab:ViewportMetadata")) {
+                tab.setZoomConstraints(new ZoomConstraints(message));
+                tab.setIsRTL(message.getBoolean("isRTL"));
+                notifyListeners(tab, TabEvents.VIEWPORT_CHANGE);
             }
         } catch (Exception e) {
             Log.w(LOGTAG, "handleMessage threw for " + event, e);
+        }
+    }
+
+    /**
+     * Set the favicon for any tabs loaded with this page URL.
+     */
+    public void updateFaviconForURL(String pageURL, Bitmap favicon) {
+        // The tab might be pointing to another URL by the time the
+        // favicon is finally loaded, in which case we won't find the tab.
+        // See also: Bug 920331.
+        for (Tab tab : mOrder) {
+            String tabURL = tab.getURL();
+            if (pageURL.equals(tabURL)) {
+                tab.setFaviconLoadId(Favicons.NOT_LOADING);
+                if (tab.updateFavicon(favicon)) {
+                    notifyListeners(tab, TabEvents.FAVICON);
+                }
+            }
         }
     }
 
@@ -519,7 +552,8 @@ public class Tabs implements GeckoEventListener {
         LINK_FEED,
         SECURITY_CHANGE,
         READER_ENABLED,
-        DESKTOP_MODE_CHANGE
+        DESKTOP_MODE_CHANGE,
+        VIEWPORT_CHANGE
     }
 
     public void notifyListeners(Tab tab, TabEvents msg) {
@@ -601,7 +635,7 @@ public class Tabs implements GeckoEventListener {
     public int getTabIdForUrl(String url, boolean isPrivate) {
         for (Tab tab : mOrder) {
             String tabUrl = tab.getURL();
-            if (ReaderModeUtils.isAboutReader(tabUrl)) {
+            if (AboutPages.isAboutReader(tabUrl)) {
                 tabUrl = ReaderModeUtils.getUrlFromAboutReader(tabUrl);
             }
             if (TextUtils.equals(tabUrl, url) && isPrivate == tab.isPrivate()) {

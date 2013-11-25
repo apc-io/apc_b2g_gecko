@@ -57,6 +57,7 @@ using namespace js::gc;
 using namespace js::types;
 
 using mozilla::DebugOnly;
+using mozilla::DoubleEqualsInt32;
 using mozilla::PodCopy;
 
 /*
@@ -72,7 +73,7 @@ static bool
 #endif
 ToBooleanOp(const FrameRegs &regs)
 {
-    return ToBoolean(regs.sp[-1]);
+    return ToBoolean(regs.stackHandleAt(-1));
 }
 
 template <bool Eq>
@@ -464,7 +465,7 @@ js::Invoke(JSContext *cx, CallArgs args, MaybeConstruct construct)
     if (!fun->getOrCreateScript(cx))
         return false;
 
-    /* Run function until JSOP_STOP, JSOP_RETURN or error. */
+    /* Run function until JSOP_RETRVAL, JSOP_RETURN or error. */
     InvokeState state(cx, args, initial);
 
     // Check to see if useNewType flag should be set for this frame.
@@ -1066,9 +1067,11 @@ AddOperation(JSContext *cx, MutableHandleValue lhs, MutableHandleValue rhs, Valu
 {
     if (lhs.isInt32() && rhs.isInt32()) {
         int32_t l = lhs.toInt32(), r = rhs.toInt32();
-        double d = double(l) + double(r);
-        res->setNumber(d);
-        return true;
+        int32_t t;
+        if (JS_LIKELY(SafeAdd(l, r, &t))) {
+            res->setInt32(t);
+            return true;
+        }
     }
 
     if (!ToPrimitive(cx, lhs))
@@ -1367,7 +1370,7 @@ Interpret(JSContext *cx, RunState &state)
     } else {
         probes::EnterScript(cx, script, script->function(), activation.entryFrame());
     }
-    if (cx->compartment()->debugMode()) {
+    if (JS_UNLIKELY(cx->compartment()->debugMode())) {
         JSTrapStatus status = ScriptDebugPrologue(cx, activation.entryFrame());
         switch (status) {
           case JSTRAP_CONTINUE:
@@ -1409,52 +1412,55 @@ CASE(EnableInterruptsPseudoOpcode)
         moreInterrupts = true;
     }
 
-    JSInterruptHook hook = cx->runtime()->debugHooks.interruptHook;
-    if (hook || script->stepModeEnabled()) {
-        RootedValue rval(cx);
-        JSTrapStatus status = JSTRAP_CONTINUE;
-        if (hook)
-            status = hook(cx, script, REGS.pc, rval.address(), cx->runtime()->debugHooks.interruptHookData);
-        if (status == JSTRAP_CONTINUE && script->stepModeEnabled())
-            status = Debugger::onSingleStep(cx, &rval);
-        switch (status) {
-          case JSTRAP_ERROR:
-            goto error;
-          case JSTRAP_CONTINUE:
-            break;
-          case JSTRAP_RETURN:
-            REGS.fp()->setReturnValue(rval);
-            interpReturnOK = true;
-            goto forced_return;
-          case JSTRAP_THROW:
-            cx->setPendingException(rval);
-            goto error;
-          default:;
+    if (cx->compartment()->debugMode()) {
+        JSInterruptHook hook = cx->runtime()->debugHooks.interruptHook;
+        if (hook || script->stepModeEnabled()) {
+            RootedValue rval(cx);
+            JSTrapStatus status = JSTRAP_CONTINUE;
+            if (hook)
+                status = hook(cx, script, REGS.pc, rval.address(),
+                              cx->runtime()->debugHooks.interruptHookData);
+            if (status == JSTRAP_CONTINUE && script->stepModeEnabled())
+                status = Debugger::onSingleStep(cx, &rval);
+            switch (status) {
+              case JSTRAP_ERROR:
+                goto error;
+              case JSTRAP_CONTINUE:
+                break;
+              case JSTRAP_RETURN:
+                REGS.fp()->setReturnValue(rval);
+                interpReturnOK = true;
+                goto forced_return;
+              case JSTRAP_THROW:
+                cx->setPendingException(rval);
+                goto error;
+              default:;
+            }
+            moreInterrupts = true;
         }
-        moreInterrupts = true;
-    }
 
-    if (script->hasAnyBreakpointsOrStepMode())
-        moreInterrupts = true;
+        if (script->hasAnyBreakpointsOrStepMode())
+            moreInterrupts = true;
 
-    if (script->hasBreakpointsAt(REGS.pc)) {
-        RootedValue rval(cx);
-        JSTrapStatus status = Debugger::onTrap(cx, &rval);
-        switch (status) {
-          case JSTRAP_ERROR:
-            goto error;
-          case JSTRAP_RETURN:
-            REGS.fp()->setReturnValue(rval);
-            interpReturnOK = true;
-            goto forced_return;
-          case JSTRAP_THROW:
-            cx->setPendingException(rval);
-            goto error;
-          default:
-            break;
+        if (script->hasBreakpointsAt(REGS.pc)) {
+            RootedValue rval(cx);
+            JSTrapStatus status = Debugger::onTrap(cx, &rval);
+            switch (status) {
+              case JSTRAP_ERROR:
+                goto error;
+              case JSTRAP_RETURN:
+                REGS.fp()->setReturnValue(rval);
+                interpReturnOK = true;
+                goto forced_return;
+              case JSTRAP_THROW:
+                cx->setPendingException(rval);
+                goto error;
+              default:
+                break;
+            }
+            JS_ASSERT(status == JSTRAP_CONTINUE);
+            JS_ASSERT(rval.isInt32() && rval.toInt32() == op);
         }
-        JS_ASSERT(status == JSTRAP_CONTINUE);
-        JS_ASSERT(rval.isInt32() && rval.toInt32() == op);
     }
 
     JS_ASSERT(activation.opMask() == EnableInterruptsPseudoOpcode);
@@ -1468,6 +1474,7 @@ CASE(EnableInterruptsPseudoOpcode)
 
 /* Various 1-byte no-ops. */
 CASE(JSOP_NOP)
+CASE(JSOP_UNUSED2)
 CASE(JSOP_UNUSED44)
 CASE(JSOP_UNUSED45)
 CASE(JSOP_UNUSED46)
@@ -1524,6 +1531,7 @@ CASE(JSOP_UNUSED189)
 CASE(JSOP_UNUSED190)
 CASE(JSOP_UNUSED191)
 CASE(JSOP_UNUSED192)
+CASE(JSOP_UNUSED194)
 CASE(JSOP_UNUSED196)
 CASE(JSOP_UNUSED200)
 CASE(JSOP_UNUSED201)
@@ -1599,9 +1607,8 @@ CASE(JSOP_POPN)
 END_CASE(JSOP_POPN)
 
 CASE(JSOP_SETRVAL)
-CASE(JSOP_POPV)
     POP_RETURN_VALUE();
-END_CASE(JSOP_POPV)
+END_CASE(JSOP_SETRVAL)
 
 CASE(JSOP_ENTERWITH)
 {
@@ -1634,8 +1641,7 @@ CASE(JSOP_RETURN)
     POP_RETURN_VALUE();
     /* FALL THROUGH */
 
-CASE(JSOP_RETRVAL)    /* fp return value already set */
-CASE(JSOP_STOP)
+CASE(JSOP_RETRVAL)
 {
     /*
      * When the inlined frame exits with an exception or an error, ok will be
@@ -1651,13 +1657,13 @@ CASE(JSOP_STOP)
         TraceLogging::defaultLogger()->log(TraceLogging::SCRIPT_STOP);
 #endif
 
-        if (cx->compartment()->debugMode())
+        if (JS_UNLIKELY(cx->compartment()->debugMode()))
             interpReturnOK = ScriptDebugEpilogue(cx, REGS.fp(), interpReturnOK);
 
         if (!REGS.fp()->isYielding())
             REGS.fp()->epilogue(cx);
         else
-            probes::ExitScript(cx, script, script->function(), REGS.fp());
+            probes::ExitScript(cx, script, script->function(), REGS.fp()->hasPushedSPSFrame());
 
 #if defined(JS_ION)
   jit_return_pop_frame:
@@ -1755,7 +1761,7 @@ CASE(JSOP_IN)
 {
     HandleValue rref = REGS.stackHandleAt(-1);
     if (!rref.isObject()) {
-        js_ReportValueError(cx, JSMSG_IN_NOT_OBJECT, -1, rref, NullPtr());
+        js_ReportValueError(cx, JSMSG_IN_NOT_OBJECT, -1, rref, js::NullPtr());
         goto error;
     }
     RootedObject &obj = rootObject0;
@@ -2560,7 +2566,7 @@ CASE(JSOP_FUNCALL)
 
     if (!REGS.fp()->prologue(cx))
         goto error;
-    if (cx->compartment()->debugMode()) {
+    if (JS_UNLIKELY(cx->compartment()->debugMode())) {
         switch (ScriptDebugPrologue(cx, REGS.fp())) {
           case JSTRAP_CONTINUE:
             break;
@@ -2575,7 +2581,7 @@ CASE(JSOP_FUNCALL)
         }
     }
 
-    /* Load first op and dispatch it (safe since JSOP_STOP). */
+    /* Load first op and dispatch it (safe since JSOP_RETRVAL). */
     ADVANCE_AND_DISPATCH(0);
 }
 
@@ -2717,9 +2723,8 @@ CASE(JSOP_TABLESWITCH)
     if (rref.isInt32()) {
         i = rref.toInt32();
     } else {
-        double d;
-        /* Don't use mozilla::DoubleIsInt32; treat -0 (double) as 0. */
-        if (!rref.isDouble() || (d = rref.toDouble()) != (i = int32_t(rref.toDouble())))
+        /* Use mozilla::DoubleEqualsInt32 to treat -0 (double) as 0. */
+        if (!rref.isDouble() || !DoubleEqualsInt32(rref.toDouble(), &i))
             ADVANCE_AND_DISPATCH(len);
     }
 
@@ -2785,7 +2790,7 @@ CASE(JSOP_SETALIASEDVAR)
 
     // Avoid computing the name if no type updates are needed, as this may be
     // expensive on scopes with large numbers of variables.
-    PropertyName *name = obj.hasSingletonType() ? ScopeCoordinateName(cx, script, REGS.pc)
+    PropertyName *name = obj.hasSingletonType() ? ScopeCoordinateName(script, REGS.pc)
                                                 : nullptr;
 
     obj.setAliasedVar(cx, sc, name, REGS.sp[-1]);
@@ -3178,7 +3183,7 @@ CASE(JSOP_INSTANCEOF)
     RootedValue &rref = rootValue0;
     rref = REGS.sp[-1];
     if (rref.isPrimitive()) {
-        js_ReportValueError(cx, JSMSG_BAD_INSTANCEOF_RHS, -1, rref, NullPtr());
+        js_ReportValueError(cx, JSMSG_BAD_INSTANCEOF_RHS, -1, rref, js::NullPtr());
         goto error;
     }
     RootedObject &obj = rootObject0;
@@ -3284,7 +3289,7 @@ CASE(JSOP_YIELD)
     if (cx->innermostGenerator()->state == JSGEN_CLOSING) {
         RootedValue &val = rootValue0;
         val.setObject(REGS.fp()->callee());
-        js_ReportValueError(cx, JSMSG_BAD_GENERATOR_YIELD, JSDVG_SEARCH_STACK, val, NullPtr());
+        js_ReportValueError(cx, JSMSG_BAD_GENERATOR_YIELD, JSDVG_SEARCH_STACK, val, js::NullPtr());
         goto error;
     }
     REGS.fp()->setReturnValue(REGS.sp[-1]);
@@ -3324,7 +3329,7 @@ DEFAULT()
 
     if (cx->isExceptionPending()) {
         /* Call debugger throw hooks. */
-        if (cx->compartment()->debugMode()) {
+        if (JS_UNLIKELY(cx->compartment()->debugMode())) {
             JSTrapStatus status = DebugExceptionUnwind(cx, REGS.fp(), REGS.pc);
             switch (status) {
               case JSTRAP_ERROR:
@@ -3430,12 +3435,12 @@ DEFAULT()
         goto inline_return;
 
   exit:
-    if (cx->compartment()->debugMode())
+    if (JS_UNLIKELY(cx->compartment()->debugMode()))
         interpReturnOK = ScriptDebugEpilogue(cx, REGS.fp(), interpReturnOK);
     if (!REGS.fp()->isYielding())
         REGS.fp()->epilogue(cx);
     else
-        probes::ExitScript(cx, script, script->function(), REGS.fp());
+        probes::ExitScript(cx, script, script->function(), REGS.fp()->hasPushedSPSFrame());
 
     gc::MaybeVerifyBarriers(cx, true);
 

@@ -52,7 +52,8 @@ class CompositingRenderTargetD3D11 : public CompositingRenderTarget,
                                      public TextureSourceD3D11
 {
 public:
-  CompositingRenderTargetD3D11(ID3D11Texture2D* aTexture);
+  CompositingRenderTargetD3D11(ID3D11Texture2D* aTexture,
+                               const gfx::IntPoint& aOrigin);
 
   virtual TextureSourceD3D11* AsSourceD3D11() MOZ_OVERRIDE { return this; }
 
@@ -148,12 +149,10 @@ public:
     return nullptr; // TODO: cf bug 872568
   }
 
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char* Name() MOZ_OVERRIDE
   {
     return "DeprecatedTextureHostShmemD3D11";
   }
-#endif
 
   virtual void BeginTileIteration() MOZ_OVERRIDE
   {
@@ -213,9 +212,7 @@ public:
     return nullptr; // TODO: cf bug 872568
   }
 
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char* Name() { return "DeprecatedTextureHostDXGID3D11"; }
-#endif
 
 protected:
   virtual void UpdateImpl(const SurfaceDescriptor& aSurface,
@@ -251,12 +248,10 @@ public:
     return nullptr; // TODO: cf bug 872568
   }
 
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char* Name() MOZ_OVERRIDE
   {
     return "TextureImageDeprecatedTextureHostD3D11";
   }
-#endif
 
 protected:
   virtual void UpdateImpl(const SurfaceDescriptor& aSurface,

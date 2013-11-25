@@ -122,6 +122,12 @@ public:
     return resultMatrix;
   }
 
+  Matrix& operator*=(const Matrix &aMatrix)
+  {
+    Matrix resultMatrix = *this * aMatrix;
+    return *this = resultMatrix;
+  }
+
   /* Returns true if the other matrix is fuzzy-equal to this matrix.
    * Note that this isn't a cheap comparison!
    */
@@ -159,7 +165,27 @@ public:
            _31 == 0.0f && _32 == 0.0f;
   }
 
+  /* Returns true if the matrix is singular.
+   */
+  bool IsSingular() const
+  {
+    return Determinant() == 0;
+  }
+
   GFX2D_API void NudgeToIntegers();
+
+  bool IsTranslation() const
+  {
+    return FuzzyEqual(_11, 1.0f) && FuzzyEqual(_12, 0.0f) &&
+           FuzzyEqual(_21, 0.0f) && FuzzyEqual(_22, 1.0f);
+  }
+
+  bool IsIntegerTranslation() const
+  {
+    return IsTranslation() &&
+           FuzzyEqual(_31, floorf(_31 + 0.5f)) &&
+           FuzzyEqual(_32, floorf(_32 + 0.5f));
+  }
 
 private:
   static bool FuzzyEqual(Float aV1, Float aV2) {
@@ -202,6 +228,11 @@ public:
     MOZ_ASSERT(Is2D(), "Matrix is not a 2D affine transform");
 
     return Matrix(_11, _12, _21, _22, _41, _42);
+  }
+
+  bool Is2DIntegerTranslation() const
+  {
+    return Is2D() && As2D().IsIntegerTranslation();
   }
 
   // Apply a scale to this matrix. This scale will be applied -before- the

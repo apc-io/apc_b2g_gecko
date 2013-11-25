@@ -8,8 +8,6 @@ XPIDL_SOURCES += [
 
 XPIDL_MODULE = 'dom_ethernet'
 
-MODULE = 'dom'
-
 EXTRA_COMPONENTS += [
     'DOMEthernetManager.js',
     'DOMEthernetManager.manifest',
@@ -29,9 +27,5 @@ EXTRA_JS_MODULES += [
 #        'WifiUtils.cpp',
 #    ]
 
-LIBXUL_LIBRARY = True
-
-LIBRARY_NAME = 'domethernet_s'
-
-EXPORT_LIBRARY = True
+FINAL_LIBRARY = 'xul'
 

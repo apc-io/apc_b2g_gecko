@@ -11,6 +11,8 @@ EXPORTS.mozilla.dom.network += [
     'TCPSocketChild.h',
     'TCPSocketParent.h',
     'Types.h',
+    'UDPSocketChild.h',
+    'UDPSocketParent.h',
 ]
 
 SOURCES += [
@@ -19,14 +21,18 @@ SOURCES += [
     'TCPServerSocketParent.cpp',
     'TCPSocketChild.cpp',
     'TCPSocketParent.cpp',
+    'UDPSocketChild.cpp',
+    'UDPSocketParent.cpp',
 ]
 
 if CONFIG['MOZ_B2G_RIL']:
     EXPORTS.mozilla.dom.network += [
         'MobileConnection.h',
+        'MobileConnectionArray.h',
     ]
     SOURCES += [
         'MobileConnection.cpp',
+        'MobileConnectionArray.cpp',
     ]
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
@@ -56,13 +62,15 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
 IPDL_SOURCES += [
     'PTCPServerSocket.ipdl',
     'PTCPSocket.ipdl',
+    'PUDPSocket.ipdl',
 ]
 
 FAIL_ON_WARNINGS = True
 
-LIBXUL_LIBRARY = True
-
-LIBRARY_NAME = 'dom_network_s'
-
 include('/ipc/chromium/chromium-config.mozbuild')
+
+FINAL_LIBRARY = 'gklayout'
+LOCAL_INCLUDES += [
+    '/content/events/src',
+]
 

@@ -22,7 +22,10 @@
 
 struct gfxMatrix;
 class nsFrameLoader;
+class nsIContent;
+class nsIPrincipal;
 class nsIURI;
+class nsIWidget;
 class CpowHolder;
 
 namespace mozilla {
@@ -119,14 +122,17 @@ public:
     virtual bool RecvSyncMessage(const nsString& aMessage,
                                  const ClonedMessageData& aData,
                                  const InfallibleTArray<CpowEntry>& aCpows,
+                                 const IPC::Principal& aPrincipal,
                                  InfallibleTArray<nsString>* aJSONRetVal);
     virtual bool AnswerRpcMessage(const nsString& aMessage,
                                   const ClonedMessageData& aData,
                                   const InfallibleTArray<CpowEntry>& aCpows,
+                                  const IPC::Principal& aPrincipal,
                                   InfallibleTArray<nsString>* aJSONRetVal);
     virtual bool RecvAsyncMessage(const nsString& aMessage,
                                   const ClonedMessageData& aData,
-                                  const InfallibleTArray<CpowEntry>& aCpows);
+                                  const InfallibleTArray<CpowEntry>& aCpows,
+                                  const IPC::Principal& aPrincipal);
     virtual bool RecvNotifyIMEFocus(const bool& aFocus,
                                     nsIMEUpdatePreference* aPreference,
                                     uint32_t* aSeqno);
@@ -156,12 +162,18 @@ public:
     virtual bool RecvGetDPI(float* aValue);
     virtual bool RecvGetDefaultScale(double* aValue);
     virtual bool RecvGetWidgetNativeData(WindowsHandle* aValue);
-    virtual bool RecvZoomToRect(const CSSRect& aRect);
-    virtual bool RecvUpdateZoomConstraints(const bool& aAllowZoom,
+    virtual bool RecvZoomToRect(const uint32_t& aPresShellId,
+                                const ViewID& aViewId,
+                                const CSSRect& aRect);
+    virtual bool RecvUpdateZoomConstraints(const uint32_t& aPresShellId,
+                                           const ViewID& aViewId,
+                                           const bool& aIsRoot,
+                                           const bool& aAllowZoom,
                                            const CSSToScreenScale& aMinZoom,
                                            const CSSToScreenScale& aMaxZoom);
     virtual bool RecvUpdateScrollOffset(const uint32_t& aPresShellId, const ViewID& aViewId, const CSSIntPoint& aScrollOffset);
-    virtual bool RecvContentReceivedTouch(const bool& aPreventDefault);
+    virtual bool RecvContentReceivedTouch(const ScrollableLayerGuid& aGuid,
+                                          const bool& aPreventDefault);
     virtual bool RecvRecordingDeviceEvents(const nsString& aRecordingStatus,
                                            const bool& aIsAudio,
                                            const bool& aIsVideo);
@@ -213,8 +225,7 @@ public:
     virtual bool DeallocPDocumentRendererParent(PDocumentRendererParent* actor);
 
     virtual PContentPermissionRequestParent*
-    AllocPContentPermissionRequestParent(const InfallibleTArray<PermissionRequest>& aRequests,
-                                         const IPC::Principal& aPrincipal);
+    AllocPContentPermissionRequestParent(const nsCString& aType, const nsCString& aAccess, const IPC::Principal& aPrincipal);
     virtual bool DeallocPContentPermissionRequestParent(PContentPermissionRequestParent* actor);
 
     virtual POfflineCacheUpdateParent* AllocPOfflineCacheUpdateParent(
@@ -253,6 +264,7 @@ protected:
                         bool aSync,
                         const StructuredCloneData* aCloneData,
                         CpowHolder* aCpows,
+                        nsIPrincipal* aPrincipal,
                         InfallibleTArray<nsString>* aJSONRetVal = nullptr);
 
     virtual bool Recv__delete__() MOZ_OVERRIDE;
@@ -337,8 +349,11 @@ private:
     // If we have a render frame currently, notify it that we're about
     // to dispatch |aEvent| to our child.  If there's a relevant
     // transform in place, |aOutEvent| is the transformed |aEvent| to
-    // dispatch to content.
+    // dispatch to content. |aOutTargetGuid| will contain the identifier
+    // of the APZC instance that handled the event. aOutTargetGuid may be
+    // null but aOutEvent must not be.
     void MaybeForwardEventToRenderFrame(const WidgetInputEvent& aEvent,
+                                        ScrollableLayerGuid* aOutTargetGuid,
                                         WidgetInputEvent* aOutEvent);
     // The offset for the child process which is sampled at touch start. This
     // means that the touch events are relative to where the frame was at the

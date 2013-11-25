@@ -32,7 +32,7 @@
 #include "nsIContentViewerContainer.h"
 #include "nsIContentViewer.h"
 #include "nsIMarkupDocumentViewer.h"
-#include "nsIDocShell.h"
+#include "nsDocShell.h"
 #include "nsDocShellLoadTypes.h"
 #include "nsIWebNavigation.h"
 #include "nsIBaseWindow.h"
@@ -83,6 +83,7 @@
 #include "nsBidiUtils.h"
 
 #include "mozilla/dom/EncodingUtils.h"
+#include "mozilla/dom/FallbackEncoding.h"
 #include "nsIEditingSession.h"
 #include "nsIEditor.h"
 #include "nsNodeInfoManager.h"
@@ -142,15 +143,6 @@ static bool ConvertToMidasInternalCommand(const nsAString & inCommandID,
 // ==================================================================
 // =
 // ==================================================================
-static void
-ReportUseOfDeprecatedMethod(nsHTMLDocument* aDoc, const char* aWarning)
-{
-  nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
-                                  NS_LITERAL_CSTRING("DOM Events"), aDoc,
-                                  nsContentUtils::eDOM_PROPERTIES,
-                                  aWarning);
-}
-
 static nsresult
 RemoveFromAgentSheets(nsCOMArray<nsIStyleSheet> &aAgentSheets, const nsAString& url)
 {
@@ -445,26 +437,13 @@ nsHTMLDocument::TryParentCharset(nsIDocShell*  aDocShell,
 }
 
 void
-nsHTMLDocument::TryWeakDocTypeDefault(int32_t& aCharsetSource,
-                                      nsACString& aCharset)
+nsHTMLDocument::TryFallback(int32_t& aCharsetSource, nsACString& aCharset)
 {
-  if (kCharsetFromWeakDocTypeDefault <= aCharsetSource)
+  if (kCharsetFromFallback <= aCharsetSource)
     return;
 
-  const nsAdoptingCString& defCharset =
-    Preferences::GetLocalizedCString("intl.charset.default");
-
-  // Don't let the user break things by setting intl.charset.default to
-  // not a rough ASCII superset
-  nsAutoCString canonical;
-  if (EncodingUtils::FindEncodingForLabel(defCharset, canonical) &&
-      EncodingUtils::IsAsciiCompatible(canonical)) {
-    aCharset = canonical;
-  } else {
-    aCharset.AssignLiteral("windows-1252");
-  }
-  aCharsetSource = kCharsetFromWeakDocTypeDefault;
-  return;
+  aCharsetSource = kCharsetFromFallback;
+  FallbackEncoding::FromLocale(aCharset);
 }
 
 void
@@ -642,7 +621,7 @@ nsHTMLDocument::StartDocumentLoad(const char* aCommand,
   }
 
   if (!IsHTML() || !docShell) { // no docshell for text/html XHR
-    charsetSource = IsHTML() ? kCharsetFromWeakDocTypeDefault
+    charsetSource = IsHTML() ? kCharsetFromFallback
                              : kCharsetFromDocTypeDefault;
     charset.AssignLiteral("UTF-8");
     TryChannelCharset(aChannel, charsetSource, charset, executor);
@@ -683,7 +662,7 @@ nsHTMLDocument::StartDocumentLoad(const char* aCommand,
       TryCacheCharset(cachingChan, charsetSource, charset);
     }
 
-    TryWeakDocTypeDefault(charsetSource, charset);
+    TryFallback(charsetSource, charset);
 
     if (wyciwygChannel) {
       // We know for sure that the parser needs to be using UTF16.
@@ -1383,7 +1362,7 @@ nsHTMLDocument::Open(JSContext* cx,
   }
 
   // check whether we're in the middle of unload.  If so, ignore this call.
-  nsCOMPtr<nsIDocShell> shell = do_QueryReferent(mDocumentContainer);
+  nsCOMPtr<nsIDocShell> shell(mDocumentContainer);
   if (!shell) {
     // We won't be able to create a parser anyway.
     nsCOMPtr<nsIDocument> ret = this;
@@ -1559,7 +1538,7 @@ nsHTMLDocument::Open(JSContext* cx,
     SetIsInitialDocument(false);
 
     nsCOMPtr<nsIScriptGlobalObject> newScope(do_QueryReferent(mScopeObject));
-    JS::RootedObject wrapper(cx, GetWrapper());
+    JS::Rooted<JSObject*> wrapper(cx, GetWrapper());
     if (oldScope && newScope != oldScope && wrapper) {
       rv = mozilla::dom::ReparentWrapper(cx, wrapper);
       if (rv.Failed()) {
@@ -2146,14 +2125,14 @@ nsHTMLDocument::GetSelection(ErrorResult& rv)
 NS_IMETHODIMP
 nsHTMLDocument::CaptureEvents(int32_t aEventFlags)
 {
-  ReportUseOfDeprecatedMethod(this, "UseOfCaptureEventsWarning");
+  WarnOnceAbout(nsIDocument::eUseOfCaptureEvents);
   return NS_OK;
 }
 
 NS_IMETHODIMP
 nsHTMLDocument::ReleaseEvents(int32_t aEventFlags)
 {
-  ReportUseOfDeprecatedMethod(this, "UseOfReleaseEventsWarning");
+  WarnOnceAbout(nsIDocument::eUseOfReleaseEvents);
   return NS_OK;
 }
 

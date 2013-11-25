@@ -170,7 +170,9 @@ enum {
 };
 
 // Make sure we have space for our bits
-#define ASSERT_NODE_FLAGS_SPACE(n) PR_STATIC_ASSERT(WRAPPER_CACHE_FLAGS_BITS_USED + (n) <= 32)
+#define ASSERT_NODE_FLAGS_SPACE(n) \
+  static_assert(WRAPPER_CACHE_FLAGS_BITS_USED + (n) <= 32, \
+                "Not enough space for our bits")
 ASSERT_NODE_FLAGS_SPACE(NODE_TYPE_SPECIFIC_BITS_OFFSET);
 
 /**
@@ -1076,6 +1078,12 @@ public:
   nsresult QuerySelector(const nsAString& aSelector, nsIDOMElement **aReturn);
   nsresult QuerySelectorAll(const nsAString& aSelector, nsIDOMNodeList **aReturn);
 
+protected:
+  // nsIDocument overrides this with its own (faster) version.  This
+  // should really only be called for elements and document fragments.
+  mozilla::dom::Element* GetElementById(const nsAString& aId);
+
+public:
   /**
    * Associate an object aData to aKey on this node. If aData is null any
    * previously registered object and UserDataHandler associated to aKey on
@@ -1309,22 +1317,26 @@ private:
   };
 
   void SetBoolFlag(BooleanFlag name, bool value) {
-    PR_STATIC_ASSERT(BooleanFlagCount <= 8*sizeof(mBoolFlags));
+    static_assert(BooleanFlagCount <= 8*sizeof(mBoolFlags),
+                  "Too many boolean flags");
     mBoolFlags = (mBoolFlags & ~(1 << name)) | (value << name);
   }
 
   void SetBoolFlag(BooleanFlag name) {
-    PR_STATIC_ASSERT(BooleanFlagCount <= 8*sizeof(mBoolFlags));
+    static_assert(BooleanFlagCount <= 8*sizeof(mBoolFlags),
+                  "Too many boolean flags");
     mBoolFlags |= (1 << name);
   }
 
   void ClearBoolFlag(BooleanFlag name) {
-    PR_STATIC_ASSERT(BooleanFlagCount <= 8*sizeof(mBoolFlags));
+    static_assert(BooleanFlagCount <= 8*sizeof(mBoolFlags),
+                  "Too many boolean flags");
     mBoolFlags &= ~(1 << name);
   }
 
   bool GetBoolFlag(BooleanFlag name) const {
-    PR_STATIC_ASSERT(BooleanFlagCount <= 8*sizeof(mBoolFlags));
+    static_assert(BooleanFlagCount <= 8*sizeof(mBoolFlags),
+                  "Too many boolean flags");
     return mBoolFlags & (1 << name);
   }
 
@@ -1533,6 +1545,7 @@ public:
     return ReplaceOrInsertBefore(true, &aNode, &aChild, aError);
   }
   nsINode* RemoveChild(nsINode& aChild, mozilla::ErrorResult& aError);
+  already_AddRefed<nsINode> CloneNode(mozilla::ErrorResult& aError);
   already_AddRefed<nsINode> CloneNode(bool aDeep, mozilla::ErrorResult& aError);
   bool IsEqualNode(nsINode* aNode);
   void GetNamespaceURI(nsAString& aNamespaceURI) const
@@ -1702,9 +1715,7 @@ public:
   */
 #define EVENT(name_, id_, type_, struct_)                             \
   mozilla::dom::EventHandlerNonNull* GetOn##name_();                  \
-  void SetOn##name_(mozilla::dom::EventHandlerNonNull* listener);     \
-  NS_IMETHOD GetOn##name_(JSContext *cx, JS::Value *vp);              \
-  NS_IMETHOD SetOn##name_(JSContext *cx, const JS::Value &v);
+  void SetOn##name_(mozilla::dom::EventHandlerNonNull* listener);
 #define TOUCH_EVENT EVENT
 #define DOCUMENT_ONLY_EVENT EVENT
 #include "nsEventNameList.h"

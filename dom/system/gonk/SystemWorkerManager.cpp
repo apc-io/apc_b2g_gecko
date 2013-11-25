@@ -17,7 +17,7 @@
 
 #include "SystemWorkerManager.h"
 
-#include "nsINetworkManager.h"
+#include "nsINetworkService.h"
 #include "nsIWifi.h"
 #include "nsIWorkerHolder.h"
 #include "nsIXPConnect.h"
@@ -31,6 +31,9 @@
 #include "AudioManager.h"
 #ifdef MOZ_B2G_RIL
 #include "mozilla/ipc/Ril.h"
+#endif
+#ifdef MOZ_NFC
+#include "mozilla/ipc/Nfc.h"
 #endif
 #include "mozilla/ipc/KeyStore.h"
 #include "nsIObserverService.h"
@@ -48,15 +51,12 @@ using namespace mozilla::dom::gonk;
 using namespace mozilla::ipc;
 using namespace mozilla::system;
 
-#define NS_NETWORKMANAGER_CID \
-  { 0x33901e46, 0x33b8, 0x11e1, \
-  { 0x98, 0x69, 0xf4, 0x6d, 0x04, 0xd2, 0x5b, 0xcc } }
-
 namespace {
 
 NS_DEFINE_CID(kWifiWorkerCID, NS_WIFIWORKER_CID);
-NS_DEFINE_CID(kNetworkManagerCID, NS_NETWORKMANAGER_CID);
+// NS_DEFINE_CID(kNetworkManagerCID, NS_NETWORKMANAGER_CID);
 NS_DEFINE_CID(kEthernetWorkerCID, NS_ETHERNETWORKER_CID);
+NS_DEFINE_CID(kNetworkServiceCID, NS_INETWORKSERVICE_IID);
 
 // Doesn't carry a reference, we're owned by services.
 SystemWorkerManager *gInstance = nullptr;
@@ -284,6 +284,10 @@ SystemWorkerManager::Shutdown()
   RilConsumer::Shutdown();
 #endif
 
+#ifdef MOZ_NFC
+  NfcConsumer::Shutdown();
+#endif
+
   StopNetd();
   mNetdWorker = nullptr;
 
@@ -345,9 +349,9 @@ SystemWorkerManager::GetInterface(const nsIID &aIID, void **aResult)
                               reinterpret_cast<nsIWifi**>(aResult));
   }
 
-  if (aIID.Equals(NS_GET_IID(nsINetworkManager))) {
+  if (aIID.Equals(NS_GET_IID(nsINetworkService))) {
     return CallQueryInterface(mNetdWorker,
-                              reinterpret_cast<nsINetworkManager**>(aResult));
+                              reinterpret_cast<nsINetworkService**>(aResult));
   }
 
   if (aIID.Equals(NS_GET_IID(nsIEthernet))) {
@@ -383,9 +387,31 @@ SystemWorkerManager::RegisterRilWorker(unsigned int aClientId,
 }
 
 nsresult
+SystemWorkerManager::RegisterNfcWorker(const JS::Value& aWorker,
+                                       JSContext* aCx)
+{
+#ifndef MOZ_NFC
+  return NS_ERROR_NOT_IMPLEMENTED;
+#else
+  NS_ENSURE_TRUE(!JSVAL_IS_PRIMITIVE(aWorker), NS_ERROR_UNEXPECTED);
+
+  JSAutoCompartment ac(aCx, JSVAL_TO_OBJECT(aWorker));
+
+  WorkerCrossThreadDispatcher* wctd =
+    GetWorkerCrossThreadDispatcher(aCx, aWorker);
+  if (!wctd) {
+    NS_WARNING("Failed to GetWorkerCrossThreadDispatcher for nfc");
+    return NS_ERROR_FAILURE;
+  }
+
+  return NfcConsumer::Register(wctd);
+#endif // MOZ_NFC
+}
+
+nsresult
 SystemWorkerManager::InitNetd(JSContext *cx)
 {
-  nsCOMPtr<nsIWorkerHolder> worker = do_GetService(kNetworkManagerCID);
+  nsCOMPtr<nsIWorkerHolder> worker = do_GetService(kNetworkServiceCID);
   NS_ENSURE_TRUE(worker, NS_ERROR_FAILURE);
 
   JS::Value workerval;

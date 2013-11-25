@@ -128,7 +128,6 @@ JOBS = { 'dbs':
 
          'explain':
              (('python', '%(analysis_scriptdir)s/explain.py',
-               '--expect-file=%(analysis_scriptdir)s/expect.json',
                '%(hazards)s', '%(gcFunctions)s',
                '[explained_hazards]', '[unnecessary]', '[refs]'),
               ('hazards.txt', 'unnecessary.txt', 'refs.txt'))
@@ -210,6 +209,8 @@ parser.add_argument('--buildcommand', '--build', '-b', type=str, nargs='?',
                     help='command to build the tree being analyzed')
 parser.add_argument('--tag', '-t', type=str, nargs='?',
                     help='name of job, also sets build command to "build.<tag>"')
+parser.add_argument('--expect-file', type=str, nargs='?',
+                    help='deprecated option, temporarily still present for backwards compatibility')
 
 args = parser.parse_args()
 for k,v in vars(args).items():

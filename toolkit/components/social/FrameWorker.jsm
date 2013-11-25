@@ -128,7 +128,8 @@ WorkerHandle.prototype = {
     this._worker.ports.clear();
     this._worker.ports = null;
     this._worker.browserPromise.then(browser => {
-      browser.parentNode.removeChild(browser);
+      let iframe = browser.ownerDocument.defaultView.frameElement;
+      iframe.parentNode.removeChild(iframe);
     });
     // wipe things out just incase other reference have snuck out somehow...
     this._worker.browserPromise = null;
@@ -198,15 +199,13 @@ function makeRemoteBrowser() {
     let browser = iframe.contentDocument.createElementNS(XUL_NS, "browser");
     browser.setAttribute("type", "content");
     browser.setAttribute("disableglobalhistory", "true");
-    let remote;
     // for now we use the same preference that enabled multiple workers - the
     // idea is that there is no point in having people help test multiple
     // "old" frameworkers - so anyone who wants multiple workers is forced to
     // help us test remote frameworkers too.
-    if (Services.prefs.prefHasUserValue("social.allowMultipleWorkers") &&
-        Services.prefs.getBoolPref("social.allowMultipleWorkers")) {
+    if (Services.prefs.getBoolPref("social.allowMultipleWorkers"))
       browser.setAttribute("remote", "true");
-    }
+
     iframe.contentDocument.documentElement.appendChild(browser);
     deferred.resolve(browser);
   }, true);

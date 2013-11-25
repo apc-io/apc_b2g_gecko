@@ -54,7 +54,7 @@ public:
    * |aContentRect| is in CSS pixels, relative to the current cssPage.
    * |aScrollableSize| is the current content width/height in CSS pixels.
    */
-  virtual void SendAsyncScrollDOMEvent(FrameMetrics::ViewID aScrollId,
+  virtual void SendAsyncScrollDOMEvent(bool aIsRoot,
                                        const CSSRect &aContentRect,
                                        const CSSSize &aScrollableSize) = 0;
 
@@ -65,12 +65,13 @@ public:
   virtual void PostDelayedTask(Task* aTask, int aDelayMs) = 0;
 
   /**
-   * Retrieves the last known zoom constraints. This function should return
-   * false if there are no last known zoom constraints.
+   * Retrieves the last known zoom constraints for the root scrollable layer
+   * for this layers tree. This function should return false if there are no
+   * last known zoom constraints.
    */
-  virtual bool GetZoomConstraints(bool* aOutAllowZoom,
-                                  CSSToScreenScale* aOutMinZoom,
-                                  CSSToScreenScale* aOutMaxZoom)
+  virtual bool GetRootZoomConstraints(bool* aOutAllowZoom,
+                                      CSSToScreenScale* aOutMinZoom,
+                                      CSSToScreenScale* aOutMaxZoom)
   {
     return false;
   }

@@ -140,7 +140,7 @@ xpc_qsDefineQuickStubs(JSContext *cx, JSObject *protoArg, unsigned flags,
                 }
 
                 if (entry->newBindingProperties) {
-                    mozilla::dom::DefineWebIDLBindingPropertiesOnXPCProto(cx, proto, entry->newBindingProperties);
+                    mozilla::dom::DefineWebIDLBindingPropertiesOnXPCObject(cx, proto, entry->newBindingProperties, false);
                 }
                 // Next.
                 size_t j = entry->parentInterface;
@@ -296,21 +296,6 @@ xpc_qsThrowMethodFailed(JSContext *cx, nsresult rv, jsval *vp)
     RootedId memberId(cx);
     GetMethodInfo(cx, vp, &ifaceName, memberId.address());
     return ThrowCallFailed(cx, rv, ifaceName, memberId, nullptr);
-}
-
-bool
-xpc_qsThrowMethodFailedWithCcx(XPCCallContext &ccx, nsresult rv)
-{
-    ThrowBadResult(rv, ccx);
-    return false;
-}
-
-bool
-xpc_qsThrowMethodFailedWithDetails(JSContext *cx, nsresult rv,
-                                   const char *ifaceName,
-                                   const char *memberName)
-{
-    return ThrowCallFailed(cx, rv, ifaceName, JSID_VOIDHANDLE, memberName);
 }
 
 static void
@@ -763,44 +748,17 @@ xpc_qsUnwrapArgImpl(JSContext *cx,
 }
 
 bool
-xpc_qsJsvalToCharStr(JSContext *cx, jsval v, JSAutoByteString *bytes)
+xpc_qsJsvalToCharStr(JSContext *cx, HandleValue v, JSAutoByteString *bytes)
 {
-    JSString *str;
-
     MOZ_ASSERT(!bytes->ptr());
-    if (JSVAL_IS_STRING(v)) {
-        str = JSVAL_TO_STRING(v);
-    } else if (JSVAL_IS_VOID(v) || JSVAL_IS_NULL(v)) {
-        return true;
-    } else {
-        if (!(str = JS_ValueToString(cx, v)))
-            return false;
-    }
+
+    if (v.isNullOrUndefined())
+      return true;
+
+    JSString *str = ToString(cx, v);
+    if (!str)
+      return false;
     return !!bytes->encodeLatin1(cx, str);
-}
-
-bool
-xpc_qsJsvalToWcharStr(JSContext *cx, jsval v, jsval *pval, const PRUnichar **pstr)
-{
-    JSString *str;
-
-    if (JSVAL_IS_STRING(v)) {
-        str = JSVAL_TO_STRING(v);
-    } else if (JSVAL_IS_VOID(v) || JSVAL_IS_NULL(v)) {
-        *pstr = nullptr;
-        return true;
-    } else {
-        if (!(str = JS_ValueToString(cx, v)))
-            return false;
-        *pval = STRING_TO_JSVAL(str);  // Root the new string.
-    }
-
-    const jschar *chars = JS_GetStringCharsZ(cx, str);
-    if (!chars)
-        return false;
-
-    *pstr = static_cast<const PRUnichar *>(chars);
-    return true;
 }
 
 namespace xpc {
@@ -809,10 +767,9 @@ bool
 NonVoidStringToJsval(JSContext *cx, nsAString &str, MutableHandleValue rval)
 {
     nsStringBuffer* sharedBuffer;
-    jsval jsstr = XPCStringConvert::ReadableToJSVal(cx, str, &sharedBuffer);
-    if (JSVAL_IS_NULL(jsstr))
-        return false;
-    rval.set(jsstr);
+    if (!XPCStringConvert::ReadableToJSVal(cx, str, &sharedBuffer, rval))
+      return false;
+
     if (sharedBuffer) {
         // The string was shared but ReadableToJSVal didn't addref it.
         // Move the ownership from str to jsstr.
@@ -822,28 +779,6 @@ NonVoidStringToJsval(JSContext *cx, nsAString &str, MutableHandleValue rval)
 }
 
 } // namespace xpc
-
-bool
-xpc_qsStringToJsstring(JSContext *cx, nsString &str, JSString **rval)
-{
-    // From the T_DOMSTRING case in XPCConvert::NativeData2JS.
-    if (str.IsVoid()) {
-        *rval = nullptr;
-        return true;
-    }
-
-    nsStringBuffer* sharedBuffer;
-    jsval jsstr = XPCStringConvert::ReadableToJSVal(cx, str, &sharedBuffer);
-    if (JSVAL_IS_NULL(jsstr))
-        return false;
-    *rval = JSVAL_TO_STRING(jsstr);
-    if (sharedBuffer) {
-        // The string was shared but ReadableToJSVal didn't addref it.
-        // Move the ownership from str to jsstr.
-        str.ForgetSharedBuffer();
-    }
-    return true;
-}
 
 bool
 xpc_qsXPCOMObjectToJsval(JSContext *cx, qsObjectHelper &aHelper,

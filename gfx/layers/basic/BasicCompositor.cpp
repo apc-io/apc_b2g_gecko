@@ -10,9 +10,12 @@
 #include "nsIWidget.h"
 #include "gfx2DGlue.h"
 #include "mozilla/gfx/2D.h"
+#include "mozilla/gfx/Helpers.h"
 #include "gfxUtils.h"
 #include <algorithm>
 #include "ImageContainer.h"
+#define PIXMAN_DONT_DEFINE_STDINT
+#include "pixman.h"                     // for pixman_f_transform, etc
 
 namespace mozilla {
 using namespace mozilla::gfx;
@@ -115,10 +118,10 @@ protected:
   {
     EnsureSurface();
     if (!mSurface) {
-      mSurface = mCompositor->GetDrawTarget()->CreateSourceSurfaceFromData(mThebesImage->Data(),
-                                                                           mSize,
-                                                                           mThebesImage->Stride(),
-                                                                           mFormat);
+      mSurface = Factory::CreateWrappingDataSourceSurface(mThebesImage->Data(),
+                                                          mThebesImage->Stride(),
+                                                          mSize,
+                                                          mFormat);
     }
     return true;
   }
@@ -250,20 +253,20 @@ void BasicCompositor::Destroy()
 TemporaryRef<CompositingRenderTarget>
 BasicCompositor::CreateRenderTarget(const IntRect& aRect, SurfaceInitMode aInit)
 {
-  MOZ_ASSERT(aInit != INIT_MODE_COPY);
   RefPtr<DrawTarget> target = mDrawTarget->CreateSimilarDrawTarget(aRect.Size(), FORMAT_B8G8R8A8);
 
-  RefPtr<BasicCompositingRenderTarget> rt = new BasicCompositingRenderTarget(target, aRect.Size());
+  RefPtr<BasicCompositingRenderTarget> rt = new BasicCompositingRenderTarget(target, aRect);
 
   return rt.forget();
 }
 
 TemporaryRef<CompositingRenderTarget>
 BasicCompositor::CreateRenderTargetFromSource(const IntRect &aRect,
-                                              const CompositingRenderTarget *aSource)
+                                              const CompositingRenderTarget *aSource,
+                                              const IntPoint &aSourcePoint)
 {
   RefPtr<DrawTarget> target = mDrawTarget->CreateSimilarDrawTarget(aRect.Size(), FORMAT_B8G8R8A8);
-  RefPtr<BasicCompositingRenderTarget> rt = new BasicCompositingRenderTarget(target, aRect.Size());
+  RefPtr<BasicCompositingRenderTarget> rt = new BasicCompositingRenderTarget(target, aRect);
 
   DrawTarget *source;
   if (aSource) {
@@ -276,7 +279,8 @@ BasicCompositor::CreateRenderTargetFromSource(const IntRect &aRect,
 
   RefPtr<SourceSurface> snapshot = source->Snapshot();
 
-  rt->mDrawTarget->CopySurface(snapshot, aRect, IntPoint(0, 0));
+  IntRect sourceRect(aSourcePoint, aRect.Size());
+  rt->mDrawTarget->CopySurface(snapshot, sourceRect, IntPoint(0, 0));
   return rt.forget();
 }
 
@@ -329,25 +333,134 @@ DrawSurfaceWithTextureCoords(DrawTarget *aDest,
   }
 }
 
-void
-BasicCompositor::DrawQuad(const gfx::Rect& aRect, const gfx::Rect& aClipRect,
-                          const EffectChain &aEffectChain,
-                          gfx::Float aOpacity, const gfx::Matrix4x4 &aTransform,
-                          const gfx::Point& aOffset)
+static pixman_transform
+Matrix3DToPixman(const gfx3DMatrix& aMatrix)
 {
-  DrawTarget *dest = mRenderTarget ? mRenderTarget->mDrawTarget : mDrawTarget;
+  pixman_f_transform transform;
 
-  if (!aTransform.Is2D()) {
-    NS_WARNING("Can't handle 3D transforms yet!");
+  transform.m[0][0] = aMatrix._11;
+  transform.m[0][1] = aMatrix._21;
+  transform.m[0][2] = aMatrix._41;
+  transform.m[1][0] = aMatrix._12;
+  transform.m[1][1] = aMatrix._22;
+  transform.m[1][2] = aMatrix._42;
+  transform.m[2][0] = aMatrix._14;
+  transform.m[2][1] = aMatrix._24;
+  transform.m[2][2] = aMatrix._44;
+
+  pixman_transform result;
+  pixman_transform_from_pixman_f_transform(&result, &transform);
+
+  return result;
+}
+
+static void
+PixmanTransform(DataSourceSurface* aDest,
+                DataSourceSurface* aSource,
+                const gfx3DMatrix& aTransform,
+                gfxPoint aDestOffset)
+{
+  IntSize destSize = aDest->GetSize();
+  pixman_image_t* dest = pixman_image_create_bits(PIXMAN_a8r8g8b8,
+                                                  destSize.width,
+                                                  destSize.height,
+                                                  (uint32_t*)aDest->GetData(),
+                                                  aDest->Stride());
+
+  IntSize srcSize = aSource->GetSize();
+  pixman_image_t* src = pixman_image_create_bits(PIXMAN_a8r8g8b8,
+                                                 srcSize.width,
+                                                 srcSize.height,
+                                                 (uint32_t*)aSource->GetData(),
+                                                 aSource->Stride());
+
+  NS_ABORT_IF_FALSE(src && dest, "Failed to create pixman images?");
+
+  pixman_transform pixTransform = Matrix3DToPixman(aTransform);
+  pixman_transform pixTransformInverted;
+
+  // If the transform is singular then nothing would be drawn anyway, return here
+  if (!pixman_transform_invert(&pixTransformInverted, &pixTransform)) {
+    pixman_image_unref(dest);
+    pixman_image_unref(src);
     return;
   }
+  pixman_image_set_transform(src, &pixTransformInverted);
 
-  dest->PushClipRect(aClipRect);
+  pixman_image_composite32(PIXMAN_OP_SRC,
+                           src,
+                           nullptr,
+                           dest,
+                           aDestOffset.x,
+                           aDestOffset.y,
+                           0,
+                           0,
+                           0,
+                           0,
+                           destSize.width,
+                           destSize.height);
 
-  Matrix oldTransform = dest->GetTransform();
-  Matrix newTransform = aTransform.As2D();
-  newTransform.Translate(-aOffset.x, -aOffset.y);
-  dest->SetTransform(newTransform);
+  pixman_image_unref(dest);
+  pixman_image_unref(src);
+}
+
+static inline IntRect
+RoundOut(Rect r)
+{
+  r.RoundOut();
+  return IntRect(r.x, r.y, r.width, r.height);
+}
+
+void
+BasicCompositor::DrawQuad(const gfx::Rect& aRect,
+                          const gfx::Rect& aClipRect,
+                          const EffectChain &aEffectChain,
+                          gfx::Float aOpacity,
+                          const gfx::Matrix4x4 &aTransform)
+{
+  RefPtr<DrawTarget> buffer = mRenderTarget->mDrawTarget;
+
+  // For 2D drawing, |dest| and |buffer| are the same surface. For 3D drawing,
+  // |dest| is a temporary surface.
+  RefPtr<DrawTarget> dest = buffer;
+
+  buffer->PushClipRect(aClipRect);
+  AutoSaveTransform autoSaveTransform(dest);
+
+  Matrix newTransform;
+  Rect transformBounds;
+  gfx3DMatrix new3DTransform;
+  IntPoint offset = mRenderTarget->GetOrigin();
+
+  if (aTransform.Is2D()) {
+    newTransform = aTransform.As2D();
+  } else {
+    // Create a temporary surface for the transform.
+    dest = gfxPlatform::GetPlatform()->CreateOffscreenContentDrawTarget(RoundOut(aRect).Size(), FORMAT_B8G8R8A8);
+    if (!dest) {
+      return;
+    }
+
+    // Get the bounds post-transform.
+    To3DMatrix(aTransform, new3DTransform);
+    gfxRect bounds = new3DTransform.TransformBounds(ThebesRect(aRect));
+    bounds.IntersectRect(bounds, gfxRect(offset.x, offset.y, buffer->GetSize().width, buffer->GetSize().height));
+
+    transformBounds = ToRect(bounds);
+    transformBounds.RoundOut();
+
+    // Propagate the coordinate offset to our 2D draw target.
+    newTransform.Translate(transformBounds.x, transformBounds.y);
+
+    // When we apply the 3D transformation, we do it against a temporary
+    // surface, so undo the coordinate offset.
+    new3DTransform = new3DTransform * gfx3DMatrix::Translation(-transformBounds.x, -transformBounds.y, 0);
+
+    transformBounds.MoveTo(0, 0);
+  }
+
+  newTransform.Translate(-offset.x, -offset.y);
+  buffer->SetTransform(newTransform);
 
   RefPtr<SourceSurface> sourceMask;
   Matrix maskTransform;
@@ -411,17 +524,33 @@ BasicCompositor::DrawQuad(const gfx::Rect& aRect, const gfx::Rect& aClipRect,
     }
   }
 
+  if (!aTransform.Is2D()) {
+    dest->Flush();
+
+    RefPtr<SourceSurface> snapshot = dest->Snapshot();
+    RefPtr<DataSourceSurface> source = snapshot->GetDataSurface();
+    RefPtr<DataSourceSurface> temp =
+      Factory::CreateDataSourceSurface(RoundOut(transformBounds).Size(), FORMAT_B8G8R8A8);
+    if (!temp) {
+      return;
+    }
+
+    PixmanTransform(temp, source, new3DTransform, gfxPoint(0, 0));
+
+    buffer->DrawSurface(temp, transformBounds, transformBounds);
+  }
+
   if (aEffectChain.mSecondaryEffects[EFFECT_MASK]) {
     EffectMask *effectMask = static_cast<EffectMask*>(aEffectChain.mSecondaryEffects[EFFECT_MASK].get());
     static_cast<DeprecatedTextureHost*>(effectMask->mMaskTexture)->Unlock();
   }
 
-  dest->SetTransform(oldTransform);
-  dest->PopClip();
+  buffer->PopClip();
 }
 
 void
-BasicCompositor::BeginFrame(const gfx::Rect *aClipRectIn,
+BasicCompositor::BeginFrame(const nsIntRegion& aInvalidRegion,
+                            const gfx::Rect *aClipRectIn,
                             const gfxMatrix& aTransform,
                             const gfx::Rect& aRenderBounds,
                             gfx::Rect *aClipRectOut /* = nullptr */,
@@ -432,6 +561,18 @@ BasicCompositor::BeginFrame(const gfx::Rect *aClipRectIn,
   Rect rect = Rect(0, 0, intRect.width, intRect.height);
   mWidgetSize = intRect.Size();
 
+  nsIntRect invalidRect = aInvalidRegion.GetBounds();
+  mInvalidRect = IntRect(invalidRect.x, invalidRect.y, invalidRect.width, invalidRect.height);
+  mInvalidRegion = aInvalidRegion;
+
+  if (aRenderBoundsOut) {
+    *aRenderBoundsOut = Rect();
+  }
+
+  if (mInvalidRect.width <= 0 || mInvalidRect.height <= 0) {
+    return;
+  }
+
   if (mCopyTarget) {
     // If we have a copy target, then we don't have a widget-provided mDrawTarget (currently). Create a dummy
     // placeholder so that CreateRenderTarget() works.
@@ -440,16 +581,21 @@ BasicCompositor::BeginFrame(const gfx::Rect *aClipRectIn,
     mDrawTarget = mWidget->StartRemoteDrawing();
   }
   if (!mDrawTarget) {
-    if (aRenderBoundsOut) {
-      *aRenderBoundsOut = Rect();
-    }
     return;
   }
 
   // Setup an intermediate render target to buffer all compositing. We will
   // copy this into mDrawTarget (the widget), and/or mCopyTarget in EndFrame()
-  RefPtr<CompositingRenderTarget> target = CreateRenderTarget(IntRect(0, 0, intRect.width, intRect.height), INIT_MODE_CLEAR);
+  RefPtr<CompositingRenderTarget> target = CreateRenderTarget(mInvalidRect, INIT_MODE_CLEAR);
   SetRenderTarget(target);
+
+  // We only allocate a surface sized to the invalidated region, so we need to
+  // translate future coordinates.
+  Matrix transform;
+  transform.Translate(-invalidRect.x, -invalidRect.y);
+  mRenderTarget->mDrawTarget->SetTransform(transform);
+
+  gfxUtils::ClipToRegion(mRenderTarget->mDrawTarget, aInvalidRegion);
 
   if (aRenderBoundsOut) {
     *aRenderBoundsOut = rect;
@@ -469,20 +615,26 @@ void
 BasicCompositor::EndFrame()
 {
   mRenderTarget->mDrawTarget->PopClip();
+  mRenderTarget->mDrawTarget->PopClip();
 
+  // Note: Most platforms require us to buffer drawing to the widget surface.
+  // That's why we don't draw to mDrawTarget directly.
   RefPtr<SourceSurface> source = mRenderTarget->mDrawTarget->Snapshot();
-  if (mCopyTarget) {
-    mCopyTarget->CopySurface(source,
-                             IntRect(0, 0, mWidgetSize.width, mWidgetSize.height),
-                             IntPoint(0, 0));
-  } else {
-    // Most platforms require us to buffer drawing to the widget surface.
-    // That's why we don't draw to mDrawTarget directly.
-    mDrawTarget->CopySurface(source,
-	                           IntRect(0, 0, mWidgetSize.width, mWidgetSize.height),
-			                       IntPoint(0, 0));
+  RefPtr<DrawTarget> dest(mCopyTarget ? mCopyTarget : mDrawTarget);
+  
+  // The source DrawTarget is clipped to the invalidation region, so we have
+  // to copy the individual rectangles in the region or else we'll draw blank
+  // pixels.
+  nsIntRegionRectIterator iter(mInvalidRegion);
+  for (const nsIntRect *r = iter.Next(); r; r = iter.Next()) {
+    dest->CopySurface(source,
+                      IntRect(r->x - mInvalidRect.x, r->y - mInvalidRect.y, r->width, r->height),
+                      IntPoint(r->x, r->y));
+  }
+  if (!mCopyTarget) {
     mWidget->EndRemoteDrawing();
   }
+
   mDrawTarget = nullptr;
   mRenderTarget = nullptr;
 }
@@ -490,6 +642,7 @@ BasicCompositor::EndFrame()
 void
 BasicCompositor::AbortFrame()
 {
+  mRenderTarget->mDrawTarget->PopClip();
   mRenderTarget->mDrawTarget->PopClip();
   mDrawTarget = nullptr;
   mRenderTarget = nullptr;

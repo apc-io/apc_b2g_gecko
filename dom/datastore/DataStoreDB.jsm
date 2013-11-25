@@ -19,6 +19,7 @@ const DATASTOREDB_REVISION_INDEX = 'revisionIndex';
 
 Cu.import('resource://gre/modules/IndexedDBHelper.jsm');
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.importGlobalProperties(["indexedDB"]);
 
 XPCOMUtils.defineLazyServiceGetter(this, "uuidgen",
                                    "@mozilla.org/uuid-generator;1",
@@ -83,10 +84,10 @@ DataStoreDB.prototype = {
     );
   },
 
-  addRevision: function(aStore, aId, aType, aSuccessCb) {
-    debug("AddRevision: " + aId + " - " + aType);
+  addRevision: function(aStore, aKey, aType, aSuccessCb) {
+    debug("AddRevision: " + aKey + " - " + aType);
     let revisionId =  uuidgen.generateUUID().toString();
-    let request = aStore.put({ revisionId: revisionId, objectId: aId, operation: aType });
+    let request = aStore.put({ revisionId: revisionId, objectId: aKey, operation: aType });
     request.onsuccess = function() {
       aSuccessCb(revisionId);
     }

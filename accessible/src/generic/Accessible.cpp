@@ -78,6 +78,7 @@
 #endif
 
 #include "mozilla/Assertions.h"
+#include "mozilla/FloatingPoint.h"
 #include "mozilla/MouseEvents.h"
 #include "mozilla/unused.h"
 #include "mozilla/Preferences.h"
@@ -376,10 +377,8 @@ Accessible::AccessKey() const
   nsIDocument* document = mContent->GetCurrentDoc();
   if (!document)
     return KeyBinding();
-  nsCOMPtr<nsISupports> container = document->GetContainer();
-  if (!container)
-    return KeyBinding();
-  nsCOMPtr<nsIDocShellTreeItem> treeItem(do_QueryInterface(container));
+
+  nsCOMPtr<nsIDocShellTreeItem> treeItem(document->GetDocShell());
   if (!treeItem)
     return KeyBinding();
 
@@ -1013,7 +1012,7 @@ Accessible::TakeSelection()
   Accessible* select = nsAccUtils::GetSelectableContainer(this, State());
   if (select) {
     if (select->State() & states::MULTISELECTABLE)
-      select->ClearSelection();
+      select->UnselectAll();
     return SetSelected(true);
   }
 
@@ -1293,9 +1292,7 @@ Accessible::NativeAttributes()
                                            nsCoreUtils::GetRoleContent(doc));
 
     // Allow ARIA live region markup from outer documents to override
-    nsCOMPtr<nsISupports> container = doc->GetContainer(); 
-    nsCOMPtr<nsIDocShellTreeItem> docShellTreeItem =
-      do_QueryInterface(container);
+    nsCOMPtr<nsIDocShellTreeItem> docShellTreeItem = doc->GetDocShell();
     if (!docShellTreeItem)
       break;
 
@@ -1672,61 +1669,53 @@ Accessible::Value(nsString& aValue)
   }
 }
 
-// nsIAccessibleValue
-NS_IMETHODIMP
-Accessible::GetMaximumValue(double *aMaximumValue)
+double
+Accessible::MaxValue() const
 {
-  return GetAttrValue(nsGkAtoms::aria_valuemax, aMaximumValue);
+  return AttrNumericValue(nsGkAtoms::aria_valuemax);
 }
 
-NS_IMETHODIMP
-Accessible::GetMinimumValue(double *aMinimumValue)
+double
+Accessible::MinValue() const
 {
-  return GetAttrValue(nsGkAtoms::aria_valuemin, aMinimumValue);
+  return AttrNumericValue(nsGkAtoms::aria_valuemin);
 }
 
-NS_IMETHODIMP
-Accessible::GetMinimumIncrement(double *aMinIncrement)
+double
+Accessible::Step() const
 {
-  NS_ENSURE_ARG_POINTER(aMinIncrement);
-  *aMinIncrement = 0;
-
-  // No mimimum increment in dynamic content spec right now
-  return NS_OK_NO_ARIA_VALUE;
+  return UnspecifiedNaN(); // no mimimum increment (step) in ARIA.
 }
 
-NS_IMETHODIMP
-Accessible::GetCurrentValue(double *aValue)
+double
+Accessible::CurValue() const
 {
-  return GetAttrValue(nsGkAtoms::aria_valuenow, aValue);
+  return AttrNumericValue(nsGkAtoms::aria_valuenow);
 }
 
-NS_IMETHODIMP
-Accessible::SetCurrentValue(double aValue)
+bool
+Accessible::SetCurValue(double aValue)
 {
-  if (IsDefunct())
-    return NS_ERROR_FAILURE;
-
   if (!mRoleMapEntry || mRoleMapEntry->valueRule == eNoValue)
-    return NS_OK_NO_ARIA_VALUE;
+    return false;
 
   const uint32_t kValueCannotChange = states::READONLY | states::UNAVAILABLE;
-
   if (State() & kValueCannotChange)
-    return NS_ERROR_FAILURE;
+    return false;
 
-  double minValue = 0;
-  if (NS_SUCCEEDED(GetMinimumValue(&minValue)) && aValue < minValue)
-    return NS_ERROR_INVALID_ARG;
+  double checkValue = MinValue();
+  if (!IsNaN(checkValue) && aValue < checkValue)
+    return false;
 
-  double maxValue = 0;
-  if (NS_SUCCEEDED(GetMaximumValue(&maxValue)) && aValue > maxValue)
-    return NS_ERROR_INVALID_ARG;
+  checkValue = MaxValue();
+  if (!IsNaN(checkValue) && aValue > checkValue)
+    return false;
 
-  nsAutoString newValue;
-  newValue.AppendFloat(aValue);
-  return mContent->SetAttr(kNameSpaceID_None,
-                           nsGkAtoms::aria_valuenow, newValue, true);
+  nsAutoString strValue;
+  strValue.AppendFloat(aValue);
+
+  return NS_SUCCEEDED(
+    mContent->SetAttr(kNameSpaceID_None, nsGkAtoms::aria_valuenow, strValue, true));
 }
 
 /* void setName (in DOMString name); */
@@ -2332,118 +2321,6 @@ Accessible::ScrollToPoint(uint32_t aCoordinateType, int32_t aX, int32_t aY)
   return NS_OK;
 }
 
-// nsIAccessibleSelectable
-NS_IMETHODIMP
-Accessible::GetSelectedChildren(nsIArray** aSelectedAccessibles)
-{
-  NS_ENSURE_ARG_POINTER(aSelectedAccessibles);
-  *aSelectedAccessibles = nullptr;
-
-  if (IsDefunct() || !IsSelect())
-    return NS_ERROR_FAILURE;
-
-  nsCOMPtr<nsIArray> items = SelectedItems();
-  if (items) {
-    uint32_t length = 0;
-    items->GetLength(&length);
-    if (length)
-      items.swap(*aSelectedAccessibles);
-  }
-
-  return NS_OK;
-}
-
-// return the nth selected descendant nsIAccessible object
-NS_IMETHODIMP
-Accessible::RefSelection(int32_t aIndex, nsIAccessible** aSelected)
-{
-  NS_ENSURE_ARG_POINTER(aSelected);
-  *aSelected = nullptr;
-
-  if (IsDefunct() || !IsSelect())
-    return NS_ERROR_FAILURE;
-
-  if (aIndex < 0) {
-    return NS_ERROR_INVALID_ARG;
-  }
-
-  *aSelected = GetSelectedItem(aIndex);
-  if (*aSelected) {
-    NS_ADDREF(*aSelected);
-    return NS_OK;
-  }
-
-  return NS_ERROR_INVALID_ARG;
-}
-
-NS_IMETHODIMP
-Accessible::GetSelectionCount(int32_t* aSelectionCount)
-{
-  NS_ENSURE_ARG_POINTER(aSelectionCount);
-  *aSelectionCount = 0;
-
-  if (IsDefunct() || !IsSelect())
-    return NS_ERROR_FAILURE;
-
-  *aSelectionCount = SelectedItemCount();
-  return NS_OK;
-}
-
-NS_IMETHODIMP Accessible::AddChildToSelection(int32_t aIndex)
-{
-  if (IsDefunct() || !IsSelect())
-    return NS_ERROR_FAILURE;
-
-  return aIndex >= 0 && AddItemToSelection(aIndex) ?
-    NS_OK : NS_ERROR_INVALID_ARG;
-}
-
-NS_IMETHODIMP Accessible::RemoveChildFromSelection(int32_t aIndex)
-{
-  if (IsDefunct() || !IsSelect())
-    return NS_ERROR_FAILURE;
-
-  return aIndex >=0 && RemoveItemFromSelection(aIndex) ?
-    NS_OK : NS_ERROR_INVALID_ARG;
-}
-
-NS_IMETHODIMP Accessible::IsChildSelected(int32_t aIndex, bool *aIsSelected)
-{
-  NS_ENSURE_ARG_POINTER(aIsSelected);
-  *aIsSelected = false;
-
-  if (IsDefunct() || !IsSelect())
-    return NS_ERROR_FAILURE;
-
-  NS_ENSURE_TRUE(aIndex >= 0, NS_ERROR_FAILURE);
-
-  *aIsSelected = IsItemSelected(aIndex);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-Accessible::ClearSelection()
-{
-  if (IsDefunct() || !IsSelect())
-    return NS_ERROR_FAILURE;
-
-  UnselectAll();
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-Accessible::SelectAllSelection(bool* aIsMultiSelect)
-{
-  NS_ENSURE_ARG_POINTER(aIsMultiSelect);
-  *aIsMultiSelect = false;
-
-  if (IsDefunct() || !IsSelect())
-    return NS_ERROR_FAILURE;
-
-  *aIsMultiSelect = SelectAll();
-  return NS_OK;
-}
-
 // nsIAccessibleHyperLink
 // Because of new-atk design, any embedded object in text can implement
 // nsIAccessibleHyperLink, which helps determine where it is located
@@ -2535,21 +2412,6 @@ Accessible::GetValid(bool *aValid)
 
   *aValid = IsLinkValid();
   return NS_OK;
-}
-
-// readonly attribute boolean nsIAccessibleHyperLink::selected
-NS_IMETHODIMP
-Accessible::GetSelected(bool *aSelected)
-{
-  NS_ENSURE_ARG_POINTER(aSelected);
-  *aSelected = false;
-
-  if (IsDefunct())
-    return NS_ERROR_FAILURE;
-
-  *aSelected = IsLinkSelected();
-  return NS_OK;
-
 }
 
 void
@@ -2889,14 +2751,6 @@ Accessible::EndOffset()
 
   HyperTextAccessible* hyperText = mParent ? mParent->AsHyperText() : nullptr;
   return hyperText ? (hyperText->GetChildOffset(this) + 1) : 0;
-}
-
-bool
-Accessible::IsLinkSelected()
-{
-  NS_PRECONDITION(IsLink(),
-                  "IsLinkSelected() called on something that is not a hyper link!");
-  return FocusMgr()->IsFocused(this);
 }
 
 uint32_t
@@ -3251,31 +3105,19 @@ Accessible::GetFirstAvailableAccessible(nsINode *aStartNode) const
   return nullptr;
 }
 
-nsresult
-Accessible::GetAttrValue(nsIAtom *aProperty, double *aValue)
+double
+Accessible::AttrNumericValue(nsIAtom* aAttr) const
 {
-  NS_ENSURE_ARG_POINTER(aValue);
-  *aValue = 0;
-
-  if (IsDefunct())
-    return NS_ERROR_FAILURE;  // Node already shut down
-
- if (!mRoleMapEntry || mRoleMapEntry->valueRule == eNoValue)
-    return NS_OK_NO_ARIA_VALUE;
+  if (!mRoleMapEntry || mRoleMapEntry->valueRule == eNoValue)
+    return UnspecifiedNaN();
 
   nsAutoString attrValue;
-  mContent->GetAttr(kNameSpaceID_None, aProperty, attrValue);
-
-  // Return zero value if there is no attribute or its value is empty.
-  if (attrValue.IsEmpty())
-    return NS_OK;
+  if (!mContent->GetAttr(kNameSpaceID_None, aAttr, attrValue))
+    return UnspecifiedNaN();
 
   nsresult error = NS_OK;
   double value = attrValue.ToDouble(&error);
-  if (NS_SUCCEEDED(error))
-    *aValue = value;
-
-  return NS_OK;
+  return NS_FAILED(error) ? UnspecifiedNaN() : value;
 }
 
 uint32_t

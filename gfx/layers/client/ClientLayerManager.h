@@ -60,9 +60,7 @@ public:
 
   virtual LayersBackend GetBackendType() { return LAYERS_CLIENT; }
   virtual void GetBackendName(nsAString& name);
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char* Name() const { return "Client"; }
-#endif // MOZ_LAYERS_HAVE_LOG
 
   virtual void SetRoot(Layer* aLayer);
 
@@ -81,6 +79,7 @@ public:
   }
 
   virtual void FlushRendering() MOZ_OVERRIDE;
+  void SendInvalidRegion(const nsIntRegion& aRegion);
 
   virtual bool NeedsWidgetInvalidation() MOZ_OVERRIDE { return false; }
 

@@ -110,9 +110,9 @@ JSCompartment::sweepCallsiteClones()
 }
 
 JSFunction *
-js::CloneFunctionAtCallsite(JSContext *cx, HandleFunction fun, HandleScript script, jsbytecode *pc)
+js::ExistingCloneFunctionAtCallsite(const CallsiteCloneTable &table, JSFunction *fun,
+                                    JSScript *script, jsbytecode *pc)
 {
-    JS_ASSERT(cx->typeInferenceEnabled());
     JS_ASSERT(fun->nonLazyScript()->shouldCloneAtCallsite);
     JS_ASSERT(!fun->nonLazyScript()->enclosingStaticScope());
     JS_ASSERT(types::UseNewTypeForClone(fun));
@@ -123,26 +123,24 @@ js::CloneFunctionAtCallsite(JSContext *cx, HandleFunction fun, HandleScript scri
      */
     JS_ASSERT(fun->isTenured());
 
-    typedef CallsiteCloneKey Key;
-    typedef CallsiteCloneTable Table;
-
-    Table &table = cx->compartment()->callsiteClones;
-    if (!table.initialized() && !table.init())
+    if (!table.initialized())
         return nullptr;
 
-    uint32_t offset = pc - script->code;
-    void* originalScript = script;
-    void* originalFun = fun;
-    SkipRoot skipScript(cx, &originalScript);
-    SkipRoot skipFun(cx, &originalFun);
-
-    Table::AddPtr p = table.lookupForAdd(Key(fun, script, offset));
-    SkipRoot skipHash(cx, &p); /* Prevent the hash from being poisoned. */
+    CallsiteCloneTable::Ptr p = table.lookup(CallsiteCloneKey(fun, script, pc - script->code));
     if (p)
         return p->value;
 
+    return nullptr;
+}
+
+JSFunction *
+js::CloneFunctionAtCallsite(JSContext *cx, HandleFunction fun, HandleScript script, jsbytecode *pc)
+{
+    if (JSFunction *clone = ExistingCloneFunctionAtCallsite(cx->compartment()->callsiteClones, fun, script, pc))
+        return clone;
+
     RootedObject parent(cx, fun->environment());
-    RootedFunction clone(cx, CloneFunctionObject(cx, fun, parent));
+    JSFunction *clone = CloneFunctionObject(cx, fun, parent);
     if (!clone)
         return nullptr;
 
@@ -154,15 +152,14 @@ js::CloneFunctionAtCallsite(JSContext *cx, HandleFunction fun, HandleScript scri
     clone->nonLazyScript()->isCallsiteClone = true;
     clone->nonLazyScript()->setOriginalFunctionObject(fun);
 
-    Key key(fun, script, offset);
+    typedef CallsiteCloneKey Key;
+    typedef CallsiteCloneTable Table;
 
-    /* Recalculate the hash if script or fun have been moved. */
-    if (script != originalScript || fun != originalFun) {
-        p = table.lookupForAdd(key);
-        JS_ASSERT(!p);
-    }
+    Table &table = cx->compartment()->callsiteClones;
+    if (!table.initialized() && !table.init())
+        return nullptr;
 
-    if (!table.relookupOrAdd(p, key, clone.get()))
+    if (!table.putNew(Key(fun, script, pc - script->code), clone))
         return nullptr;
 
     return clone;
@@ -258,7 +255,7 @@ js::DestroyContext(JSContext *cx, DestroyContextMode mode)
          * Dump remaining type inference results while we still have a context.
          * This printing depends on atoms still existing.
          */
-        for (CompartmentsIter c(rt); !c.done(); c.next())
+        for (CompartmentsIter c(rt, SkipAtoms); !c.done(); c.next())
             c->types.print(cx, false);
     }
     if (mode == DCM_FORCE_GC) {
@@ -355,6 +352,15 @@ PopulateReportBlame(JSContext *cx, JSErrorReport *report)
 void
 js_ReportOutOfMemory(ThreadSafeContext *cxArg)
 {
+#ifdef JS_MORE_DETERMINISTIC
+    /*
+     * OOMs are non-deterministic, especially across different execution modes
+     * (e.g. interpreter vs JIT). In more-deterministic builds, print to stderr
+     * so that the fuzzers can detect this.
+     */
+    fprintf(stderr, "js_ReportOutOfMemory called\n");
+#endif
+
     if (cxArg->isForkJoinSlice()) {
         cxArg->asForkJoinSlice()->setPendingAbortFatal(ParallelBailoutOutOfMemory);
         return;
@@ -1011,7 +1017,7 @@ js_InvokeOperationCallback(JSContext *cx)
 
 #ifdef JSGC_GENERATIONAL
     if (rt->gcStoreBuffer.isAboutToOverflow())
-        MinorGC(rt, JS::gcreason::FULL_STORE_BUFFER);
+        MinorGC(cx, JS::gcreason::FULL_STORE_BUFFER);
 #endif
 
 #ifdef JS_ION

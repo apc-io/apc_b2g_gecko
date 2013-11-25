@@ -16,7 +16,7 @@ const PC_SESSION_CONTRACT = "@mozilla.org/dom/rtcsessiondescription;1";
 const PC_MANAGER_CONTRACT = "@mozilla.org/dom/peerconnectionmanager;1";
 const PC_STATS_CONTRACT = "@mozilla.org/dom/rtcstatsreport;1";
 
-const PC_CID = Components.ID("{fc684a5c-c729-42c7-aa82-3c10dc4398f3}");
+const PC_CID = Components.ID("{00e0e20d-1494-4776-8e0e-0f0acbea3c79}");
 const PC_OBS_CID = Components.ID("{1d44a18e-4545-4ff3-863d-6dbd6234a583}");
 const PC_ICE_CID = Components.ID("{02b9970c-433d-4cc2-923d-f7028ac66073}");
 const PC_SESSION_CID = Components.ID("{1775081b-b62d-4954-8ffe-a067bbf508a7}");
@@ -26,7 +26,7 @@ const PC_STATS_CID = Components.ID("{7fe6e18b-0da3-4056-bf3b-440ef3809e06}");
 // Global list of PeerConnection objects, so they can be cleaned up when
 // a page is torn down. (Maps inner window ID to an array of PC objects).
 function GlobalPCList() {
-  this._list = [];
+  this._list = {};
   this._networkdown = false; // XXX Need to query current state somehow
   Services.obs.addObserver(this, "inner-window-destroyed", true);
   Services.obs.addObserver(this, "profile-change-net-teardown", true);
@@ -58,7 +58,7 @@ GlobalPCList.prototype = {
   },
 
   removeNullRefs: function(winID) {
-    if (this._list === undefined || this._list[winID] === undefined) {
+    if (this._list[winID] === undefined) {
       return;
     }
     this._list[winID] = this._list[winID].filter(
@@ -71,19 +71,24 @@ GlobalPCList.prototype = {
   },
 
   observe: function(subject, topic, data) {
-    if (topic == "inner-window-destroyed") {
-      let winID = subject.QueryInterface(Ci.nsISupportsPRUint64).data;
-      if (this._list[winID]) {
-        this._list[winID].forEach(function(pcref) {
-          let pc = pcref.get();
-          if (pc !== null) {
-            pc._pc.close();
-            delete pc._observer;
-            pc._pc = null;
-          }
-        });
-        delete this._list[winID];
+    let cleanupPcRef = function(pcref) {
+      let pc = pcref.get();
+      if (pc) {
+        pc._pc.close();
+        delete pc._observer;
+        pc._pc = null;
       }
+    };
+
+    let cleanupWinId = function(list, winID) {
+      if (list.hasOwnProperty(winID)) {
+        list[winID].forEach(cleanupPcRef);
+        delete list[winID];
+      }
+    };
+
+    if (topic == "inner-window-destroyed") {
+      cleanupWinId(this._list, subject.QueryInterface(Ci.nsISupportsPRUint64).data);
     } else if (topic == "profile-change-net-teardown" ||
                topic == "network:offline-about-to-go-offline") {
       // Delete all peerconnections on shutdown - mostly synchronously (we
@@ -92,17 +97,9 @@ GlobalPCList.prototype = {
       // before we return to here.
       // Also kill them if "Work Offline" is selected - more can be created
       // while offline, but attempts to connect them should fail.
-      let array;
-      while ((array = this._list.pop()) != undefined) {
-        array.forEach(function(pcref) {
-          let pc = pcref.get();
-          if (pc !== null) {
-            pc._pc.close();
-            delete pc._observer;
-            pc._pc = null;
-          }
-        });
-      };
+      for (let winId in this._list) {
+        cleanupWinId(this._list, winId);
+      }
       this._networkdown = true;
     }
     else if (topic == "network:offline-status-changed") {
@@ -259,7 +256,9 @@ RTCPeerConnection.prototype = {
     this.makeGetterSetterEH("oniceconnectionstatechange");
 
     this._pc = new this._win.PeerConnectionImpl();
-    this._observer = new this._win.PeerConnectionObserver(this);
+
+    this.__DOM_IMPL__._innerObject = this;
+    this._observer = new this._win.PeerConnectionObserver(this.__DOM_IMPL__);
     this._winID = this._win.QueryInterface(Ci.nsIInterfaceRequestor)
                            .getInterface(Ci.nsIDOMWindowUtils).currentInnerWindowID;
 
@@ -488,13 +487,17 @@ RTCPeerConnection.prototype = {
       constraints = {};
     }
     this._mustValidateConstraints(constraints, "createOffer passed invalid constraints");
-    this._onCreateOfferSuccess = onSuccess;
-    this._onCreateOfferFailure = onError;
 
-    this._queueOrRun({ func: this._createOffer, args: [constraints], wait: true });
+    this._queueOrRun({
+      func: this._createOffer,
+      args: [onSuccess, onError, constraints],
+      wait: true
+    });
   },
 
-  _createOffer: function(constraints) {
+  _createOffer: function(onSuccess, onError, constraints) {
+    this._onCreateOfferSuccess = onSuccess;
+    this._onCreateOfferFailure = onError;
     this._getPC().createOffer(constraints);
   },
 
@@ -540,12 +543,6 @@ RTCPeerConnection.prototype = {
   },
 
   setLocalDescription: function(desc, onSuccess, onError) {
-    // TODO -- if we have two setLocalDescriptions in the
-    // queue,this code overwrites the callbacks for the first
-    // one with the callbacks for the second one. See Bug 831759.
-    this._onSetLocalDescriptionSuccess = onSuccess;
-    this._onSetLocalDescriptionFailure = onError;
-
     let type;
     switch (desc.type) {
       case "offer":
@@ -563,23 +560,19 @@ RTCPeerConnection.prototype = {
 
     this._queueOrRun({
       func: this._setLocalDescription,
-      args: [type, desc.sdp],
+      args: [type, desc.sdp, onSuccess, onError],
       wait: true,
       type: desc.type
     });
   },
 
-  _setLocalDescription: function(type, sdp) {
+  _setLocalDescription: function(type, sdp, onSuccess, onError) {
+    this._onSetLocalDescriptionSuccess = onSuccess;
+    this._onSetLocalDescriptionFailure = onError;
     this._getPC().setLocalDescription(type, sdp);
   },
 
   setRemoteDescription: function(desc, onSuccess, onError) {
-    // TODO -- if we have two setRemoteDescriptions in the
-    // queue, this code overwrites the callbacks for the first
-    // one with the callbacks for the second one. See Bug 831759.
-    this._onSetRemoteDescriptionSuccess = onSuccess;
-    this._onSetRemoteDescriptionFailure = onError;
-
     let type;
     switch (desc.type) {
       case "offer":
@@ -597,13 +590,15 @@ RTCPeerConnection.prototype = {
 
     this._queueOrRun({
       func: this._setRemoteDescription,
-      args: [type, desc.sdp],
+      args: [type, desc.sdp, onSuccess, onError],
       wait: true,
       type: desc.type
     });
   },
 
-  _setRemoteDescription: function(type, sdp) {
+  _setRemoteDescription: function(type, sdp, onSuccess, onError) {
+    this._onSetRemoteDescriptionSuccess = onSuccess;
+    this._onSetRemoteDescriptionFailure = onError;
     this._getPC().setRemoteDescription(type, sdp);
   },
 
@@ -719,18 +714,26 @@ RTCPeerConnection.prototype = {
   },
 
   getStats: function(selector, onSuccess, onError) {
-    this._onGetStatsSuccess = onSuccess;
-    this._onGetStatsFailure = onError;
-
     this._queueOrRun({
       func: this._getStats,
-      args: [selector],
+      args: [selector, onSuccess, onError, false],
       wait: true
     });
   },
 
-  _getStats: function(selector) {
-    this._getPC().getStats(selector);
+  getStatsInternal: function(selector, onSuccess, onError) {
+    this._queueOrRun({
+      func: this._getStats,
+      args: [selector, onSuccess, onError, true],
+      wait: true
+    });
+  },
+
+  _getStats: function(selector, onSuccess, onError, internal) {
+    this._onGetStatsSuccess = onSuccess;
+    this._onGetStatsFailure = onError;
+
+    this._getPC().getStats(selector, internal);
   },
 
   createDataChannel: function(label, dict) {
@@ -826,7 +829,6 @@ RTCError.prototype = {
 // This is a separate object because we don't want to expose it to DOM.
 function PeerConnectionObserver() {
   this._dompc = null;
-  this._guard = new WeakReferent(this);
 }
 PeerConnectionObserver.prototype = {
   classDescription: "PeerConnectionObserver",
@@ -837,7 +839,7 @@ PeerConnectionObserver.prototype = {
   init: function(win) { this._win = win; },
 
   __init: function(dompc) {
-    this._dompc = dompc;
+    this._dompc = dompc._innerObject;
   },
 
   dispatchEvent: function(event) {
@@ -1022,7 +1024,7 @@ PeerConnectionObserver.prototype = {
         // waiting for ICE gathering and executeNext frees it
         this._dompc._executeNext();
       }
-      else if (this.localDescription) {
+      else if (this._dompc.localDescription) {
         // If we are trickling but we have already done setLocal,
         // then we need to send a final foundIceCandidate(null) to indicate
         // that we are done gathering.
@@ -1077,6 +1079,7 @@ PeerConnectionObserver.prototype = {
     appendStats(dict.mediaStreamStats, report);
     appendStats(dict.transportStats, report);
     appendStats(dict.iceComponentStats, report);
+    appendStats(dict.iceCandidatePairStats, report);
     appendStats(dict.iceCandidateStats, report);
     appendStats(dict.codecStats, report);
 
@@ -1123,20 +1126,6 @@ PeerConnectionObserver.prototype = {
   getSupportedConstraints: function(dict) {
     return dict;
   },
-
-  get weakReferent() {
-    return this._guard;
-  }
-};
-
-// A PeerConnectionObserver member that c++ can do weak references on
-
-function WeakReferent(parent) {
-  this._parent = parent; // prevents parent from going away without us
-}
-WeakReferent.prototype = {
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsISupports,
-                                         Ci.nsISupportsWeakReference]),
 };
 
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory(

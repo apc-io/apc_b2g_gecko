@@ -13,6 +13,9 @@
 #include "unistd.h"
 #include "dirent.h"
 #include "sys/stat.h"
+#if !defined(ANDROID)
+#include <spawn.h>
+#endif // !defined(ANDROID)
 #endif // defined(XP_UNIX)
 
 #if defined(XP_LINUX)
@@ -504,6 +507,11 @@ static const dom::ConstantSpec gLibcProperties[] =
   // The size of |time_t|.
   { "OSFILE_SIZEOF_TIME_T", INT_TO_JSVAL(sizeof (time_t)) },
 
+#if !defined(ANDROID)
+  // The size of |posix_spawn_file_actions_t|.
+  { "OSFILE_SIZEOF_POSIX_SPAWN_FILE_ACTIONS_T", INT_TO_JSVAL(sizeof (posix_spawn_file_actions_t)) },
+#endif // !defined(ANDROID)
+
   // Defining |dirent|.
   // Size
   { "OSFILE_SIZEOF_DIRENT", INT_TO_JSVAL(sizeof (dirent)) },
@@ -650,6 +658,9 @@ static const dom::ConstantSpec gWinProperties[] =
   // MoveFile flags
   INT_CONSTANT(MOVEFILE_COPY_ALLOWED),
   INT_CONSTANT(MOVEFILE_REPLACE_EXISTING),
+
+  // GetFileAttributes error constant
+  INT_CONSTANT(INVALID_FILE_ATTRIBUTES),
 
   // Errors
   INT_CONSTANT(ERROR_ACCESS_DENIED),

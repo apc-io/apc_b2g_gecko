@@ -106,7 +106,7 @@ IonCache::LinkStatus
 IonCache::linkCode(JSContext *cx, MacroAssembler &masm, IonScript *ion, IonCode **code)
 {
     Linker linker(masm);
-    *code = linker.newCode(cx, JSC::ION_CODE);
+    *code = linker.newCode<CanGC>(cx, JSC::ION_CODE);
     if (!*code)
         return LINK_ERROR;
 
@@ -1147,11 +1147,6 @@ CanAttachNativeGetProp(typename GetPropCache::Context cx, const GetPropCache &ca
     if (IsCacheableGetPropReadSlot(obj, holder, shape) ||
         IsCacheableNoProperty(obj, holder, shape, pc, cache.output()))
     {
-        // TI infers the possible types of native object properties. There's one
-        // edge case though: for singleton objects it does not add the initial
-        // "undefined" type, see the propertySet comment in jsinfer.h.
-        if (!cache.canMonitorSingletonUndefinedSlot(holder, shape))
-            return GetPropertyIC::CanAttachNone;
         return GetPropertyIC::CanAttachReadSlot;
     }
 
@@ -1204,17 +1199,6 @@ GetPropertyIC::allowArrayLength(Context cx, HandleObject obj) const
     }
 
     return true;
-}
-
-bool
-GetPropertyIC::canMonitorSingletonUndefinedSlot(HandleObject holder, HandleShape shape) const
-{
-    // We can't monitor the return type inside an idempotent cache,
-    // so we don't handle this case.
-    return !(idempotent() &&
-             holder &&
-             holder->hasSingletonType() &&
-             holder->getSlot(shape->slot()).isUndefined());
 }
 
 bool
@@ -3172,12 +3156,27 @@ GetElementIC::attachDenseElement(JSContext *cx, IonScript *ion, JSObject *obj, c
 GetElementIC::canAttachTypedArrayElement(JSObject *obj, const Value &idval,
                                          TypedOrValueRegister output)
 {
-    if (!obj->is<TypedArrayObject>() ||
-        (!(idval.isInt32()) &&
-         !(idval.isString() && GetIndexFromString(idval.toString()) != UINT32_MAX)))
-    {
+    if (!obj->is<TypedArrayObject>())
         return false;
+
+    if (!idval.isInt32() && !idval.isString())
+        return false;
+
+
+    // Don't emit a stub if the access is out of bounds. We make to make
+    // certain that we monitor the type coming out of the typed array when
+    // we generate the stub. Out of bounds accesses will hit the fallback
+    // path.
+    uint32_t index;
+    if (idval.isInt32()) {
+        index = idval.toInt32();
+    } else {
+        index = GetIndexFromString(idval.toString());
+        if (index == UINT32_MAX)
+            return false;
     }
+    if (index >= obj->as<TypedArrayObject>().length())
+        return false;
 
     // The output register is not yet specialized as a float register, the only
     // way to accept float typed arrays for now is to return a Value type.
@@ -3419,10 +3418,9 @@ GetElementIC::update(JSContext *cx, size_t cacheIndex, HandleObject obj,
     RootedScript script(cx);
     jsbytecode *pc;
     cache.getScriptedLocation(&script, &pc);
-    RootedValue lval(cx, ObjectValue(*obj));
 
     if (cache.isDisabled()) {
-        if (!GetElementOperation(cx, JSOp(*pc), &lval, idval, res))
+        if (!GetObjectElementOperation(cx, JSOp(*pc), obj, /* wasObject = */true, idval, res))
             return false;
         types::TypeScript::Monitor(cx, script, pc, res);
         return true;
@@ -3468,7 +3466,7 @@ GetElementIC::update(JSContext *cx, size_t cacheIndex, HandleObject obj,
         }
     }
 
-    if (!GetElementOperation(cx, JSOp(*pc), &lval, idval, res))
+    if (!GetObjectElementOperation(cx, JSOp(*pc), obj, /* wasObject = */true, idval, res))
         return false;
 
     // Disable cache when we reach max stubs or update failed too much.

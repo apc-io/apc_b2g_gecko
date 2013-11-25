@@ -43,7 +43,7 @@
 #include "MediaEngineWebRTC.h"
 #endif
 
-#ifdef MOZ_B2G
+#ifdef MOZ_WIDGET_GONK
 #include "MediaPermissionGonk.h"
 #endif
 
@@ -110,7 +110,7 @@ static nsresult CompareDictionaries(JSContext* aCx, JSObject *aA,
       bool success = JS_IdToValue(aCx, props[i], nameval.address());
       NS_ENSURE_TRUE(success, NS_ERROR_UNEXPECTED);
 
-      JS::Rooted<JSString*> namestr(aCx, JS_ValueToString(aCx, nameval));
+      JS::Rooted<JSString*> namestr(aCx, JS::ToString(aCx, nameval));
       NS_ENSURE_TRUE(namestr, NS_ERROR_UNEXPECTED);
       aDifference->Assign(JS_GetStringCharsZ(aCx, namestr));
       return NS_OK;
@@ -129,8 +129,8 @@ static nsresult ValidateTrackConstraints(
     nsString *aOutUnknownConstraint)
 {
   // First find raw mMandatory member (use MediaTrackConstraints as helper)
-  dom::RootedDictionary<MediaTrackConstraints> track(aCx);
   JS::Rooted<JS::Value> rawval(aCx, JS::ObjectValue(*aRaw));
+  dom::RootedDictionary<MediaTrackConstraints> track(aCx);
   bool success = track.Init(aCx, rawval);
   NS_ENSURE_TRUE(success, NS_ERROR_FAILURE);
 
@@ -810,6 +810,7 @@ public:
     , mListener(aListener)
     , mPrefs(aPrefs)
     , mDeviceChosen(false)
+    , mBackendChosen(false)
     , mManager(MediaManager::GetInstance())
   {}
 
@@ -831,11 +832,15 @@ public:
     , mListener(aListener)
     , mPrefs(aPrefs)
     , mDeviceChosen(false)
+    , mBackendChosen(true)
     , mBackend(aBackend)
     , mManager(MediaManager::GetInstance())
   {}
 
   ~GetUserMediaRunnable() {
+    if (mBackendChosen) {
+      delete mBackend;
+    }
   }
 
   NS_IMETHOD
@@ -843,7 +848,10 @@ public:
   {
     NS_ASSERTION(!NS_IsMainThread(), "Don't call on main thread");
 
-    mBackend = mManager->GetBackend(mWindowID);
+    // Was a backend provided?
+    if (!mBackendChosen) {
+      mBackend = mManager->GetBackend(mWindowID);
+    }
 
     // Was a device provided?
     if (!mDeviceChosen) {
@@ -1030,6 +1038,7 @@ private:
   MediaEnginePrefs mPrefs;
 
   bool mDeviceChosen;
+  bool mBackendChosen;
 
   MediaEngine* mBackend;
   nsRefPtr<MediaManager> mManager; // get ref to this when creating the runnable
@@ -1247,10 +1256,10 @@ MediaManager::GetUserMedia(JSContext* aCx, bool aPrivileged,
     // Force MediaManager to startup before we try to access it from other threads
     // Hack: should init singleton earlier unless it's expensive (mem or CPU)
     (void) MediaManager::Get();
-#ifdef MOZ_B2G
+#ifdef MOZ_WIDGET_GONK
     // Initialize MediaPermissionManager before send out any permission request.
     (void) MediaPermissionManager::GetInstance();
-#endif //MOZ_B2G
+#endif //MOZ_WIDGET_GONK
   }
 
   // Store the WindowID in a hash table and mark as active. The entry is removed
@@ -1267,17 +1276,19 @@ MediaManager::GetUserMedia(JSContext* aCx, bool aPrivileged,
 
   if (!unknownConstraintFound.IsEmpty()) {
     // An unsupported mandatory constraint was found.
-    // Things are set up enough here that we can fire Error callback.
+    //
+    // We continue to ignore these for now, because we implement just
+    // facingMode, which means all existing uses of mandatory width/height would
+    // fail on Firefox only otherwise, which is undesirable.
+    //
+    // There's also basis for always ignoring them in a new proposal.
+    // TODO(jib): This is a super-low-risk fix for backport. Clean up later.
 
     LOG(("Unsupported mandatory constraint: %s\n",
           NS_ConvertUTF16toUTF8(unknownConstraintFound).get()));
 
-    nsString errormsg(NS_LITERAL_STRING("NOT_SUPPORTED_ERR: "));
-    errormsg.Append(unknownConstraintFound);
-    NS_DispatchToMainThread(new ErrorCallbackRunnable(onSuccess.forget(),
-                                                      onError.forget(),
-                                                      errormsg, windowID));
-    return NS_OK;
+    // unknown constraints existed in aRawConstraints only, which is unused
+    // from here, so continuing here effectively ignores them, as is desired.
   }
 
   // Ensure there's a thread for gum to proxy to off main thread
@@ -1302,7 +1313,7 @@ MediaManager::GetUserMedia(JSContext* aCx, bool aPrivileged,
   if (c.mFake) {
     // Fake stream from default backend.
     gUMRunnable = new GetUserMediaRunnable(c, onSuccess.forget(),
-      onError.forget(), windowID, listener, mPrefs, GetBackend(windowID, true));
+      onError.forget(), windowID, listener, mPrefs, new MediaEngineDefault());
   } else {
     // Stream from default device from WebRTC backend.
     gUMRunnable = new GetUserMediaRunnable(c, onSuccess.forget(),
@@ -1383,26 +1394,22 @@ MediaManager::GetUserMediaDevices(nsPIDOMWindow* aWindow,
 }
 
 MediaEngine*
-MediaManager::GetBackend(uint64_t aWindowId, bool aFake)
+MediaManager::GetBackend(uint64_t aWindowId)
 {
   // Plugin backends as appropriate. The default engine also currently
   // includes picture support for Android.
   // This IS called off main-thread.
   MutexAutoLock lock(mMutex);
   if (!mBackend) {
-    if (aFake) {
-      mBackend = new MediaEngineDefault();
-    } else {
 #if defined(MOZ_WEBRTC)
-#ifndef MOZ_B2G_CAMERA
-      mBackend = new MediaEngineWebRTC();
+  #ifndef MOZ_B2G_CAMERA
+    mBackend = new MediaEngineWebRTC();
+  #else
+    mBackend = new MediaEngineWebRTC(mCameraManager, aWindowId);
+  #endif
 #else
-      mBackend = new MediaEngineWebRTC(mCameraManager, aWindowId);
+    mBackend = new MediaEngineDefault();
 #endif
-#else
-      mBackend = new MediaEngineDefault();
-#endif
-    }
   }
   return mBackend;
 }

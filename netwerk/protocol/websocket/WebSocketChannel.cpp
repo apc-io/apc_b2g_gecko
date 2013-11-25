@@ -42,13 +42,13 @@
 #include "nsNetUtil.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/MathAlgorithms.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/TimeStamp.h"
 
 #include "plbase64.h"
 #include "prmem.h"
 #include "prnetdb.h"
-#include "prbit.h"
 #include "zlib.h"
 #include <algorithm>
 
@@ -965,8 +965,7 @@ WebSocketChannel::WebSocketChannel() :
   mConnectionLogService(nullptr),
   mCountRecv(0),
   mCountSent(0),
-  mAppId(0),
-  mIsInBrowser(false)
+  mAppId(NECKO_NO_APP_ID)
 {
   NS_ABORT_IF_FALSE(NS_IsMainThread(), "not main thread");
 
@@ -1075,15 +1074,16 @@ WebSocketChannel::BeginOpen()
     return;
   }
 
-  // obtain app info
   if (localChannel) {
-    NS_GetAppInfo(localChannel, &mAppId, &mIsInBrowser);
+    bool isInBrowser;
+    NS_GetAppInfo(localChannel, &mAppId, &isInBrowser);
   }
 
-  // obtain active network
+#ifdef MOZ_WIDGET_GONK
   if (mAppId != NECKO_NO_APP_ID) {
-    GetActiveNetwork();
+    NS_GetActiveNetworkInterface(mActiveNetwork);
   }
+#endif
 
   rv = localChannel->AsyncOpen(this, mHttpChannel);
   if (NS_FAILED(rv)) {
@@ -1515,7 +1515,7 @@ WebSocketChannel::ApplyMask(uint32_t mask, uint8_t *data, uint64_t len)
 
   while (len && (reinterpret_cast<uintptr_t>(data) & 3)) {
     *data ^= mask >> 24;
-    mask = PR_ROTATE_LEFT32(mask, 8);
+    mask = RotateLeft(mask, 8);
     data++;
     len--;
   }
@@ -1536,7 +1536,7 @@ WebSocketChannel::ApplyMask(uint32_t mask, uint8_t *data, uint64_t len)
 
   while (len) {
     *data ^= mask >> 24;
-    mask = PR_ROTATE_LEFT32(mask, 8);
+    mask = RotateLeft(mask, 8);
     data++;
     len--;
   }
@@ -1779,7 +1779,7 @@ WebSocketChannel::PrimeNewOutgoingMessage()
 
   while (payload < (mOutHeader + mHdrOutToSend)) {
     *payload ^= mask >> 24;
-    mask = PR_ROTATE_LEFT32(mask, 8);
+    mask = RotateLeft(mask, 8);
     payload++;
   }
 
@@ -3269,28 +3269,6 @@ WebSocketChannel::OnDataAvailable(nsIRequest *aRequest,
          aCount));
 
   return NS_OK;
-}
-
-nsresult
-WebSocketChannel::GetActiveNetwork()
-{
-#ifdef MOZ_WIDGET_GONK
-  MOZ_ASSERT(NS_IsMainThread());
-
-  nsresult result;
-  nsCOMPtr<nsINetworkManager> networkManager = do_GetService("@mozilla.org/network/manager;1", &result);
-
-  if (NS_FAILED(result) || !networkManager) {
-    mActiveNetwork = nullptr;
-    return NS_ERROR_UNEXPECTED;
-  }
-
-  result = networkManager->GetActive(getter_AddRefs(mActiveNetwork));
-
-  return NS_OK;
-#else
-  return NS_ERROR_NOT_IMPLEMENTED;
-#endif
 }
 
 nsresult

@@ -42,7 +42,7 @@ jit::SplitCriticalEdges(MIRGraph &graph)
             MBasicBlock *split = MBasicBlock::NewSplitEdge(graph, block->info(), *block);
             split->setLoopDepth(block->loopDepth());
             graph.insertBlockAfter(*block, split);
-            split->end(MGoto::New(target));
+            split->end(MGoto::New(graph.alloc(), target));
 
             block->replaceSuccessor(i, split);
             target->replacePredecessor(*block, split);
@@ -142,7 +142,7 @@ jit::EliminateDeadResumePointOperands(MIRGenerator *mir, MIRGraph &graph)
                 // say, a dead property access the interpreter could throw an
                 // exception; we avoid this problem by removing dead operands
                 // before removing dead code.
-                MConstant *constant = MConstant::New(UndefinedValue());
+                MConstant *constant = MConstant::New(graph.alloc(), UndefinedValue());
                 block->insertBefore(*(block->begin()), constant);
                 uses = mrp->replaceOperand(uses, constant);
             }
@@ -389,6 +389,10 @@ class TypeAnalyzer
     MIRGraph &graph;
     Vector<MPhi *, 0, SystemAllocPolicy> phiWorklist_;
 
+    TempAllocator &alloc() const {
+        return graph.alloc();
+    }
+
     bool addPhiToWorklist(MPhi *phi) {
         if (phi->isInWorklist())
             return true;
@@ -448,7 +452,7 @@ GuessPhiType(MPhi *phi)
         }
         if (type == MIRType_None) {
             type = in->type();
-            if (in->isConstant())
+            if (in->canProduceFloat32())
                 convertibleToFloat32 = true;
             continue;
         }
@@ -457,17 +461,14 @@ GuessPhiType(MPhi *phi)
             if (in->resultTypeSet() && in->resultTypeSet()->empty())
                 continue;
 
-            if (IsFloatType(type) && IsFloatType(in->type())) {
-                // Specialize phis with int32 and float32 operands as float32.
-                type = MIRType_Float32;
-            } else if (convertibleToFloat32 && in->type() == MIRType_Float32) {
-                // If we only saw constants before and encounter a Float32 value, promote previous
-                // constants to Float32
+            if (convertibleToFloat32 && in->type() == MIRType_Float32) {
+                // If we only saw definitions that can be converted into Float32 before and
+                // encounter a Float32 value, promote previous values to Float32
                 type = MIRType_Float32;
             } else if (IsNumberType(type) && IsNumberType(in->type())) {
                 // Specialize phis with int32 and double operands as double.
                 type = MIRType_Double;
-                convertibleToFloat32 &= in->isConstant();
+                convertibleToFloat32 &= in->canProduceFloat32();
             } else {
                 return MIRType_Value;
             }
@@ -506,8 +507,10 @@ TypeAnalyzer::propagateSpecialization(MPhi *phi)
             continue;
         }
         if (use->type() != phi->type()) {
-            // Specialize phis with int32 and float operands as floats.
-            if (IsFloatType(use->type()) && IsFloatType(phi->type())) {
+            // Specialize phis with int32 that can be converted to float and float operands as floats.
+            if ((use->type() == MIRType_Int32 && use->canProduceFloat32() && phi->type() == MIRType_Float32) ||
+                (phi->type() == MIRType_Int32 && phi->canProduceFloat32() && use->type() == MIRType_Float32))
+            {
                 if (!respecialize(use, MIRType_Float32))
                     return false;
                 continue;
@@ -585,35 +588,35 @@ TypeAnalyzer::adjustPhiInputs(MPhi *phi)
 
                 if (phiType == MIRType_Double && IsFloatType(in->type())) {
                     // Convert int32 operands to double.
-                    replacement = MToDouble::New(in);
+                    replacement = MToDouble::New(alloc(), in);
                 } else if (phiType == MIRType_Float32) {
                     if (in->type() == MIRType_Int32 || in->type() == MIRType_Double) {
-                        replacement = MToFloat32::New(in);
+                        replacement = MToFloat32::New(alloc(), in);
                     } else {
                         // See comment below
                         if (in->type() != MIRType_Value) {
-                            MBox *box = MBox::New(in);
+                            MBox *box = MBox::New(alloc(), in);
                             in->block()->insertBefore(in->block()->lastIns(), box);
                             in = box;
                         }
 
-                        MUnbox *unbox = MUnbox::New(in, MIRType_Double, MUnbox::Fallible);
+                        MUnbox *unbox = MUnbox::New(alloc(), in, MIRType_Double, MUnbox::Fallible);
                         in->block()->insertBefore(in->block()->lastIns(), unbox);
-                        replacement = MToFloat32::New(in);
+                        replacement = MToFloat32::New(alloc(), in);
                     }
                 } else {
                     // If we know this branch will fail to convert to phiType,
                     // insert a box that'll immediately fail in the fallible unbox
                     // below.
                     if (in->type() != MIRType_Value) {
-                        MBox *box = MBox::New(in);
+                        MBox *box = MBox::New(alloc(), in);
                         in->block()->insertBefore(in->block()->lastIns(), box);
                         in = box;
                     }
 
                     // Be optimistic and insert unboxes when the operand is a
                     // value.
-                    replacement = MUnbox::New(in, phiType, MUnbox::Fallible);
+                    replacement = MUnbox::New(alloc(), in, phiType, MUnbox::Fallible);
                 }
 
                 in->block()->insertBefore(in->block()->lastIns(), replacement);
@@ -635,7 +638,7 @@ TypeAnalyzer::adjustPhiInputs(MPhi *phi)
             // the original box.
             phi->replaceOperand(i, in->toUnbox()->input());
         } else {
-            MDefinition *box = BoxInputsPolicy::alwaysBoxAt(in->block()->lastIns(), in);
+            MDefinition *box = BoxInputsPolicy::alwaysBoxAt(alloc(), in->block()->lastIns(), in);
             phi->replaceOperand(i, box);
         }
     }
@@ -645,7 +648,7 @@ bool
 TypeAnalyzer::adjustInputs(MDefinition *def)
 {
     TypePolicy *policy = def->typePolicy();
-    if (policy && !policy->adjustInputs(def->toInstruction()))
+    if (policy && !policy->adjustInputs(alloc(), def->toInstruction()))
         return false;
     return true;
 }
@@ -668,7 +671,7 @@ TypeAnalyzer::replaceRedundantPhi(MPhi *phi)
       default:
         MOZ_ASSUME_UNREACHABLE("unexpected type");
     }
-    MConstant *c = MConstant::New(v);
+    MConstant *c = MConstant::New(alloc(), v);
     // The instruction pass will insert the box
     block->insertBefore(*(block->begin()), c);
     phi->replaceAllUsesWith(c);
@@ -864,7 +867,7 @@ TypeAnalyzer::specializeValidFloatOps()
 
             // This call will try to specialize the instruction iff all uses are consumers and
             // all inputs are producers.
-            ins->trySpecializeFloat32();
+            ins->trySpecializeFloat32(alloc());
         }
     }
     return true;
@@ -1103,7 +1106,7 @@ jit::BuildDominatorTree(MIRGraph &graph)
     // Now, iterate through the dominator tree and annotate every
     // block with its index in the pre-order traversal of the
     // dominator tree.
-    Vector<MBasicBlock *, 1, IonAllocPolicy> worklist;
+    Vector<MBasicBlock *, 1, IonAllocPolicy> worklist(graph.alloc());
 
     // The index of the current block in the CFG traversal.
     size_t index = 0;
@@ -1572,11 +1575,16 @@ TryEliminateTypeBarrierFromTest(MTypeBarrier *barrier, bool filtersNull, bool fi
 
     // Disregard the possible unbox added before the Typebarrier for checking.
     MDefinition *input = barrier->input();
-    if (input->isUnbox() && input->toUnbox()->mode() == MUnbox::TypeBarrier)
-        input = input->toUnbox()->input();
+    MUnbox *inputUnbox = nullptr;
+    if (input->isUnbox() && input->toUnbox()->mode() != MUnbox::Fallible) {
+        inputUnbox = input->toUnbox();
+        input = inputUnbox->input();
+    }
 
     if (test->getOperand(0) == input && direction == TRUE_BRANCH) {
         *eliminated = true;
+        if (inputUnbox)
+            inputUnbox->makeInfallible();
         barrier->replaceAllUsesWith(barrier->input());
         return;
     }
@@ -1610,6 +1618,8 @@ TryEliminateTypeBarrierFromTest(MTypeBarrier *barrier, bool filtersNull, bool fi
     }
 
     *eliminated = true;
+    if (inputUnbox)
+        inputUnbox->makeInfallible();
     barrier->replaceAllUsesWith(barrier->input());
 }
 
@@ -1622,11 +1632,8 @@ TryEliminateTypeBarrier(MTypeBarrier *barrier, bool *eliminated)
     const types::TemporaryTypeSet *inputTypes = barrier->input()->resultTypeSet();
 
     // Disregard the possible unbox added before the Typebarrier.
-    if (barrier->input()->isUnbox() &&
-        barrier->input()->toUnbox()->mode() == MUnbox::TypeBarrier)
-    {
+    if (barrier->input()->isUnbox() && barrier->input()->toUnbox()->mode() != MUnbox::Fallible)
         inputTypes = barrier->input()->toUnbox()->input()->resultTypeSet();
-    }
 
     if (!barrierTypes || !inputTypes)
         return true;
@@ -1672,13 +1679,13 @@ TryEliminateTypeBarrier(MTypeBarrier *barrier, bool *eliminated)
 bool
 jit::EliminateRedundantChecks(MIRGraph &graph)
 {
-    BoundsCheckMap checks;
+    BoundsCheckMap checks(graph.alloc());
 
     if (!checks.init())
         return false;
 
     // Stack for pre-order CFG traversal.
-    Vector<MBasicBlock *, 1, IonAllocPolicy> worklist;
+    Vector<MBasicBlock *, 1, IonAllocPolicy> worklist(graph.alloc());
 
     // The index of the current block in the CFG traversal.
     size_t index = 0;
@@ -1957,10 +1964,10 @@ AnalyzePoppedThis(JSContext *cx, types::TypeObject *type,
                 return true;
         }
 
-        if (baseobj->slotSpan() >= (types::TYPE_FLAG_DEFINITE_MASK >> types::TYPE_FLAG_DEFINITE_SHIFT)) {
-            // Maximum number of definite properties added.
+        // Don't add definite properties to an object which won't fit in its
+        // fixed slots.
+        if (GetGCKindSlots(gc::GetGCObjectKind(baseobj->slotSpan() + 1)) <= baseobj->slotSpan())
             return true;
-        }
 
         // Assignments to new properties must always execute.
         if (!definitelyExecuted)
@@ -1976,7 +1983,7 @@ AnalyzePoppedThis(JSContext *cx, types::TypeObject *type,
         RootedId id(cx, NameToId(setprop->name()));
         RootedValue value(cx, UndefinedValue());
         if (!DefineNativeProperty(cx, baseobj, id, value, nullptr, nullptr,
-                                  JSPROP_ENUMERATE, 0, 0, DNP_SKIP_TYPE))
+                                  JSPROP_ENUMERATE, 0, 0))
         {
             return false;
         }
@@ -2103,9 +2110,9 @@ jit::AnalyzeNewScriptProperties(JSContext *cx, HandleFunction fun,
 
     AutoTempAllocatorRooter root(cx, &temp);
 
-    types::CompilerConstraintList *constraints = types::NewCompilerConstraintList();
+    types::CompilerConstraintList *constraints = types::NewCompilerConstraintList(temp);
     BaselineInspector inspector(script);
-    IonBuilder builder(cx, &temp, &graph, constraints,
+    IonBuilder builder(cx, CompileCompartment::get(cx->compartment()), &temp, &graph, constraints,
                        &inspector, &info, /* baselineFrame = */ nullptr);
 
     if (!builder.build()) {

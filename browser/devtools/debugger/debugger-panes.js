@@ -231,8 +231,8 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
    *         The corresponding breakpoints if found, an empty array otherwise.
    */
   getOtherBreakpoints: function(aLocation = {}, aStore = []) {
-    for (let source in this) {
-      for (let breakpointItem in source) {
+    for (let source of this) {
+      for (let breakpointItem of source) {
         let { url, line } = breakpointItem.attachment;
         if (url != aLocation.url || line != aLocation.line) {
           aStore.push(breakpointItem);
@@ -404,7 +404,8 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
 
     DebuggerController.SourceScripts.togglePrettyPrint(source)
       .then(resetEditor, printError)
-      .then(DebuggerView.showEditor);
+      .then(DebuggerView.showEditor)
+      .then(this.updateToolbarButtonsState);
   },
 
   /**
@@ -1340,7 +1341,7 @@ WatchExpressionsView.prototype = Heritage.extend(WidgetMethods, {
    */
   switchExpression: function(aVar, aExpression) {
     let expressionItem =
-      [i for (i in this) if (i.attachment.currentExpression == aVar.name)][0];
+      [i for (i of this) if (i.attachment.currentExpression == aVar.name)][0];
 
     // Remove the watch expression if it's going to be empty or a duplicate.
     if (!aExpression || this.getAllStrings().indexOf(aExpression) != -1) {
@@ -1366,7 +1367,7 @@ WatchExpressionsView.prototype = Heritage.extend(WidgetMethods, {
    */
   deleteExpression: function(aVar) {
     let expressionItem =
-      [i for (i in this) if (i.attachment.currentExpression == aVar.name)][0];
+      [i for (i of this) if (i.attachment.currentExpression == aVar.name)][0];
 
     // Remove the watch expression.
     this.remove(expressionItem);
@@ -1515,6 +1516,7 @@ WatchExpressionsView.prototype = Heritage.extend(WidgetMethods, {
       case e.DOM_VK_RETURN:
       case e.DOM_VK_ENTER:
       case e.DOM_VK_ESCAPE:
+        e.stopPropagation();
         DebuggerView.editor.focus();
         return;
     }
@@ -1998,7 +2000,7 @@ GlobalSearchView.prototype = Heritage.extend(WidgetMethods, {
   _createGlobalResultsUI: function(aGlobalResults) {
     let i = 0;
 
-    for (let sourceResults in aGlobalResults) {
+    for (let sourceResults of aGlobalResults) {
       if (i++ == 0) {
         this._createSourceResultsUI(sourceResults);
       } else {
@@ -2123,7 +2125,7 @@ GlobalSearchView.prototype = Heritage.extend(WidgetMethods, {
 
 /**
  * An object containing all source results, grouped by source location.
- * Iterable via "for (let [location, sourceResults] in globalResults) { }".
+ * Iterable via "for (let [location, sourceResults] of globalResults) { }".
  */
 function GlobalResults() {
   this._store = [];
@@ -2150,7 +2152,7 @@ GlobalResults.prototype = {
 
 /**
  * An object containing all the matched lines for a specific source.
- * Iterable via "for (let [lineNumber, lineResults] in sourceResults) { }".
+ * Iterable via "for (let [lineNumber, lineResults] of sourceResults) { }".
  *
  * @param string aUrl
  *        The target source url.
@@ -2291,7 +2293,7 @@ SourceResults.prototype = {
 
 /**
  * An object containing all the matches for a specific line.
- * Iterable via "for (let chunk in lineResults) { }".
+ * Iterable via "for (let chunk of lineResults) { }".
  *
  * @param number aLine
  *        The target line in the source.
@@ -2376,7 +2378,7 @@ LineResults.prototype = {
         firstMatch = firstMatch || lineChunkNode;
       }
       if (lineLength >= GLOBAL_SEARCH_LINE_MAX_LENGTH) {
-        lineContentsNode.appendChild(this._ellipsis.cloneNode());
+        lineContentsNode.appendChild(this._ellipsis.cloneNode(true));
         break;
       }
     }
@@ -2436,12 +2438,10 @@ LineResults.prototype = {
 /**
  * A generator-iterator over the global, source or line results.
  */
-GlobalResults.prototype.__iterator__ =
-SourceResults.prototype.__iterator__ =
-LineResults.prototype.__iterator__ = function() {
-  for (let item of this._store) {
-    yield item;
-  }
+GlobalResults.prototype["@@iterator"] =
+SourceResults.prototype["@@iterator"] =
+LineResults.prototype["@@iterator"] = function*() {
+  yield* this._store;
 };
 
 /**

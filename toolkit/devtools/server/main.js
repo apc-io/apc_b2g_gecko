@@ -74,7 +74,6 @@ loadSubScript.call(this, "resource://gre/modules/commonjs/sdk/core/promise.js");
 this.require = loaderRequire;
 
 Cu.import("resource://gre/modules/devtools/SourceMap.jsm");
-const escodegen = localRequire("escodegen/escodegen");
 
 loadSubScript.call(this, "resource://gre/modules/devtools/DevToolsUtils.js");
 
@@ -426,7 +425,7 @@ var DebuggerServer = {
         let file = nsFile(aPortOrPath);
         if (file.exists())
           file.remove(false);
-        socket = new UnixDomainServerSocket(file, parseInt("600", 8), backlog);
+        socket = new UnixDomainServerSocket(file, parseInt("666", 8), backlog);
       }
       socket.asyncListen(this);
       this._listener = socket;

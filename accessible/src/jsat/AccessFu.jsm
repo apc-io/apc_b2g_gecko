@@ -86,7 +86,7 @@ this.AccessFu = {
     Cu.import('resource://gre/modules/accessibility/TouchAdapter.jsm');
     Cu.import('resource://gre/modules/accessibility/Presentation.jsm');
 
-    Logger.info('enable');
+    Logger.info('Enabled');
 
     for each (let mm in Utils.AllMessageManagers) {
       this._addMessageListeners(mm);
@@ -145,7 +145,7 @@ this.AccessFu = {
 
     this._enabled = false;
 
-    Logger.info('disable');
+    Logger.info('Disabled');
 
     Utils.win.document.removeChild(this.stylesheet.get());
 
@@ -524,9 +524,8 @@ var Output = {
 
       for (let action of aActions) {
         let window = Utils.win;
-        Logger.info('tts.' + action.method,
-                    '"' + action.data + '"',
-                    JSON.stringify(action.options));
+        Logger.debug('tts.' + action.method, '"' + action.data + '"',
+                     JSON.stringify(action.options));
 
         if (!action.options.enqueue && this.webspeechEnabled) {
           window.speechSynthesis.cancel();
@@ -715,8 +714,8 @@ var Input = {
 
   _handleGesture: function _handleGesture(aGesture) {
     let gestureName = aGesture.type + aGesture.touches.length;
-    Logger.info('Gesture', aGesture.type,
-                '(fingers: ' + aGesture.touches.length + ')');
+    Logger.debug('Gesture', aGesture.type,
+                 '(fingers: ' + aGesture.touches.length + ')');
 
     switch (gestureName) {
       case 'dwell1':
@@ -734,6 +733,12 @@ var Input = {
         break;
       case 'swipeleft1':
         this.moveCursor('movePrevious', 'Simple', 'gesture');
+        break;
+      case 'swipeup1':
+        this.contextAction('backward');
+        break;
+      case 'swipedown1':
+        this.contextAction('forward');
         break;
       case 'exploreend1':
         this.activateCurrent(null, true);
@@ -857,6 +862,12 @@ var Input = {
     mm.sendAsyncMessage('AccessFu:MoveCursor',
                         {action: aAction, rule: aRule,
                          origin: 'top', inputType: aInputType});
+  },
+
+  contextAction: function contextAction(aDirection) {
+    // XXX: For now, the only supported context action is adjusting a range.
+    let mm = Utils.getMessageManager(Utils.CurrentBrowser);
+    mm.sendAsyncMessage('AccessFu:AdjustRange', {direction: aDirection});
   },
 
   moveByGranularity: function moveByGranularity(aDetails) {

@@ -75,7 +75,9 @@ public:
     }
 
     void SetProcessName(const nsAString& aName);
-    const void GetProcessName(nsAString& aName);
+    void GetProcessName(nsAString& aName);
+    void GetProcessName(nsACString& aName);
+    static void AppendProcessId(nsACString& aName);
 
     PCompositorChild*
     AllocPCompositorChild(mozilla::ipc::Transport* aTransport,
@@ -109,13 +111,14 @@ public:
     virtual bool DeallocPIndexedDBChild(PIndexedDBChild* aActor);
 
     virtual PMemoryReportRequestChild*
-    AllocPMemoryReportRequestChild();
+    AllocPMemoryReportRequestChild(const uint32_t& generation);
 
     virtual bool
     DeallocPMemoryReportRequestChild(PMemoryReportRequestChild* actor);
 
     virtual bool
-    RecvPMemoryReportRequestConstructor(PMemoryReportRequestChild* child);
+    RecvPMemoryReportRequestConstructor(PMemoryReportRequestChild* child,
+                                        const uint32_t& generation);
 
     virtual bool
     RecvAudioChannelNotify();
@@ -185,7 +188,8 @@ public:
 
     virtual bool RecvAsyncMessage(const nsString& aMsg,
                                   const ClonedMessageData& aData,
-                                  const InfallibleTArray<CpowEntry>& aCpows);
+                                  const InfallibleTArray<CpowEntry>& aCpows,
+                                  const IPC::Principal& aPrincipal);
 
     virtual bool RecvGeolocationUpdate(const GeoPosition& somewhere);
 

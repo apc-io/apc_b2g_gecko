@@ -311,6 +311,16 @@ TelemetryPing.prototype = {
     return ret;
   },
 
+  getThreadHangStats: function getThreadHangStats(stats) {
+    stats.forEach((thread) => {
+      thread.activity = this.packHistogram(thread.activity);
+      thread.hangs.forEach((hang) => {
+        hang.histogram = this.packHistogram(hang.histogram);
+      });
+    });
+    return stats;
+  },
+
   /**
    * Descriptive metadata
    *
@@ -343,7 +353,8 @@ TelemetryPing.prototype = {
                   "device", "manufacturer", "hardware",
                   "hasMMX", "hasSSE", "hasSSE2", "hasSSE3",
                   "hasSSSE3", "hasSSE4A", "hasSSE4_1", "hasSSE4_2",
-                  "hasEDSP", "hasARMv6", "hasARMv7", "hasNEON", "isWow64"];
+                  "hasEDSP", "hasARMv6", "hasARMv7", "hasNEON", "isWow64",
+                  "profileHDDModel", "profileHDDRevision"];
     for each (let field in fields) {
       let value;
       try {
@@ -373,10 +384,13 @@ TelemetryPing.prototype = {
     if (gfxInfo) {
       for each (let field in gfxfields) {
         try {
-          let value = "";
-          value = gfxInfo[field];
-          if (value != "")
+          let value = gfxInfo[field];
+          // bug 940806: We need to do a strict equality comparison here,
+          // otherwise a type conversion will occur and boolean false values
+          // will get filtered out
+          if (value !== "") {
             ret[field] = value;
+          }
         } catch (e) {
           continue
         }
@@ -451,6 +465,7 @@ TelemetryPing.prototype = {
     let p = (id, n) => h(id, Ci.nsIMemoryReporter.UNITS_PERCENTAGE, n);
 
     b("MEMORY_VSIZE", "vsize");
+    b("MEMORY_VSIZE_MAX_CONTIGUOUS", "vsizeMaxContiguous");
     b("MEMORY_RESIDENT", "residentFast");
     b("MEMORY_HEAP_ALLOCATED", "heapAllocated");
     p("MEMORY_HEAP_COMMITTED_UNUSED_RATIO", "heapOverheadRatio");
@@ -543,6 +558,7 @@ TelemetryPing.prototype = {
       histograms: this.getHistograms(Telemetry.histogramSnapshots),
       slowSQL: Telemetry.slowSQL,
       chromeHangs: Telemetry.chromeHangs,
+      threadHangStats: this.getThreadHangStats(Telemetry.threadHangStats),
       lateWrites: Telemetry.lateWrites,
       addonHistograms: this.getAddonHistograms(),
       addonDetails: AddonManagerPrivate.getTelemetryDetails(),

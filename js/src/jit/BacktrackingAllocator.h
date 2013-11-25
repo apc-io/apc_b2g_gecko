@@ -36,8 +36,8 @@ struct VirtualRegisterGroup : public TempObject
     // Spill location to be shared by registers in the group.
     LAllocation spill;
 
-    VirtualRegisterGroup()
-      : allocation(LUse(0, LUse::ANY)), spill(LUse(0, LUse::ANY))
+    VirtualRegisterGroup(TempAllocator &alloc)
+      : registers(alloc), allocation(LUse(0, LUse::ANY)), spill(LUse(0, LUse::ANY))
     {}
 
     uint32_t canonicalReg() {
@@ -67,6 +67,9 @@ class BacktrackingVirtualRegister : public VirtualRegister
     VirtualRegisterGroup *group_;
 
   public:
+    BacktrackingVirtualRegister(TempAllocator &alloc)
+      : VirtualRegister(alloc)
+    {}
     void setMustCopyInput() {
         mustCopyInput_ = true;
     }
@@ -100,6 +103,10 @@ class BacktrackingVirtualRegister : public VirtualRegister
         return group_;
     }
 };
+
+// A sequence of code positions, for tellings BacktrackingAllocator::splitAt
+// where to split.
+typedef js::Vector<CodePosition, 4, SystemAllocPolicy> SplitPositionVector;
 
 class BacktrackingAllocator : public LiveRangeAllocator<BacktrackingVirtualRegister>
 {
@@ -192,13 +199,13 @@ class BacktrackingAllocator : public LiveRangeAllocator<BacktrackingVirtualRegis
     bool tryAllocateGroupRegister(PhysicalRegister &r, VirtualRegisterGroup *group,
                                   bool *psuccess, bool *pfixed, LiveInterval **pconflicting);
     bool evictInterval(LiveInterval *interval);
-    bool distributeUses(LiveInterval *interval, const LiveIntervalVector &newIntervals);
+    void distributeUses(LiveInterval *interval, const LiveIntervalVector &newIntervals);
     bool split(LiveInterval *interval, const LiveIntervalVector &newIntervals);
     bool requeueIntervals(const LiveIntervalVector &newIntervals);
     void spill(LiveInterval *interval);
 
-    bool isReusedInput(LUse *use, LInstruction *ins, bool considerCopy = false);
-    bool isRegisterUse(LUse *use, LInstruction *ins);
+    bool isReusedInput(LUse *use, LInstruction *ins, bool considerCopy);
+    bool isRegisterUse(LUse *use, LInstruction *ins, bool considerCopy = false);
     bool isRegisterDefinition(LiveInterval *interval);
     bool addLiveInterval(LiveIntervalVector &intervals, uint32_t vreg,
                          LiveInterval *spillInterval,
@@ -227,6 +234,9 @@ class BacktrackingAllocator : public LiveRangeAllocator<BacktrackingVirtualRegis
     size_t computeSpillWeight(const VirtualRegisterGroup *group);
 
     bool chooseIntervalSplit(LiveInterval *interval);
+
+    bool splitAt(LiveInterval *interval,
+                 const SplitPositionVector &splitPositions);
     bool trySplitAcrossHotcode(LiveInterval *interval, bool *success);
     bool trySplitAfterLastRegisterUse(LiveInterval *interval, bool *success);
     bool splitAtAllRegisterUses(LiveInterval *interval);

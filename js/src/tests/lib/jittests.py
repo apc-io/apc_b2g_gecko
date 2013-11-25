@@ -101,6 +101,7 @@ class Test:
         return t
 
     COOKIE = '|jit-test|'
+    CacheDir = JS_CACHE_DIR
 
     @classmethod
     def from_file(cls, path, options):
@@ -179,7 +180,8 @@ class Test:
 
         # We may have specified '-a' or '-d' twice: once via --jitflags, once
         # via the "|jit-test|" line.  Remove dups because they are toggles.
-        cmd = prefix + list(set(self.jitflags)) + ['-e', expr, '-f', path]
+        cmd = prefix + ['--js-cache', Test.CacheDir]
+        cmd += list(set(self.jitflags)) + ['-e', expr, '-f', path]
         if self.valgrind:
             cmd = self.VALGRIND_CMD + cmd
         return cmd
@@ -388,9 +390,9 @@ def print_tinderbox(ok, res):
     print("INFO exit-status     : {}".format(res.rc))
     print("INFO timed-out       : {}".format(res.timed_out))
     for line in res.out.split('\n'):
-        print("INFO stdout          > " + line)
-    for line in res.out.split('\n'):
-        print("INFO stderr         2> " + line)
+        print("INFO stdout          > " + line.strip())
+    for line in res.err.split('\n'):
+        print("INFO stderr         2> " + line.strip())
 
 def wrap_parallel_run_test(test, prefix, resultQueue, options):
     # Ignore SIGINT in the child
@@ -655,6 +657,9 @@ def run_tests_remote(tests, prefix, options):
     push_libs(options, dm)
     push_progs(options, dm, [prefix[0]])
     dm.chmodDir(options.remote_test_root)
+
+    Test.CacheDir = posixpath.join(options.remote_test_root, '.js-cache')
+    dm.mkDir(Test.CacheDir)
 
     dm.pushDir(ECMA6_DIR, posixpath.join(jit_tests_dir, 'tests', 'ecma_6'), timeout=600)
     dm.pushDir(os.path.dirname(TEST_DIR), options.remote_test_root, timeout=600)

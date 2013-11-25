@@ -236,14 +236,13 @@ GlobalObject::initFunctionAndObjectClasses(JSContext *cx)
             js_free(source);
             return nullptr;
         }
-        RootedScriptSource sourceObject(cx, ScriptSourceObject::create(cx, ss));
-        if (!sourceObject)
-            return nullptr;
         ss->setSource(source, sourceLen);
-
         CompileOptions options(cx);
         options.setNoScriptRval(true)
                .setVersion(JSVERSION_DEFAULT);
+        RootedScriptSource sourceObject(cx, ScriptSourceObject::create(cx, ss, options));
+        if (!sourceObject)
+            return nullptr;
 
         RootedScript script(cx, JSScript::Create(cx,
                                                  /* enclosingScope = */ NullPtr(),
@@ -502,6 +501,23 @@ GlobalObject::isRuntimeCodeGenEnabled(JSContext *cx, Handle<GlobalObject*> globa
         v.set(global, HeapSlot::Slot, RUNTIME_CODEGEN_ENABLED, boolValue);
     }
     return !v.isFalse();
+}
+
+/* static */ bool
+GlobalObject::warnOnceAboutWatch(JSContext *cx, HandleObject obj)
+{
+    Rooted<GlobalObject*> global(cx, &obj->global());
+    HeapSlot &v = global->getSlotRef(WARNED_WATCH_DEPRECATED);
+    if (v.isUndefined()) {
+        // Warn only once per global object.
+        if (!JS_ReportErrorFlagsAndNumber(cx, JSREPORT_WARNING, js_GetErrorMessage, NULL,
+                                          JSMSG_OBJECT_WATCH_DEPRECATED))
+        {
+            return false;
+        }
+        v.init(global, HeapSlot::Slot, WARNED_WATCH_DEPRECATED, BooleanValue(true));
+    }
+    return true;
 }
 
 JSFunction *

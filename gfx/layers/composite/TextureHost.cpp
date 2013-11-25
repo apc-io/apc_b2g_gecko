@@ -162,8 +162,6 @@ TextureHost::~TextureHost()
 {
 }
 
-#ifdef MOZ_LAYERS_HAVE_LOG
-
 void
 TextureHost::PrintInfo(nsACString& aTo, const char* aPrefix)
 {
@@ -173,8 +171,6 @@ TextureHost::PrintInfo(nsACString& aTo, const char* aPrefix)
   AppendToString(aTo, GetFormat(), " [format=", "]");
   AppendToString(aTo, mFlags, " [flags=", "]");
 }
-
-#endif
 
 void
 TextureSource::SetCompositableBackendSpecificData(CompositableBackendSpecificData* aBackendData)
@@ -246,7 +242,14 @@ DeprecatedTextureHost::SwapTextures(const SurfaceDescriptor& aImage,
   SetBuffer(mBuffer, mDeAllocator);
 }
 
-#ifdef MOZ_LAYERS_HAVE_LOG
+void
+DeprecatedTextureHost::OnActorDestroy()
+{
+  if (ISurfaceAllocator::IsShmem(mBuffer)) {
+    *mBuffer = SurfaceDescriptor();
+    mBuffer = nullptr;
+  }
+}
 
 void
 DeprecatedTextureHost::PrintInfo(nsACString& aTo, const char* aPrefix)
@@ -257,7 +260,6 @@ DeprecatedTextureHost::PrintInfo(nsACString& aTo, const char* aPrefix)
   AppendToString(aTo, GetFormat(), " [format=", "]");
   AppendToString(aTo, mFlags, " [flags=", "]");
 }
-#endif // MOZ_LAYERS_HAVE_LOG
 
 
 
@@ -513,6 +515,13 @@ ShmemTextureHost::DeallocateSharedData()
   }
 }
 
+void
+ShmemTextureHost::OnActorDestroy()
+{
+  delete mShmem;
+  mShmem = nullptr;
+}
+
 uint8_t* ShmemTextureHost::GetBuffer()
 {
   return mShmem ? mShmem->get<uint8_t>() : nullptr;
@@ -537,6 +546,9 @@ MemoryTextureHost::~MemoryTextureHost()
 void
 MemoryTextureHost::DeallocateSharedData()
 {
+  if (mBuffer) {
+    GfxMemoryImageReporter::WillFree(mBuffer);
+  }
   delete[] mBuffer;
 }
 

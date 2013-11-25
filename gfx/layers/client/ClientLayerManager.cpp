@@ -295,6 +295,16 @@ ClientLayerManager::FlushRendering()
 }
 
 void
+ClientLayerManager::SendInvalidRegion(const nsIntRegion& aRegion)
+{
+  if (mWidget) {
+    if (CompositorChild* remoteRenderer = mWidget->GetRemoteRenderer()) {
+      remoteRenderer->SendNotifyRegionInvalidated(aRegion);
+    }
+  }
+}
+
+void
 ClientLayerManager::ForwardTransaction()
 {
   mPhase = PHASE_FORWARD;
@@ -445,9 +455,7 @@ ClientLayerManager::ProgressiveUpdateCallback(bool aHasPendingNewThebesContent,
 
     // This is derived from the code in
     // gfx/layers/ipc/CompositorParent.cpp::TransformShadowTree.
-    const gfx3DMatrix& rootTransform = GetRoot()->GetTransform();
-    CSSToLayerScale paintScale = metrics.mDevPixelsPerCSSPixel
-        / LayerToLayoutDeviceScale(rootTransform.GetXScale(), rootTransform.GetYScale());
+    CSSToLayerScale paintScale = metrics.LayersPixelsPerCSSPixel();
     const CSSRect& metricsDisplayPort =
       (aDrawingCritical && !metrics.mCriticalDisplayPort.IsEmpty()) ?
         metrics.mCriticalDisplayPort : metrics.mDisplayPort;

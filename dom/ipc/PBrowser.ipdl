@@ -16,44 +16,37 @@ include protocol PIndexedDB;
 include DOMTypes;
 include JavaScriptTypes;
 include URIParams;
-include PContentPermission;
 
-include "gfxMatrix.h";
-include "FrameMetrics.h";
-include "ipc/nsGUIEventIPC.h";
-include "mozilla/dom/TabMessageUtils.h";
-include "mozilla/dom/ScreenOrientation.h";
-include "mozilla/dom/PermissionMessageUtils.h";
-include "mozilla/layout/RenderFrameUtils.h";
-include "mozilla/layers/CompositorTypes.h";
 
-using IPC::Principal;
-using gfxMatrix;
-using gfxSize;
-using CSSRect;
-using mozilla::layers::FrameMetrics;
-using FrameMetrics::ViewID;
-using mozilla::layout::ScrollingBehavior;
-using mozilla::void_t;
-using mozilla::WindowsHandle;
-using nscolor;
-using mozilla::WidgetCompositionEvent;
-using nsIMEUpdatePreference;
-using nsIntPoint;
-using nsIntRect;
-using nsIntSize;
-using mozilla::WidgetKeyboardEvent;
-using mozilla::WidgetMouseEvent;
-using mozilla::WidgetWheelEvent;
-using nsRect;
-using mozilla::WidgetSelectionEvent;
-using mozilla::WidgetTextEvent;
-using mozilla::WidgetTouchEvent;
-using RemoteDOMEvent;
-using mozilla::dom::ScreenOrientation;
-using mozilla::layers::TextureFactoryIdentifier;
-using mozilla::CSSIntPoint;
-using mozilla::CSSToScreenScale;
+using class IPC::Principal from "mozilla/dom/PermissionMessageUtils.h";
+using struct gfxMatrix from "gfxMatrix.h";
+using struct gfxSize from "gfxPoint.h";
+using CSSRect from "Units.h";
+using struct mozilla::layers::FrameMetrics from "FrameMetrics.h";
+using struct mozilla::layers::ScrollableLayerGuid from "FrameMetrics.h";
+using FrameMetrics::ViewID from "FrameMetrics.h";
+using mozilla::layout::ScrollingBehavior from "mozilla/layout/RenderFrameUtils.h";
+using struct mozilla::void_t from "ipc/IPCMessageUtils.h";
+using mozilla::WindowsHandle from "ipc/IPCMessageUtils.h";
+using nscolor from "nsColor.h";
+using class mozilla::WidgetCompositionEvent from "ipc/nsGUIEventIPC.h";
+using struct nsIMEUpdatePreference from "nsIWidget.h";
+using struct nsIntPoint from "nsPoint.h";
+using struct nsIntRect from "nsRect.h";
+using struct nsIntSize from "nsSize.h";
+using class mozilla::WidgetKeyboardEvent from "ipc/nsGUIEventIPC.h";
+using class mozilla::WidgetMouseEvent from "ipc/nsGUIEventIPC.h";
+using class mozilla::WidgetWheelEvent from "ipc/nsGUIEventIPC.h";
+using struct nsRect from "nsRect.h";
+using class mozilla::WidgetSelectionEvent from "ipc/nsGUIEventIPC.h";
+using class mozilla::WidgetTextEvent from "ipc/nsGUIEventIPC.h";
+using class mozilla::WidgetTouchEvent from "ipc/nsGUIEventIPC.h";
+using struct mozilla::dom::RemoteDOMEvent from "mozilla/dom/TabMessageUtils.h";
+using mozilla::dom::ScreenOrientation from "mozilla/dom/ScreenOrientation.h";
+using struct mozilla::layers::TextureFactoryIdentifier from "mozilla/layers/CompositorTypes.h";
+using mozilla::CSSIntPoint from "Units.h";
+using mozilla::CSSToScreenScale from "Units.h";
+
 namespace mozilla {
 namespace dom {
 
@@ -69,7 +62,8 @@ intr protocol PBrowser
     manages PIndexedDB;
 
 both:
-    AsyncMessage(nsString aMessage, ClonedMessageData aData, CpowEntry[] aCpows);
+    AsyncMessage(nsString aMessage, ClonedMessageData aData, CpowEntry[] aCpows,
+                 Principal aPrincipal);
 
 parent:
     /**
@@ -82,10 +76,12 @@ parent:
 
     intr CreateWindow() returns (PBrowser window);
 
-    sync SyncMessage(nsString aMessage, ClonedMessageData aData, CpowEntry[] aCpows)
+    sync SyncMessage(nsString aMessage, ClonedMessageData aData,
+                     CpowEntry[] aCpows, Principal aPrincipal)
       returns (nsString[] retval);
 
-    rpc RpcMessage(nsString aMessage, ClonedMessageData aData, CpowEntry[] aCpows)
+    rpc RpcMessage(nsString aMessage, ClonedMessageData aData,
+                   CpowEntry[] aCpows, Principal aPrincipal)
       returns (nsString[] retval);
 
     /**
@@ -210,8 +206,10 @@ parent:
      * Initiates an asynchronous request for permission for the
      * provided principal.
      *
-     * @param aRequests
-     *   The array of permissions to request.
+     * @param aType
+     *   The type of permission to request.
+     * @param aAccess
+     *   Access type. "read" for example.
      * @param aPrincipal
      *   The principal of the request.
      *
@@ -219,7 +217,7 @@ parent:
      *       principals that can live in the content process should
      *       provided.
      */
-    PContentPermissionRequest(PermissionRequest[] aRequests, Principal aPrincipal);
+    PContentPermissionRequest(nsCString aType, nsCString aAccess, Principal principal);
 
     PContentDialog(uint32_t aType, nsCString aName, nsCString aFeatures,
                    int32_t[] aIntParams, nsString[] aStringParams);
@@ -279,7 +277,7 @@ parent:
      * Instructs the TabParent to forward a request to zoom to a rect given in
      * CSS pixels. This rect is relative to the document.
      */
-    ZoomToRect(CSSRect aRect);
+    ZoomToRect(uint32_t aPresShellId, ViewID aViewId, CSSRect aRect);
 
     /**
      * We know for sure that content has either preventDefaulted or not
@@ -288,13 +286,15 @@ parent:
      * batched and only processed for panning and zooming if content does not
      * preventDefault.
      */
-    ContentReceivedTouch(bool aPreventDefault);
+    ContentReceivedTouch(ScrollableLayerGuid aGuid, bool aPreventDefault);
 
     /**
-     * Updates any zoom constraints on the parent and anything tied to it. This
-     * is useful for control logic that resides outside of the remote browser.
+     * Updates the zoom constraints for a scrollable frame in this tab.
+     * The zoom controller code lives on the parent side and so this allows it to
+     * have up-to-date zoom constraints.
      */
-    UpdateZoomConstraints(bool aAllowZoom, CSSToScreenScale aMinZoom, CSSToScreenScale aMaxZoom);
+    UpdateZoomConstraints(uint32_t aPresShellId, ViewID aViewId, bool aIsRoot,
+                          bool aAllowZoom, CSSToScreenScale aMinZoom, CSSToScreenScale aMaxZoom);
 
     /**
      * Notifies the parent about a scroll event. The pres shell ID and
@@ -375,10 +375,10 @@ child:
     RealMouseEvent(WidgetMouseEvent event);
     RealKeyEvent(WidgetKeyboardEvent event);
     MouseWheelEvent(WidgetWheelEvent event);
-    RealTouchEvent(WidgetTouchEvent event);
+    RealTouchEvent(WidgetTouchEvent aEvent, ScrollableLayerGuid aGuid);
     // We use a separate message for touchmove events only to apply
     // compression to them.
-    RealTouchMoveEvent(WidgetTouchEvent event) compress;
+    RealTouchMoveEvent(WidgetTouchEvent aEvent, ScrollableLayerGuid aGuid) compress;
 
     /**
      * @see nsIDOMWindowUtils sendKeyEvent.

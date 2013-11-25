@@ -70,22 +70,15 @@
 #endif
 #ifdef XP_WIN32
 #ifndef MOZ_DEBUG
-#if MOZ_MSVC_REDIST == 1400
-@BINPATH@/Microsoft.VC80.CRT.manifest
-@BINPATH@/msvcm80.dll
-@BINPATH@/msvcp80.dll
-@BINPATH@/msvcr80.dll
-#elif MOZ_MSVC_REDIST == 1500
-@BINPATH@/Microsoft.VC90.CRT.manifest
-@BINPATH@/msvcm90.dll
-@BINPATH@/msvcp90.dll
-@BINPATH@/msvcr90.dll
-#elif MOZ_MSVC_REDIST == 1600
+#if MOZ_MSVC_REDIST == 1600
 @BINPATH@/msvcp100.dll
 @BINPATH@/msvcr100.dll
 #elif MOZ_MSVC_REDIST == 1700
 @BINPATH@/msvcp110.dll
 @BINPATH@/msvcr110.dll
+#elif MOZ_MSVC_REDIST == 1800
+@BINPATH@/msvcp120.dll
+@BINPATH@/msvcr120.dll
 #endif
 #endif
 #endif
@@ -190,6 +183,9 @@
 @BINPATH@/components/dom_media.xpt
 @BINPATH@/components/dom_network.xpt
 @BINPATH@/components/dom_ethernet.xpt
+#ifdef MOZ_NFC
+@BINPATH@/components/dom_nfc.xpt
+#endif
 @BINPATH@/components/dom_notification.xpt
 @BINPATH@/components/dom_html.xpt
 @BINPATH@/components/dom_indexeddb.xpt
@@ -396,8 +392,6 @@
 @BINPATH@/components/crypto-SDR.js
 @BINPATH@/components/jsconsole-clhandler.manifest
 @BINPATH@/components/jsconsole-clhandler.js
-@BINPATH@/components/nsHelperAppDlg.manifest
-@BINPATH@/components/nsHelperAppDlg.js
 @BINPATH@/components/nsDownloadManagerUI.manifest
 @BINPATH@/components/nsDownloadManagerUI.js
 @BINPATH@/components/nsSidebar.manifest
@@ -411,6 +405,8 @@
 @BINPATH@/components/NetworkInterfaceListService.manifest
 @BINPATH@/components/NetworkManager.js
 @BINPATH@/components/NetworkManager.manifest
+@BINPATH@/components/NetworkService.js
+@BINPATH@/components/NetworkService.manifest
 @BINPATH@/components/NetworkStatsManager.js
 @BINPATH@/components/NetworkStatsManager.manifest
 @BINPATH@/components/NetworkStatsServiceProxy.js
@@ -501,6 +497,13 @@
 @BINPATH@/components/webvtt.xpt
 @BINPATH@/components/WebVTT.manifest
 @BINPATH@/components/WebVTTParserWrapper.js
+#ifdef MOZ_NFC
+@BINPATH@/components/nsNfc.manifest
+@BINPATH@/components/nsNfc.js
+@BINPATH@/components/Nfc.manifest
+@BINPATH@/components/Nfc.js
+@BINPATH@/components/NfcContentHelper.js
+#endif
 #ifdef MOZ_ENABLE_DBUS
 @BINPATH@/components/@DLL_PREFIX@dbusservice@DLL_SUFFIX@
 #endif
@@ -754,8 +757,6 @@ bin/components/@DLL_PREFIX@nkgnomevfs@DLL_SUFFIX@
 @BINPATH@/chrome/chrome@JAREXT@
 @BINPATH@/chrome/chrome.manifest
 @BINPATH@/components/B2GComponents.manifest
-@BINPATH@/components/B2GComponents.xpt
-@BINPATH@/components/CameraContent.js
 @BINPATH@/@DLL_PREFIX@omxplugin@DLL_SUFFIX@
 #ifdef ENABLE_MARIONETTE
 @BINPATH@/chrome/marionette@JAREXT@
@@ -781,6 +782,7 @@ bin/components/@DLL_PREFIX@nkgnomevfs@DLL_SUFFIX@
 @BINPATH@/components/TelProtocolHandler.js
 @BINPATH@/components/B2GAboutRedirector.js
 @BINPATH@/components/FilePicker.js
+@BINPATH@/components/HelperAppDialog.js
 
 @BINPATH@/components/DataStore.manifest
 @BINPATH@/components/DataStoreService.js

@@ -31,6 +31,7 @@ loader.lazyImporter(this, "ObjectClient", "resource://gre/modules/devtools/dbg-c
 loader.lazyImporter(this, "VariablesView", "resource:///modules/devtools/VariablesView.jsm");
 loader.lazyImporter(this, "VariablesViewController", "resource:///modules/devtools/VariablesViewController.jsm");
 loader.lazyImporter(this, "PluralForm", "resource://gre/modules/PluralForm.jsm");
+loader.lazyImporter(this, "gDevTools", "resource:///modules/devtools/gDevTools.jsm");
 
 const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
 let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
@@ -170,6 +171,7 @@ const MAX_LONG_STRING_LENGTH = 200000;
 
 const PREF_CONNECTION_TIMEOUT = "devtools.debugger.remote-timeout";
 const PREF_PERSISTLOG = "devtools.webconsole.persistlog";
+const PREF_MESSAGE_TIMESTAMP = "devtools.webconsole.timestampMessages";
 
 /**
  * A WebConsoleFrame instance is an interactive console initialized *per target*
@@ -198,7 +200,9 @@ function WebConsoleFrame(aWebConsoleOwner)
   this.output = new ConsoleOutput(this);
 
   this._toggleFilter = this._toggleFilter.bind(this);
+  this._onPanelSelected = this._onPanelSelected.bind(this);
   this._flushMessageQueue = this._flushMessageQueue.bind(this);
+  this._onToolboxPrefChanged = this._onToolboxPrefChanged.bind(this);
 
   this._outputTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
   this._outputTimerInitialized = false;
@@ -357,6 +361,11 @@ WebConsoleFrame.prototype = {
   // Used in tests.
   _saveRequestAndResponseBodies: false,
 
+  // Chevron width at the starting of Web Console's input box.
+  _chevronWidth: 0,
+  // Width of the monospace characters in Web Console's input box.
+  _inputCharWidth: 0,
+
   /**
    * Tells whether to save the bodies of network requests and responses.
    * Disabled by default to save memory.
@@ -509,6 +518,10 @@ WebConsoleFrame.prototype = {
       }
     }
 
+    // Update the character width and height needed for the popup offset
+    // calculations.
+    this._updateCharSize();
+
     let updateSaveBodiesPrefUI = (aElement) => {
       this.getSaveRequestAndResponseBodies().then(aValue => {
         aElement.setAttribute("checked", aValue);
@@ -554,6 +567,28 @@ WebConsoleFrame.prototype = {
 
     this.jsterm = new JSTerm(this);
     this.jsterm.init();
+    this.jsterm.inputNode.focus();
+
+    let toolbox = gDevTools.getToolbox(this.owner.target);
+    if (toolbox) {
+      toolbox.on("webconsole-selected", this._onPanelSelected);
+    }
+
+    // Toggle the timestamp on preference change
+    gDevTools.on("pref-changed", this._onToolboxPrefChanged);
+    this._onToolboxPrefChanged("pref-changed", {
+      pref: PREF_MESSAGE_TIMESTAMP,
+      newValue: Services.prefs.getBoolPref(PREF_MESSAGE_TIMESTAMP),
+    });
+  },
+
+  /**
+   * Sets the focus to JavaScript input field when the web console tab is
+   * selected.
+   * @private
+   */
+  _onPanelSelected: function WCF__onPanelSelected()
+  {
     this.jsterm.inputNode.focus();
   },
 
@@ -709,6 +744,34 @@ WebConsoleFrame.prototype = {
       this.outputNode.style.fontSize = "";
       Services.prefs.clearUserPref("devtools.webconsole.fontSize");
     }
+    this._updateCharSize();
+  },
+
+  /**
+   * Calculates the width and height of a single character of the input box.
+   * This will be used in opening the popup at the correct offset.
+   *
+   * @private 
+   */
+  _updateCharSize: function WCF__updateCharSize()
+  {
+    let doc = this.document;
+    let tempLabel = doc.createElementNS(XHTML_NS, "span");
+    let style = tempLabel.style;
+    style.position = "fixed";
+    style.padding = "0";
+    style.margin = "0";
+    style.width = "auto";
+    style.color = "transparent";
+    WebConsoleUtils.copyTextStyles(this.inputNode, tempLabel);
+    tempLabel.textContent = "x";
+    doc.documentElement.appendChild(tempLabel);
+    this._inputCharWidth = tempLabel.offsetWidth;
+    tempLabel.parentNode.removeChild(tempLabel);
+    // Calculate the width of the chevron placed at the beginning of the input
+    // box. Remove 4 more pixels to accomodate the padding of the popup.
+    this._chevronWidth = +doc.defaultView.getComputedStyle(this.inputNode)
+                             .paddingLeft.replace(/[^0-9.]/g, "") - 4;
   },
 
   /**
@@ -747,18 +810,26 @@ WebConsoleFrame.prototype = {
           break;
         }
 
+        // Toggle on the targeted filter button, and if the user alt clicked,
+        // toggle off all other filter buttons and their associated filters.
         let state = target.getAttribute("checked") !== "true";
+        if (aEvent.getModifierState("Alt")) {
+          let buttons = this.document
+                        .querySelectorAll(".webconsole-filter-button");
+          Array.forEach(buttons, (button) => {
+            if (button !== target) {
+              button.setAttribute("checked", false);
+              this._setMenuState(button, false);
+            }
+          });
+          state = true;
+        }
         target.setAttribute("checked", state);
 
         // This is a filter button with a drop-down, and the user clicked the
         // main part of the button. Go through all the severities and toggle
         // their associated filters.
-        let menuItems = target.querySelectorAll("menuitem");
-        for (let i = 0; i < menuItems.length; i++) {
-          menuItems[i].setAttribute("checked", state);
-          let prefKey = menuItems[i].getAttribute("prefKey");
-          this.setFilterState(prefKey, state);
-        }
+        this._setMenuState(target, state);
         break;
       }
 
@@ -795,6 +866,25 @@ WebConsoleFrame.prototype = {
         break;
       }
     }
+  },
+
+  /**
+   * Set the menu attributes for a specific toggle button.
+   *
+   * @private
+   * @param XULElement aTarget
+   *        Button with drop down items to be toggled.
+   * @param boolean aState
+   *        True if the menu item is being toggled on, and false otherwise.
+   */
+  _setMenuState: function WCF__setMenuState(aTarget, aState)
+  {
+    let menuItems = aTarget.querySelectorAll("menuitem");
+    Array.forEach(menuItems, (item) => {
+      item.setAttribute("checked", aState);
+      let prefKey = item.getAttribute("prefKey");
+      this.setFilterState(prefKey, aState);
+    });
   },
 
   /**
@@ -2606,33 +2696,32 @@ WebConsoleFrame.prototype = {
   createLocationNode: function WCF_createLocationNode(aSourceURL, aSourceLine)
   {
     let locationNode = this.document.createElementNS(XHTML_NS, "a");
+    let filenameNode = this.document.createElementNS(XHTML_NS, "span");
 
     // Create the text, which consists of an abbreviated version of the URL
-    // plus an optional line number. Scratchpad URLs should not be abbreviated.
-    let displayLocation;
+    // Scratchpad URLs should not be abbreviated.
+    let filename;
     let fullURL;
     let isScratchpad = false;
 
     if (/^Scratchpad\/\d+$/.test(aSourceURL)) {
-      displayLocation = aSourceURL;
+      filename = aSourceURL;
       fullURL = aSourceURL;
       isScratchpad = true;
     }
     else {
       fullURL = aSourceURL.split(" -> ").pop();
-      displayLocation = WebConsoleUtils.abbreviateSourceURL(fullURL);
+      filename = WebConsoleUtils.abbreviateSourceURL(fullURL);
     }
 
-    if (aSourceLine) {
-      displayLocation += ":" + aSourceLine;
-      locationNode.sourceLine = aSourceLine;
-    }
+    filenameNode.className = "filename";
+    filenameNode.textContent = " " + filename;
+    locationNode.appendChild(filenameNode);
 
-    locationNode.textContent = " " + displayLocation;
     locationNode.href = isScratchpad ? "#" : fullURL;
     locationNode.draggable = false;
     locationNode.setAttribute("title", aSourceURL);
-    locationNode.className = "location devtools-monospace";
+    locationNode.className = "location theme-link devtools-monospace";
 
     // Make the location clickable.
     this._addMessageLinkCallback(locationNode, () => {
@@ -2650,6 +2739,14 @@ WebConsoleFrame.prototype = {
         this.owner.viewSource(fullURL, aSourceLine);
       }
     });
+
+    if (aSourceLine) {
+      let lineNumberNode = this.document.createElementNS(XHTML_NS, "span");
+      lineNumberNode.className = "line-number";
+      lineNumberNode.textContent = ":" + aSourceLine;
+      locationNode.appendChild(lineNumberNode);
+      locationNode.sourceLine = aSourceLine;
+    }
 
     return locationNode;
   },
@@ -2712,6 +2809,29 @@ WebConsoleFrame.prototype = {
 
       aCallback(this, aEvent);
     }, false);
+  },
+
+  /**
+   * Handler for the pref-changed event coming from the toolbox.
+   * Currently this function only handles the timestamps preferences.
+   *
+   * @private
+   * @param object aEvent
+   *        This parameter is a string that holds the event name
+   *        pref-changed in this case.
+   * @param object aData
+   *        This is the pref-changed data object.
+  */
+  _onToolboxPrefChanged: function WCF__onToolboxPrefChanged(aEvent, aData)
+  {
+    if (aData.pref == PREF_MESSAGE_TIMESTAMP) {
+      if (aData.newValue) {
+        this.outputNode.classList.remove("hideTimestamps");
+      }
+      else {
+        this.outputNode.classList.add("hideTimestamps");
+      }
+    }
   },
 
   /**
@@ -2818,6 +2938,13 @@ WebConsoleFrame.prototype = {
     }
 
     this._destroyer = promise.defer();
+
+    let toolbox = gDevTools.getToolbox(this.owner.target);
+    if (toolbox) {
+      toolbox.off("webconsole-selected", this._onPanelSelected);
+    }
+
+    gDevTools.off("pref-changed", this._onToolboxPrefChanged);
 
     this._repeatNodes = {};
     this._outputQueue = [];
@@ -3039,7 +3166,7 @@ JSTerm.prototype = {
       panelId: "webConsole_autocompletePopup",
       listBoxId: "webConsole_autocompletePopupListBox",
       position: "before_start",
-      theme: "light",
+      theme: "auto",
       direction: "ltr",
       autoSelect: true
     };
@@ -4341,7 +4468,10 @@ JSTerm.prototype = {
     };
 
     if (items.length > 1 && !popup.isOpen) {
-      popup.openPopup(inputNode);
+      let str = this.inputNode.value.substr(0, this.inputNode.selectionStart);
+      let offset = str.length - (str.lastIndexOf("\n") + 1) - lastPart.length;
+      let x = offset * this.hud._inputCharWidth;
+      popup.openPopup(inputNode, x + this.hud._chevronWidth);
       this._autocompletePopupNavigated = false;
     }
     else if (items.length < 2 && popup.isOpen) {
@@ -5132,7 +5262,6 @@ function gSequenceId()
   return gSequenceId.n++;
 }
 gSequenceId.n = 0;
-
 
 ///////////////////////////////////////////////////////////////////////////////
 // Context Menu

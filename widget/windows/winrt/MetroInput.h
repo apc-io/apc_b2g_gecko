@@ -12,6 +12,7 @@
 #include "mozwrlbase.h"
 #include "nsDeque.h"
 #include "mozilla/EventForwards.h"
+#include "mozilla/layers/APZCTreeManager.h"
 
 // System headers (alphabetical)
 #include <EventToken.h>     // EventRegistrationToken
@@ -100,6 +101,8 @@ private:
   typedef ABI::Windows::UI::Input::ITappedEventArgs ITappedEventArgs;
   typedef ABI::Windows::UI::Input::ManipulationDelta ManipulationDelta;
 
+  typedef mozilla::layers::ScrollableLayerGuid ScrollableLayerGuid;
+
 public:
   MetroInput(MetroWidget* aWidget,
              ICoreWindow* aWindow);
@@ -130,22 +133,16 @@ public:
   HRESULT OnEdgeGestureCompleted(IEdgeGesture* aSender,
                                  IEdgeGestureEventArgs* aArgs);
 
-  // These events are raised by our GestureRecognizer in response to input
-  // events that we forward to it.  The ManipulationStarted,
-  // ManipulationUpdated, and ManipulationEnded events are sent during
-  // complex input gestures including pinch, swipe, and rotate.  Note that
-  // all three gestures can occur simultaneously.
-  HRESULT OnManipulationStarted(IGestureRecognizer* aSender,
-                                IManipulationStartedEventArgs* aArgs);
-  HRESULT OnManipulationUpdated(IGestureRecognizer* aSender,
-                                IManipulationUpdatedEventArgs* aArgs);
+  // Swipe gesture callback from the GestureRecognizer.
   HRESULT OnManipulationCompleted(IGestureRecognizer* aSender,
                                   IManipulationCompletedEventArgs* aArgs);
+
+  // Tap gesture callback from the GestureRecognizer.
   HRESULT OnTapped(IGestureRecognizer* aSender, ITappedEventArgs* aArgs);
   HRESULT OnRightTapped(IGestureRecognizer* aSender,
                         IRightTappedEventArgs* aArgs);
 
-  void HandleSingleTap(const Point& aPoint);
+  void HandleTap(const Point& aPoint, unsigned int aTapCount);
   void HandleLongTap(const Point& aPoint);
 
 private:
@@ -172,8 +169,9 @@ private:
   bool HitTestChrome(const LayoutDeviceIntPoint& pt);
 
   // Event processing helpers.  See function definitions for more info.
-  void TransformRefPoint(const Point& aPosition,
+  bool TransformRefPoint(const Point& aPosition,
                          LayoutDeviceIntPoint& aRefPointOut);
+  void TransformTouchEvent(WidgetTouchEvent* aEvent);
   void OnPointerNonTouch(IPointerPoint* aPoint);
   void AddPointerMoveDataToRecognizer(IPointerEventArgs* aArgs);
   void InitGeckoMouseEventFromPointerPoint(WidgetMouseEvent* aEvent,
@@ -209,7 +207,7 @@ private:
   //   For example, a set of mousemove, mousedown, and mouseup events might
   //   be sent if a tap is detected.
   bool mContentConsumingTouch;
-  bool mIsFirstTouchMove;
+  bool mApzConsumingTouch;
   bool mCancelable;
   bool mRecognizerWantsEvents;
   nsTArray<uint32_t> mCanceledIds;
@@ -258,8 +256,6 @@ private:
   // events from our GestureRecognizer.  It's probably not a huge deal if we
   // don't unregister ourselves with our GestureRecognizer before destroying
   // the GestureRecognizer, but it can't hurt.
-  EventRegistrationToken mTokenManipulationStarted;
-  EventRegistrationToken mTokenManipulationUpdated;
   EventRegistrationToken mTokenManipulationCompleted;
   EventRegistrationToken mTokenTapped;
   EventRegistrationToken mTokenRightTapped;
@@ -285,6 +281,7 @@ private:
   void DispatchTouchCancel(WidgetTouchEvent* aEvent);
 
   nsDeque mInputEventQueue;
+  mozilla::layers::ScrollableLayerGuid mTargetAPZCGuid;
   static nsEventStatus sThrowawayStatus;
 };
 

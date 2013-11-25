@@ -15,6 +15,7 @@
 #include "jscompartment.h"
 
 #include "jit/CompileInfo.h"
+#include "jit/CompileWrappers.h"
 
 namespace js {
 namespace jit {
@@ -203,6 +204,12 @@ struct IonOptions
     // Default: 1
     uint32_t usesBeforeCompilePar;
 
+    // The maximum bytecode length the caller may have,
+    // before we stop inlining large functions in that caller.
+    //
+    // Default: 10000
+    uint32_t inliningMaxCallerBytecodeLength;
+
     void setEagerCompilation() {
         eagerCompilation = true;
         usesBeforeCompile = 0;
@@ -241,7 +248,8 @@ struct IonOptions
         inlineMaxTotalBytecodeLength(1000),
         inlineUseCountRatio(128),
         eagerCompilation(false),
-        usesBeforeCompilePar(1)
+        usesBeforeCompilePar(1),
+        inliningMaxCallerBytecodeLength(10000)
     {
     }
 
@@ -276,14 +284,22 @@ class IonContext
   public:
     IonContext(JSContext *cx, TempAllocator *temp);
     IonContext(ExclusiveContext *cx, TempAllocator *temp);
-    IonContext(JSRuntime *rt, JSCompartment *comp, TempAllocator *temp);
-    IonContext(JSRuntime *rt);
+    IonContext(CompileRuntime *rt, CompileCompartment *comp, TempAllocator *temp);
+    IonContext(CompileRuntime *rt);
     ~IonContext();
 
-    JSRuntime *runtime;
+    // Running context when executing on the main thread. Not available during
+    // compilation.
     JSContext *cx;
-    JSCompartment *compartment;
+
+    // Allocator for temporary memory during compilation.
     TempAllocator *temp;
+
+    // Wrappers with information about the current runtime/compartment for use
+    // during compilation.
+    CompileRuntime *runtime;
+    CompileCompartment *compartment;
+
     int getNextAssemblerId() {
         return assemblerCount_++;
     }
@@ -371,8 +387,8 @@ void FinishOffThreadBuilder(IonBuilder *builder);
 static inline bool
 IsIonEnabled(JSContext *cx)
 {
-    return cx->options().ion() &&
-        cx->options().baseline() &&
+    return cx->compartment()->options().ion(cx) &&
+        cx->compartment()->options().baseline(cx) &&
         cx->typeInferenceEnabled();
 }
 

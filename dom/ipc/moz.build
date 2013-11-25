@@ -7,8 +7,6 @@
 if CONFIG['MOZ_WIDGET_TOOLKIT'] != 'cocoa':
     TEST_DIRS += ['tests']
 
-MODULE = 'dom'
-
 EXPORTS += [
     'nsICachedFileDescriptorListener.h',
     'PCOMContentPermissionRequestChild.h',
@@ -64,7 +62,6 @@ IPDL_SOURCES += [
     'PBrowser.ipdl',
     'PContent.ipdl',
     'PContentDialog.ipdl',
-    'PContentPermission.ipdlh',
     'PContentPermissionRequest.ipdl',
     'PCrashReporter.ipdl',
     'PDocumentRenderer.ipdl',
@@ -74,11 +71,34 @@ IPDL_SOURCES += [
 
 FAIL_ON_WARNINGS = True
 
-LIBXUL_LIBRARY = True
-
-LIBRARY_NAME = 'domipc_s'
-
-EXPORT_LIBRARY = True
-
 include('/ipc/chromium/chromium-config.mozbuild')
+
+FINAL_LIBRARY = 'xul'
+LOCAL_INCLUDES += [
+    '../src/base',
+    '../src/geolocation',
+    '../src/storage',
+    '/chrome/src',
+    '/content/base/src',
+    '/content/events/src',
+    '/content/media/webspeech/synth/ipc',
+    '/docshell/base',
+    '/dom/base',
+    '/dom/bluetooth',
+    '/dom/bluetooth/ipc',
+    '/dom/devicestorage',
+    '/dom/fmradio/ipc',
+    '/dom/indexedDB',
+    '/dom/indexedDB/ipc',
+    '/dom/mobilemessage/src/ipc',
+    '/extensions/cookie',
+    '/hal/sandbox',
+    '/js/ipc',
+    '/layout/base',
+    '/netwerk/base/src',
+    '/toolkit/xre',
+    '/uriloader/exthandler',
+    '/widget/xpwidgets',
+    '/xpcom/base',
+]
 

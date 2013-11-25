@@ -48,7 +48,7 @@ const char* const kCSSRawProperties[eCSSProperty_COUNT_with_aliases] = {
 
 using namespace mozilla;
 
-static int32_t gTableRefCount;
+static int32_t gPropertyTableRefCount;
 static nsStaticCaseInsensitiveNameTable* gPropertyTable;
 static nsStaticCaseInsensitiveNameTable* gFontDescTable;
 
@@ -96,7 +96,7 @@ static nsCSSProperty gAliases[eCSSAliasCount != 0 ? eCSSAliasCount : 1] = {
 void
 nsCSSProps::AddRefTable(void)
 {
-  if (0 == gTableRefCount++) {
+  if (0 == gPropertyTableRefCount++) {
     NS_ABORT_IF_FALSE(!gPropertyTable, "pre existing array!");
     NS_ABORT_IF_FALSE(!gFontDescTable, "pre existing array!");
 
@@ -336,7 +336,7 @@ nsCSSProps::BuildShorthandsContainingTable()
 void
 nsCSSProps::ReleaseTable(void)
 {
-  if (0 == --gTableRefCount) {
+  if (0 == --gPropertyTableRefCount) {
     delete gPropertyTable;
     gPropertyTable = nullptr;
 
@@ -611,6 +611,7 @@ const int32_t nsCSSProps::kAppearanceKTable[] = {
   eCSSKeyword__moz_win_glass,         NS_THEME_WIN_GLASS,
   eCSSKeyword__moz_win_borderless_glass,      NS_THEME_WIN_BORDERLESS_GLASS,
   eCSSKeyword__moz_mac_unified_toolbar,       NS_THEME_MOZ_MAC_UNIFIED_TOOLBAR,
+  eCSSKeyword__moz_mac_fullscreen_button,     NS_THEME_MOZ_MAC_FULLSCREEN_BUTTON,
   eCSSKeyword__moz_window_titlebar,           NS_THEME_WINDOW_TITLEBAR,
   eCSSKeyword__moz_window_titlebar_maximized, NS_THEME_WINDOW_TITLEBAR_MAXIMIZED,
   eCSSKeyword__moz_window_frame_left,         NS_THEME_WINDOW_FRAME_LEFT,
@@ -929,7 +930,7 @@ const int32_t nsCSSProps::kDirectionKTable[] = {
   eCSSKeyword_UNKNOWN,-1
 };
 
-int32_t nsCSSProps::kDisplayKTable[] = {
+const int32_t nsCSSProps::kDisplayKTable[] = {
   eCSSKeyword_none,               NS_STYLE_DISPLAY_NONE,
   eCSSKeyword_inline,             NS_STYLE_DISPLAY_INLINE,
   eCSSKeyword_block,              NS_STYLE_DISPLAY_BLOCK,
@@ -960,7 +961,6 @@ int32_t nsCSSProps::kDisplayKTable[] = {
   eCSSKeyword__moz_popup,         NS_STYLE_DISPLAY_POPUP,
   eCSSKeyword__moz_groupbox,      NS_STYLE_DISPLAY_GROUPBOX,
 #endif
-  // The next two entries are controlled by the layout.css.flexbox.enabled pref.
   eCSSKeyword_flex,               NS_STYLE_DISPLAY_FLEX,
   eCSSKeyword_inline_flex,        NS_STYLE_DISPLAY_INLINE_FLEX,
   eCSSKeyword_UNKNOWN,-1
@@ -1144,6 +1144,7 @@ const int32_t nsCSSProps::kFontVariantEastAsianKTable[] = {
 };
 
 const int32_t nsCSSProps::kFontVariantLigaturesKTable[] = {
+  eCSSKeyword_none, NS_FONT_VARIANT_LIGATURES_NONE,
   eCSSKeyword_common_ligatures, NS_FONT_VARIANT_LIGATURES_COMMON,
   eCSSKeyword_no_common_ligatures, NS_FONT_VARIANT_LIGATURES_NO_COMMON,
   eCSSKeyword_discretionary_ligatures, NS_FONT_VARIANT_LIGATURES_DISCRETIONARY,

@@ -139,9 +139,15 @@ struct MOZ_STACK_CLASS TreeMatchContext {
    * Initialize the ancestor filter and list of style scopes.  If aElement is
    * not null, it and all its ancestors will be passed to
    * mAncestorFilter.PushAncestor and PushStyleScope, starting from the root and
-   * going down the tree.
+   * going down the tree.  Must only be called for elements in a document.
    */
   void InitAncestors(mozilla::dom::Element *aElement);
+
+  /**
+   * Like InitAncestors, but only initializes the style scope list, not the
+   * ancestor filter.  May be called for elements outside a document.
+   */
+  void InitStyleScopes(mozilla::dom::Element* aElement);
 
   void PushStyleScope(mozilla::dom::Element* aElement)
   {
@@ -176,20 +182,13 @@ struct MOZ_STACK_CLASS TreeMatchContext {
 #ifdef DEBUG
   void AssertHasAllStyleScopes(mozilla::dom::Element* aElement)
   {
-    int32_t i = mStyleScopes.Length() - 1;
-    nsINode* node = aElement->GetParentNode();
-    while (node && i != -1) {
-      if (node->IsScopedStyleRoot()) {
-        MOZ_ASSERT(mStyleScopes[i] == node);
-        --i;
+    nsINode* cur = aElement->GetParentNode();
+    while (cur) {
+      if (cur->IsScopedStyleRoot()) {
+        MOZ_ASSERT(mStyleScopes.Contains(cur));
       }
-      node = node->GetParentNode();
+      cur = cur->GetParentNode();
     }
-    while (node) {
-      MOZ_ASSERT(!node->IsScopedStyleRoot());
-      node = node->GetParentNode();
-    }
-    MOZ_ASSERT(i == -1);
   }
 #endif
 
@@ -239,29 +238,60 @@ struct MOZ_STACK_CLASS TreeMatchContext {
   /* Helper class for maintaining the ancestor state */
   class MOZ_STACK_CLASS AutoAncestorPusher {
   public:
-    AutoAncestorPusher(bool aDoPush,
-                       TreeMatchContext &aTreeMatchContext,
-                       mozilla::dom::Element *aElement
+    AutoAncestorPusher(TreeMatchContext& aTreeMatchContext
                        MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-      : mPushed(aDoPush && aElement),
-        mTreeMatchContext(aTreeMatchContext),
-        mElement(aElement)
+      : mPushedAncestor(false)
+      , mPushedStyleScope(false)
+      , mTreeMatchContext(aTreeMatchContext)
+      , mElement(nullptr)
     {
       MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-      if (mPushed) {
+    }
+
+    void PushAncestorAndStyleScope(mozilla::dom::Element* aElement) {
+      MOZ_ASSERT(!mElement);
+      if (aElement) {
+        mElement = aElement;
+        mPushedAncestor = true;
+        mPushedStyleScope = true;
         mTreeMatchContext.mAncestorFilter.PushAncestor(aElement);
         mTreeMatchContext.PushStyleScope(aElement);
       }
     }
+
+    void PushAncestorAndStyleScope(nsIContent* aContent) {
+      if (aContent && aContent->IsElement()) {
+        PushAncestorAndStyleScope(aContent->AsElement());
+      }
+    }
+
+    void PushStyleScope(mozilla::dom::Element* aElement) {
+      MOZ_ASSERT(!mElement);
+      if (aElement) {
+        mElement = aElement;
+        mPushedStyleScope = true;
+        mTreeMatchContext.PushStyleScope(aElement);
+      }
+    }
+
+    void PushStyleScope(nsIContent* aContent) {
+      if (aContent && aContent->IsElement()) {
+        PushStyleScope(aContent->AsElement());
+      }
+    }
+
     ~AutoAncestorPusher() {
-      if (mPushed) {
+      if (mPushedAncestor) {
         mTreeMatchContext.mAncestorFilter.PopAncestor();
+      }
+      if (mPushedStyleScope) {
         mTreeMatchContext.PopStyleScope(mElement);
       }
     }
 
   private:
-    bool mPushed;
+    bool mPushedAncestor;
+    bool mPushedStyleScope;
     TreeMatchContext& mTreeMatchContext;
     mozilla::dom::Element* mElement;
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER

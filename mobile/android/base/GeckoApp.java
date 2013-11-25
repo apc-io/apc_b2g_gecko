@@ -18,6 +18,7 @@ import org.mozilla.gecko.menu.GeckoMenuInflater;
 import org.mozilla.gecko.menu.MenuPanel;
 import org.mozilla.gecko.health.BrowserHealthRecorder;
 import org.mozilla.gecko.health.BrowserHealthRecorder.SessionInformation;
+import org.mozilla.gecko.preferences.GeckoPreferences;
 import org.mozilla.gecko.updater.UpdateService;
 import org.mozilla.gecko.updater.UpdateServiceHelper;
 import org.mozilla.gecko.util.ActivityResultHandler;
@@ -69,6 +70,8 @@ import android.telephony.SignalStrength;
 import android.telephony.TelephonyManager;
 import android.telephony.PhoneStateListener;
 import android.telephony.gsm.GsmCellLocation;
+
+import android.text.TextUtils;
 
 import android.util.AttributeSet;
 import android.util.Base64;
@@ -138,20 +141,25 @@ abstract public class GeckoApp
         PREFETCH    /* launched with a passed URL that we prefetch */
     }
 
-    public static final String ACTION_ALERT_CALLBACK = "org.mozilla.gecko.ACTION_ALERT_CALLBACK";
-    public static final String ACTION_WEBAPP_PREFIX = "org.mozilla.gecko.WEBAPP";
-    public static final String ACTION_DEBUG         = "org.mozilla.gecko.DEBUG";
-    public static final String ACTION_BOOKMARK      = "org.mozilla.gecko.BOOKMARK";
-    public static final String ACTION_LOAD          = "org.mozilla.gecko.LOAD";
-    public static final String ACTION_LAUNCH_SETTINGS = "org.mozilla.gecko.SETTINGS";
-    public static final String ACTION_INIT_PW       = "org.mozilla.gecko.INIT_PW";
-    public static final String SAVED_STATE_IN_BACKGROUND = "inBackground";
-    public static final String SAVED_STATE_PRIVATE_SESSION = "privateSession";
+    public static final String ACTION_ALERT_CALLBACK       = "org.mozilla.gecko.ACTION_ALERT_CALLBACK";
+    public static final String ACTION_BOOKMARK             = "org.mozilla.gecko.BOOKMARK";
+    public static final String ACTION_DEBUG                = "org.mozilla.gecko.DEBUG";
+    public static final String ACTION_LAUNCH_SETTINGS      = "org.mozilla.gecko.SETTINGS";
+    public static final String ACTION_LOAD                 = "org.mozilla.gecko.LOAD";
+    public static final String ACTION_INIT_PW              = "org.mozilla.gecko.INIT_PW";
+    public static final String ACTION_WEBAPP_PREFIX        = "org.mozilla.gecko.WEBAPP";
 
-    public static final String PREFS_NAME          = "GeckoApp";
-    public static final String PREFS_OOM_EXCEPTION = "OOMException";
-    public static final String PREFS_WAS_STOPPED   = "wasStopped";
-    public static final String PREFS_VERSION_CODE  = "versionCode";
+    public static final String EXTRA_STATE_BUNDLE          = "stateBundle";
+
+    public static final String PREFS_ALLOW_STATE_BUNDLE    = "allowStateBundle";
+    public static final String PREFS_CRASHED               = "crashed";
+    public static final String PREFS_NAME                  = "GeckoApp";
+    public static final String PREFS_OOM_EXCEPTION         = "OOMException";
+    public static final String PREFS_VERSION_CODE          = "versionCode";
+    public static final String PREFS_WAS_STOPPED           = "wasStopped";
+
+    public static final String SAVED_STATE_IN_BACKGROUND   = "inBackground";
+    public static final String SAVED_STATE_PRIVATE_SESSION = "privateSession";
 
     static private final String LOCATION_URL = "https://location.services.mozilla.com/v1/submit";
 
@@ -583,19 +591,6 @@ abstract public class GeckoApp
                 String host = message.getString("host");
                 JSONArray permissions = message.getJSONArray("permissions");
                 showSiteSettingsDialog(host, permissions);
-            } else if (event.equals("Tab:ViewportMetadata")) {
-                int tabId = message.getInt("tabID");
-                Tab tab = Tabs.getInstance().getTab(tabId);
-                if (tab == null)
-                    return;
-                tab.setZoomConstraints(new ZoomConstraints(message));
-                tab.setIsRTL(message.getBoolean("isRTL"));
-                // Sync up the layer view and the tab if the tab is currently displayed.
-                LayerView layerView = mLayerView;
-                if (layerView != null && Tabs.getInstance().isSelectedTab(tab)) {
-                    layerView.setZoomConstraints(tab.getZoomConstraints());
-                    layerView.setIsRTL(tab.getIsRTL());
-                }
             } else if (event.equals("Session:StatePurged")) {
                 onStatePurged();
             } else if (event.equals("Bookmark:Insert")) {
@@ -932,7 +927,7 @@ abstract public class GeckoApp
         ThreadUtils.postToUiThread(new Runnable() {
             @Override
             public void run() {
-                mLayerView.show();
+                mLayerView.showSurface();
             }
         });
 
@@ -1231,6 +1226,24 @@ abstract public class GeckoApp
             }
         }
 
+        Bundle stateBundle = getIntent().getBundleExtra(EXTRA_STATE_BUNDLE);
+        if (stateBundle != null) {
+            // Use the state bundle if it was given as an intent extra. This is
+            // only intended to be used internally via Robocop, so a boolean
+            // is read from a private shared pref to prevent other apps from
+            // injecting states.
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            if (prefs.getBoolean(PREFS_ALLOW_STATE_BUNDLE, false)) {
+                Log.i(LOGTAG, "Restoring state from intent bundle");
+                prefs.edit().remove(PREFS_ALLOW_STATE_BUNDLE).commit();
+                savedInstanceState = stateBundle;
+            }
+        } else if (savedInstanceState != null) {
+            // Bug 896992 - This intent has already been handled; reset the intent.
+            setIntent(new Intent(Intent.ACTION_MAIN));
+        }
+
+
         super.onCreate(savedInstanceState);
 
         mOrientation = getResources().getConfiguration().orientation;
@@ -1258,11 +1271,6 @@ abstract public class GeckoApp
             }
 
             mPrivateBrowsingSession = savedInstanceState.getString(SAVED_STATE_PRIVATE_SESSION);
-        }
-
-        if (savedInstanceState != null) {
-            // Bug 896992 - This intent has already been handled; reset the intent.
-            setIntent(new Intent(Intent.ACTION_MAIN));
         }
 
         // Perform background initialization.
@@ -1306,6 +1314,7 @@ abstract public class GeckoApp
         });
 
         GeckoAppShell.setNotificationClient(makeNotificationClient());
+        NotificationHelper.init(getApplicationContext());
     }
 
     protected void initializeChrome() {
@@ -1346,7 +1355,7 @@ abstract public class GeckoApp
             if (!mShouldRestore) {
                 // Show about:home if we aren't restoring previous session and
                 // there's no external URL
-                Tab tab = Tabs.getInstance().loadUrl("about:home", Tabs.LOADURL_NEW_TAB);
+                Tab tab = Tabs.getInstance().loadUrl(AboutPages.HOME, Tabs.LOADURL_NEW_TAB);
             }
         } else {
             // If given an external URL, load it
@@ -1368,12 +1377,13 @@ abstract public class GeckoApp
         String action = intent.getAction();
 
         String passedUri = null;
-        String uri = getURIFromIntent(intent);
-        if (uri != null && uri.length() > 0) {
+        final String uri = getURIFromIntent(intent);
+        if (!TextUtils.isEmpty(uri)) {
             passedUri = uri;
         }
 
-        final boolean isExternalURL = passedUri != null && !passedUri.equals("about:home");
+        final boolean isExternalURL = passedUri != null &&
+                                      !AboutPages.isAboutHome(passedUri);
         StartupAction startupAction;
         if (isExternalURL) {
             startupAction = StartupAction.URL;
@@ -1487,7 +1497,6 @@ abstract public class GeckoApp
         registerEventListener("ToggleChrome:Show");
         registerEventListener("ToggleChrome:Focus");
         registerEventListener("Permissions:Data");
-        registerEventListener("Tab:ViewportMetadata");
         registerEventListener("Session:StatePurged");
         registerEventListener("Bookmark:Insert");
         registerEventListener("Accessibility:Event");
@@ -2067,6 +2076,7 @@ abstract public class GeckoApp
             mPromptService.destroy();
         if (mTextSelection != null)
             mTextSelection.destroy();
+        NotificationHelper.destroy();
 
         if (SmsManager.getInstance() != null) {
             SmsManager.getInstance().stop();
@@ -2650,7 +2660,7 @@ abstract public class GeckoApp
             ThreadUtils.postToUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    mLayerView.hide();
+                    mLayerView.hideSurface();
                 }
             });
         }

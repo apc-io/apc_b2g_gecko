@@ -130,8 +130,8 @@ SelectionManager::ProcessTextSelChangeEvent(AccEvent* aEvent)
   if (!caretCntr)
     return;
 
-  int32_t caretOffset = -1;
-  if (NS_SUCCEEDED(caretCntr->GetCaretOffset(&caretOffset)) && caretOffset != -1) {
+  int32_t caretOffset = caretCntr->CaretOffset();
+  if (caretOffset != -1) {
     nsRefPtr<AccCaretMoveEvent> caretMoveEvent =
       new AccCaretMoveEvent(caretCntr, caretOffset, aEvent->FromUserInput());
     nsEventShell::FireEvent(caretMoveEvent);
@@ -169,6 +169,9 @@ void
 SelectionManager::ProcessSelectionChanged(nsISelection* aSelection)
 {
   Selection* selection = static_cast<Selection*>(aSelection);
+  if (!selection->GetPresShell())
+    return;
+
   const nsRange* range = selection->GetAnchorFocusRange();
   nsINode* cntrNode = nullptr;
   if (range)

@@ -5,6 +5,7 @@
 
 package org.mozilla.gecko.db;
 
+import org.mozilla.gecko.AboutPages;
 import org.mozilla.gecko.db.BrowserContract.Bookmarks;
 import org.mozilla.gecko.db.BrowserContract.Combined;
 import org.mozilla.gecko.db.BrowserContract.ExpirePriority;
@@ -147,7 +148,9 @@ public class LocalBrowserDB implements BrowserDB.BrowserDBIface {
         // the constraint string(s), treating space-separated words as separate constraints
         if (!TextUtils.isEmpty(constraint)) {
           String[] constraintWords = constraint.toString().split(" ");
-          for (int i = 0; i < constraintWords.length; i++) {
+          // Only create a filter query with a maximum of 10 constraint words
+          int constraintCount = Math.min(constraintWords.length, 10);
+          for (int i = 0; i < constraintCount; i++) {
               selection = DBUtils.concatenateWhere(selection, "(" + Combined.URL + " LIKE ? OR " +
                                                                     Combined.TITLE + " LIKE ?)");
               String constraintWord =  "%" + constraintWords[i] + "%";
@@ -248,7 +251,7 @@ public class LocalBrowserDB implements BrowserDB.BrowserDBIface {
                                              Combined.HISTORY_ID },
                               "",
                               limit,
-                              BrowserDB.ABOUT_PAGES_URL_FILTER,
+                              AboutPages.URL_FILTER,
                               selection,
                               selectionArgs);
     }
@@ -400,10 +403,11 @@ public class LocalBrowserDB implements BrowserDB.BrowserDBIface {
             c = cr.query(mBookmarksUriWithProfile,
                          DEFAULT_BOOKMARK_COLUMNS,
                          Bookmarks.PARENT + " = ? AND " +
-                         "(" + Bookmarks.TYPE + " = ? OR " + Bookmarks.TYPE + " = ?)",
+                         "(" + Bookmarks.TYPE + " = ? OR " +
+                            "(" + Bookmarks.TYPE + " = ? AND " + Bookmarks.URL + " IS NOT NULL))",
                          new String[] { String.valueOf(folderId),
-                                        String.valueOf(Bookmarks.TYPE_BOOKMARK),
-                                        String.valueOf(Bookmarks.TYPE_FOLDER) },
+                                        String.valueOf(Bookmarks.TYPE_FOLDER),
+                                        String.valueOf(Bookmarks.TYPE_BOOKMARK) },
                          null);
         }
 
@@ -600,14 +604,14 @@ public class LocalBrowserDB implements BrowserDB.BrowserDBIface {
         // Restore deleted record if possible
         values.put(Bookmarks.IS_DELETED, 0);
 
-        int updated = cr.update(mBookmarksUriWithProfile,
-                                values,
-                                Bookmarks.URL + " = ? AND " +
-                                Bookmarks.PARENT + " = ?",
-                                new String[] { uri, String.valueOf(folderId) });
-
-        if (updated == 0)
-            cr.insert(mBookmarksUriWithProfile, values);
+        final Uri bookmarksWithInsert = mBookmarksUriWithProfile.buildUpon()
+                                          .appendQueryParameter(BrowserContract.PARAM_INSERT_IF_NEEDED, "true")
+                                          .build();
+        cr.update(bookmarksWithInsert,
+                  values,
+                  Bookmarks.URL + " = ? AND " +
+                  Bookmarks.PARENT + " = " + folderId,
+                  new String[] { uri });
 
         // Bump parent modified time using its ID.
         debug("Bumping parent modified time for addition to: " + folderId);
@@ -617,7 +621,7 @@ public class LocalBrowserDB implements BrowserDB.BrowserDBIface {
         ContentValues bumped = new ContentValues();
         bumped.put(Bookmarks.DATE_MODIFIED, now);
 
-        updated = cr.update(mBookmarksUriWithProfile, bumped, where, args);
+        final int updated = cr.update(mBookmarksUriWithProfile, bumped, where, args);
         debug("Updated " + updated + " rows to new modified time.");
     }
 
@@ -775,13 +779,10 @@ public class LocalBrowserDB implements BrowserDB.BrowserDBIface {
         Uri faviconsUri = getAllFaviconsUri().buildUpon().
                 appendQueryParameter(BrowserContract.PARAM_INSERT_IF_NEEDED, "true").build();
 
-        int updated = cr.update(faviconsUri,
-                                values,
-                                Favicons.URL + " = ?",
-                                new String[] { faviconUri });
-
-        if (updated == 0)
-            cr.insert(mFaviconsUriWithProfile, values);
+        cr.update(faviconsUri,
+                  values,
+                  Favicons.URL + " = ?",
+                  new String[] { faviconUri });
     }
 
     @Override
@@ -801,13 +802,12 @@ public class LocalBrowserDB implements BrowserDB.BrowserDBIface {
         values.put(Thumbnails.DATA, data);
         values.put(Thumbnails.URL, uri);
 
-        int updated = cr.update(mThumbnailsUriWithProfile,
-                                values,
-                                Thumbnails.URL + " = ?",
-                                new String[] { uri });
-
-        if (updated == 0)
-            cr.insert(mThumbnailsUriWithProfile, values);
+        Uri thumbnailsUri = mThumbnailsUriWithProfile.buildUpon().
+                appendQueryParameter(BrowserContract.PARAM_INSERT_IF_NEEDED, "true").build();
+        cr.update(thumbnailsUri,
+                  values,
+                  Thumbnails.URL + " = ?",
+                  new String[] { uri });
     }
 
     @Override

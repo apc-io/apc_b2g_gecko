@@ -1198,59 +1198,57 @@ function saveStreamAsync(aPath, aStream, aFile) {
 function extractFilesAsync(aZipFile, aDir) {
   let zipReader = Cc["@mozilla.org/libjar/zip-reader;1"].
                   createInstance(Ci.nsIZipReader);
-  zipReader.open(aZipFile);
 
-  let promises = [];
-
-  // Get all of the entries in the zip and sort them so we create directories
-  // before files
-  let entries = zipReader.findEntries(null);
-  let names = [];
-  while (entries.hasMore())
-    names.push(entries.getNext());
-  names.sort();
-
-  for (let name of names) {
-    let entryName = name;
-    let zipentry = zipReader.getEntry(name);
-    let path = OS.Path.join(aDir.path, ...name.split("/"));
-
-    if (zipentry.isDirectory) {
-      promises.push(OS.File.makeDir(path).then(null, function(e) {
-        ERROR("extractFilesAsync: failed to create directory " + path, e);
-        throw e;
-      }));
-    }
-    else {
-      let options = { unixMode: zipentry.permissions | FileUtils.PERMS_FILE };
-      let promise = OS.File.open(path, { truncate: true }, options).then(function(file) {
-        if (zipentry.realSize == 0)
-          return file.close();
-
-        return saveStreamAsync(path, zipReader.getInputStream(entryName), file);
-      });
-
-      promises.push(promise.then(null, function(e) {
-        ERROR("extractFilesAsync: failed to extract file " + path, e);
-        throw e;
-      }));
-    }
+  try {
+    zipReader.open(aZipFile);
+  }
+  catch (e) {
+    return Promise.reject(e);
   }
 
-  // Will be rejected if any of the promises are rejected and resolved otherwise
-  let result = Promise.defer();
+  return Task.spawn(function() {
+    // Get all of the entries in the zip and sort them so we create directories
+    // before files
+    let entries = zipReader.findEntries(null);
+    let names = [];
+    while (entries.hasMore())
+      names.push(entries.getNext());
+    names.sort();
 
-  // If any promise is rejected then result is rejected, the resulting array of
-  // promises are all resolved though
-  promises = promises.map(p => p.then(null, result.reject));
+    for (let name of names) {
+      let entryName = name;
+      let zipentry = zipReader.getEntry(name);
+      let path = OS.Path.join(aDir.path, ...name.split("/"));
 
-  // Wait for all of the promises to be resolved
-  return Promise.all(promises).then(function() {
-    // Resolve the result if it hasn't already been rejected
-    result.resolve();
+      if (zipentry.isDirectory) {
+        try {
+          yield OS.File.makeDir(path);
+        }
+        catch (e) {
+          ERROR("extractFilesAsync: failed to create directory " + path, e);
+          throw e;
+        }
+      }
+      else {
+        let options = { unixMode: zipentry.permissions | FileUtils.PERMS_FILE };
+        try {
+          let file = yield OS.File.open(path, { truncate: true }, options);
+          if (zipentry.realSize == 0)
+            yield file.close();
+          else
+            yield saveStreamAsync(path, zipReader.getInputStream(entryName), file);
+        }
+        catch (e) {
+          ERROR("extractFilesAsync: failed to extract file " + path, e);
+          throw e;
+        }
+      }
+    }
 
     zipReader.close();
-    return result.promise;
+  }).then(null, (e) => {
+    zipReader.close();
+    throw e;
   });
 }
 
@@ -1388,41 +1386,19 @@ function escapeAddonURI(aAddon, aUri, aUpdateType, aAppVersion)
   return uri;
 }
 
-function recursiveRemoveAsync(aFile) {
+function removeAsync(aFile) {
   return Task.spawn(function () {
     let info = null;
     try {
       info = yield OS.File.stat(aFile.path);
+      if (info.isDir)
+        yield OS.File.removeDir(aFile.path);
+      else
+        yield OS.File.remove(aFile.path);
     }
     catch (e if e instanceof OS.File.Error && e.becauseNoSuchFile) {
       // The file has already gone away
       return;
-    }
-
-    setFilePermissions(aFile, info.isDir ? FileUtils.PERMS_DIRECTORY
-                                         : FileUtils.PERMS_FILE);
-
-    // OS.File means we have to recurse into directories
-    if (info.isDir) {
-      let iterator = new OS.File.DirectoryIterator(aFile.path);
-      yield iterator.forEach(function(entry) {
-        let nextFile = aFile.clone();
-        nextFile.append(entry.name);
-        return recursiveRemoveAsync(nextFile);
-      });
-      yield iterator.close();
-    }
-
-    try {
-      yield info.isDir ? OS.File.removeEmptyDir(aFile.path)
-                       : OS.File.remove(aFile.path);
-    }
-    catch (e if e instanceof OS.File.Error && e.becauseNoSuchFile) {
-      // The file has already gone away
-    }
-    catch (e) {
-      ERROR("Failed to remove file " + aFile.path, e);
-      throw e;
     }
   });
 }
@@ -1485,30 +1461,33 @@ function recursiveRemove(aFile) {
  * Returns the timestamp and leaf file name of the most recently modified
  * entry in a directory,
  * or simply the file's own timestamp if it is not a directory.
+ * Also returns the total number of items (directories and files) visited in the scan
  *
  * @param  aFile
  *         A non-null nsIFile object
- * @return [File Name, Epoch time], as described above.
+ * @return [File Name, Epoch time, items visited], as described above.
  */
 function recursiveLastModifiedTime(aFile) {
   try {
     let modTime = aFile.lastModifiedTime;
     let fileName = aFile.leafName;
     if (aFile.isFile())
-      return [fileName, modTime];
+      return [fileName, modTime, 1];
 
     if (aFile.isDirectory()) {
       let entries = aFile.directoryEntries.QueryInterface(Ci.nsIDirectoryEnumerator);
       let entry;
+      let totalItems = 1;
       while ((entry = entries.nextFile)) {
-        let [subName, subTime] = recursiveLastModifiedTime(entry);
+        let [subName, subTime, items] = recursiveLastModifiedTime(entry);
+        totalItems += items;
         if (subTime > modTime) {
           modTime = subTime;
           fileName = subName;
         }
       }
       entries.close();
-      return [fileName, modTime];
+      return [fileName, modTime, totalItems];
     }
   }
   catch (e) {
@@ -1516,7 +1495,7 @@ function recursiveLastModifiedTime(aFile) {
   }
 
   // If the file is something else, just ignore it.
-  return ["", 0];
+  return ["", 0, 0];
 }
 
 /**
@@ -1661,6 +1640,49 @@ var Prefs = {
       Services.prefs.clearUserPref(aName);
   }
 }
+
+// Helper function to compare JSON saved version of the directory state
+// with the new state returned by getInstallLocationStates()
+// Structure is: ordered array of {'name':?, 'addons': {addonID: {'descriptor':?, 'mtime':?} ...}}
+function directoryStateDiffers(aState, aCache)
+{
+  // check equality of an object full of addons; fortunately we can destroy the 'aOld' object
+  function addonsMismatch(aNew, aOld) {
+    for (let [id, val] of aNew) {
+      if (!id in aOld)
+        return true;
+      if (val.descriptor != aOld[id].descriptor ||
+          val.mtime != aOld[id].mtime)
+        return true;
+      delete aOld[id];
+    }
+    // make sure aOld doesn't have any extra entries
+    for (let id in aOld)
+      return true;
+    return false;
+  }
+
+  if (!aCache)
+    return true;
+  try {
+    let old = JSON.parse(aCache);
+    if (aState.length != old.length)
+      return true;
+    for (let i = 0; i < aState.length; i++) {
+      // conveniently, any missing fields would require a 'true' return, which is
+      // handled by our catch wrapper
+      if (aState[i].name != old[i].name)
+        return true;
+      if (addonsMismatch(aState[i].addons, old[i].addons))
+        return true;
+    }
+  }
+  catch (e) {
+    return true;
+  }
+  return false;
+}
+
 
 var XPIProvider = {
   // An array of known install locations
@@ -2201,10 +2223,11 @@ var XPIProvider = {
    */
   getAddonStates: function XPI_getAddonStates(aLocation) {
     let addonStates = {};
-    aLocation.addonLocations.forEach(function(file) {
+    for (let file of aLocation.addonLocations) {
+      let scanStarted = Date.now();
       let id = aLocation.getIDForLocation(file);
       let unpacked = 0;
-      let [modFile, modTime] = recursiveLastModifiedTime(file);
+      let [modFile, modTime, items] = recursiveLastModifiedTime(file);
       addonStates[id] = {
         descriptor: file.persistentDescriptor,
         mtime: modTime
@@ -2219,7 +2242,10 @@ var XPIProvider = {
       catch (e) { }
       this._mostRecentlyModifiedFile[id] = modFile;
       this.setTelemetry(id, "unpacked", unpacked);
-    }, this);
+      this.setTelemetry(id, "location", aLocation.name);
+      this.setTelemetry(id, "scan_MS", Date.now() - scanStarted);
+      this.setTelemetry(id, "scan_items", items);
+    }
 
     return addonStates;
   },
@@ -3182,7 +3208,7 @@ var XPIProvider = {
     // The install locations are iterated in reverse order of priority so when
     // there are multiple add-ons installed with the same ID the one that
     // should be visible is the first one encountered.
-    aState.reverse().forEach(function(aSt) {
+    for (let aSt of aState.reverse()) {
 
       // We can't include the install location directly in the state as it has
       // to be cached as JSON.
@@ -3195,7 +3221,7 @@ var XPIProvider = {
         let addons = XPIDatabase.getAddonsInLocation(installLocation.name);
         // Iterate through the add-ons installed the last time the application
         // ran
-        addons.forEach(function(aOldAddon) {
+        for (let aOldAddon of addons) {
           // If a version of this add-on has been installed in an higher
           // priority install location then count it as changed
           if (AddonManager.getStartupChanges(AddonManager.STARTUP_CHANGE_INSTALLED)
@@ -3213,10 +3239,25 @@ var XPIProvider = {
             if (aOldAddon.visible && !aOldAddon.active)
               XPIProvider.inactiveAddonIDs.push(aOldAddon.id);
 
+            // record a bit more per-addon telemetry
+            let loc = aOldAddon.defaultLocale;
+            if (loc) {
+              XPIProvider.setTelemetry(aOldAddon.id, "name", loc.name);
+              XPIProvider.setTelemetry(aOldAddon.id, "creator", loc.creator);
+            }
+
             // Check if the add-on has been changed outside the XPI provider
             if (aOldAddon.updateDate != addonState.mtime) {
+              // Did time change in the wrong direction?
+              if (addonState.mtime < aOldAddon.updateDate) {
+                this.setTelemetry(aOldAddon.id, "olderFile", {
+                  name: this._mostRecentlyModifiedFile[aOldAddon.id],
+                  mtime: addonState.mtime,
+                  oldtime: aOldAddon.updateDate
+                });
+              }
               // Is the add-on unpacked?
-              if (addonState.rdfTime) {
+              else if (addonState.rdfTime) {
                 // Was the addon manifest "install.rdf" modified, or some other file?
                 if (addonState.rdfTime > aOldAddon.updateDate) {
                   this.setTelemetry(aOldAddon.id, "modifiedInstallRDF", 1);
@@ -3256,7 +3297,7 @@ var XPIProvider = {
           else {
             changed = removeMetadata(aOldAddon) || changed;
           }
-        }, this);
+        }
       }
 
       // All the remaining add-ons in this install location must be new.
@@ -3267,9 +3308,9 @@ var XPIProvider = {
         locMigrateData = XPIDatabase.migrateData[installLocation.name];
       for (let id in addonStates) {
         changed = addMetadata(installLocation, id, addonStates[id],
-                              locMigrateData[id]) || changed;
+                              locMigrateData[id] || null) || changed;
       }
-    }, this);
+    }
 
     // The remaining locations that had add-ons installed in them no longer
     // have any add-ons installed in them, or the locations no longer exist.
@@ -3277,9 +3318,9 @@ var XPIProvider = {
     // database.
     for (let location of knownLocations) {
       let addons = XPIDatabase.getAddonsInLocation(location);
-      addons.forEach(function(aOldAddon) {
+      for (let aOldAddon of addons) {
         changed = removeMetadata(aOldAddon) || changed;
-      }, this);
+      }
     }
 
     // Cache the new install location states
@@ -3380,8 +3421,15 @@ var XPIProvider = {
 
     // If the install directory state has changed then we must update the database
     let cache = Prefs.getCharPref(PREF_INSTALL_CACHE, null);
+    // For a little while, gather telemetry on whether the deep comparison
+    // makes a difference
     if (cache != JSON.stringify(state)) {
-      updateReasons.push("directoryState");
+      if (directoryStateDiffers(state, cache)) {
+        updateReasons.push("directoryState");
+      }
+      else {
+        AddonManagerPrivate.recordSimpleMeasure("XPIDB_startup_state_badCompare", 1);
+      }
     }
 
     // If the database doesn't exist and there are add-ons installed then we
@@ -5402,6 +5450,7 @@ AddonInstall.prototype = {
     let stagedAddon = stagingDir.clone();
 
     Task.spawn((function() {
+      let installedUnpacked = 0;
       yield this.installLocation.requestStagingDir();
 
       // First stage the file regardless of whether restarting is necessary
@@ -5409,15 +5458,16 @@ AddonInstall.prototype = {
         LOG("Addon " + this.addon.id + " will be installed as " +
             "an unpacked directory");
         stagedAddon.append(this.addon.id);
-        yield recursiveRemoveAsync(stagedAddon);
+        yield removeAsync(stagedAddon);
         yield OS.File.makeDir(stagedAddon.path);
         yield extractFilesAsync(this.file, stagedAddon);
+        installedUnpacked = 1;
       }
       else {
         LOG("Addon " + this.addon.id + " will be installed as " +
             "a packed xpi");
         stagedAddon.append(this.addon.id + ".xpi");
-        yield recursiveRemoveAsync(stagedAddon);
+        yield removeAsync(stagedAddon);
         yield OS.File.copy(this.file.path, stagedAddon.path);
       }
 
@@ -5506,7 +5556,9 @@ AddonInstall.prototype = {
         // Update the metadata in the database
         this.addon._sourceBundle = file;
         this.addon._installLocation = this.installLocation;
-        let [mFile, mTime] = recursiveLastModifiedTime(file);
+        let scanStarted = Date.now();
+        let [, mTime, scanItems] = recursiveLastModifiedTime(file);
+        let scanTime = Date.now() - scanStarted;
         this.addon.updateDate = mTime;
         this.addon.visible = true;
         if (isUpgrade) {
@@ -5546,10 +5598,19 @@ AddonInstall.prototype = {
                                             reason, extraParams);
           }
           else {
-            // XXX this makes it dangerous to do many things in onInstallEnded
+            // XXX this makes it dangerous to do some things in onInstallEnded
             // listeners because important cleanup hasn't been done yet
             XPIProvider.unloadBootstrapScope(this.addon.id);
           }
+        }
+        XPIProvider.setTelemetry(this.addon.id, "unpacked", installedUnpacked);
+        XPIProvider.setTelemetry(this.addon.id, "location", this.installLocation.name);
+        XPIProvider.setTelemetry(this.addon.id, "scan_MS", scanTime);
+        XPIProvider.setTelemetry(this.addon.id, "scan_items", scanItems);
+        let loc = this.addon.defaultLocale;
+        if (loc) {
+          XPIProvider.setTelemetry(this.addon.id, "name", loc.name);
+          XPIProvider.setTelemetry(this.addon.id, "creator", loc.creator);
         }
       }
     }).bind(this)).then(null, (e) => {
@@ -5559,6 +5620,8 @@ AddonInstall.prototype = {
       this.state = AddonManager.STATE_INSTALL_FAILED;
       this.error = AddonManager.ERROR_FILE_ACCESS;
       XPIProvider.removeActiveInstall(this);
+      AddonManagerPrivate.callAddonListeners("onOperationCancelled",
+                                             createWrapper(this.addon));
       AddonManagerPrivate.callInstallListeners("onInstallFailed",
                                                this.listeners,
                                                this.wrapper);
@@ -6860,7 +6923,7 @@ DirectoryInstallLocation.prototype = {
       recursiveRemove(file);
     }
 
-    if (this.stagingDirLock > 0)
+    if (this._stagingDirLock > 0)
       return;
 
     let dirEntries = dir.directoryEntries.QueryInterface(Ci.nsIDirectoryEnumerator);

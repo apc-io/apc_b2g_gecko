@@ -15,7 +15,7 @@ if CONFIG['OS_ARCH'] == 'WINNT':
         'nsIWinAppHelper.idl',
     ]
 
-MODULE = 'xulapp'
+XPIDL_MODULE = 'xulapp'
 
 if CONFIG['MOZ_INSTRUMENT_EVENT_LOOP']:
     EXPORTS += ['EventTracer.h']
@@ -24,7 +24,6 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
     EXPORTS += ['nsWindowsDllInterceptor.h']
     SOURCES += [
         'nsNativeAppSupportWin.cpp',
-        'nsWindowsDllBlocklist.cpp',
     ]
 elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
     EXPORTS += ['MacQuirks.h']
@@ -39,8 +38,10 @@ elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
     ]
 elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'qt':
     EXPORTS += ['nsQAppInstance.h']
-    SOURCES += [
+    GENERATED_SOURCES += [
         'moc_nsNativeAppSupportQt.cpp',
+    ]
+    SOURCES += [
         'nsNativeAppSupportQt.cpp',
         'nsQAppInstance.cpp',
     ]
@@ -94,11 +95,10 @@ if CONFIG['MOZ_UPDATER']:
             'nsUpdateDriver.cpp',
         ]
 
-LIBXUL_LIBRARY = True
-
 MSVC_ENABLE_PGO = True
 
 LIBRARY_NAME = 'xulapp_s'
 
 include('/ipc/chromium/chromium-config.mozbuild')
 
+FINAL_LIBRARY = 'xul'

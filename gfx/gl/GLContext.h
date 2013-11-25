@@ -99,6 +99,7 @@ namespace GLFeature {
         packed_depth_stencil,
         query_objects,
         robustness,
+        sRGB,
         standard_derivatives,
         texture_float,
         texture_float_linear,
@@ -395,6 +396,10 @@ public:
         EXT_transform_feedback,
         NV_transform_feedback,
         ANGLE_depth_texture,
+        EXT_sRGB,
+        EXT_texture_sRGB,
+        ARB_framebuffer_sRGB,
+        EXT_framebuffer_sRGB,
         KHR_debug,
         Extensions_Max,
         Extensions_End
@@ -2424,6 +2429,7 @@ public:
       NativeGLContext,
       NativeImageSurface,
       NativeThebesSurface,
+      NativeCGLContext,
       NativeDataTypeMax
     };
 
@@ -2443,11 +2449,23 @@ public:
     virtual EGLContext GetEGLContext() { return nullptr; }
     virtual GLLibraryEGL* GetLibraryEGL() { return nullptr; }
 
-    virtual void MakeCurrent_EGLSurface(void* surf) {
+    /**
+     * Only on EGL.
+     *
+     * If surf is non-null, this sets it to temporarily override this context's
+     * primary surface. This makes this context current against this surface,
+     * and subsequent MakeCurrent calls will continue using this surface as long
+     * as this override is set.
+     *
+     * If surf is null, this removes any previously set override, and makes the
+     * context current again against its primary surface.
+     */
+    virtual void SetEGLSurfaceOverride(EGLSurface surf) {
         MOZ_CRASH("Must be called against a GLContextEGL.");
     }
 
     bool CanUploadSubTextures();
+    bool CanReadSRGBFromFBOTexture();
 
     static void PlatformStartup();
 
@@ -2497,7 +2515,7 @@ public:
 #endif
 
     virtual already_AddRefed<TextureImage>
-    CreateDirectTextureImage(android::GraphicBuffer* aBuffer, GLenum aWrapMode)
+    CreateDirectTextureImage(::android::GraphicBuffer* aBuffer, GLenum aWrapMode)
     { return nullptr; }
 
     // Before reads from offscreen texture

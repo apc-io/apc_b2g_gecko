@@ -78,6 +78,7 @@
 #include "nsISupportsPrimitives.h"
 #include "nsIURIFixup.h"
 #include "nsIWindowWatcher.h"
+#include "nsMemoryReporterManager.h"
 #include "nsServiceManagerUtils.h"
 #include "nsStyleSheetService.h"
 #include "nsThreadUtils.h"
@@ -91,6 +92,7 @@
 #include "URIUtils.h"
 #include "nsIWebBrowserChrome.h"
 #include "nsIDocShell.h"
+#include "mozilla/net/NeckoMessageUtils.h"
 
 #if defined(ANDROID) || defined(LINUX)
 #include "nsSystemInfo.h"
@@ -119,10 +121,6 @@ using namespace mozilla::system;
 #include "BluetoothService.h"
 #endif
 
-#ifdef MOZ_NUWA_PROCESS
-#include "ipc/Nuwa.h"
-#endif
-
 #include "JavaScriptParent.h"
 
 #ifdef MOZ_B2G_FM
@@ -137,8 +135,6 @@ using namespace mozilla::system;
 
 static NS_DEFINE_CID(kCClipboardCID, NS_CLIPBOARD_CID);
 static const char* sClipboardTextFlavors[] = { kUnicodeMime };
-
-#define NUWA_FORK_WAIT_DURATION_MS 2000 // 2 seconds.
 
 using base::ChildPrivileges;
 using base::KillProcess;
@@ -159,61 +155,13 @@ namespace dom {
 
 #define NS_IPC_IOSERVICE_SET_OFFLINE_TOPIC "ipc:network:set-offline"
 
-// This represents all the memory reports provided by a child process.
-class ChildReporter MOZ_FINAL : public nsIMemoryReporter
-{
-public:
-    ChildReporter(const InfallibleTArray<MemoryReport>& childReports)
-    {
-        for (uint32_t i = 0; i < childReports.Length(); i++) {
-            MemoryReport r(childReports[i].process(),
-                           childReports[i].path(),
-                           childReports[i].kind(),
-                           childReports[i].units(),
-                           childReports[i].amount(),
-                           childReports[i].desc());
-
-            // Child reports have a non-empty process.
-            MOZ_ASSERT(!r.process().IsEmpty());
-
-            mChildReports.AppendElement(r);
-        }
-    }
-
-    NS_DECL_ISUPPORTS
-
-    NS_IMETHOD GetName(nsACString& name)
-    {
-        name.AssignLiteral("content-child");
-        return NS_OK;
-    }
-
-    NS_IMETHOD CollectReports(nsIMemoryReporterCallback* aCb,
-                              nsISupports* aClosure)
-    {
-        for (uint32_t i = 0; i < mChildReports.Length(); i++) {
-            nsresult rv;
-            MemoryReport r = mChildReports[i];
-            rv = aCb->Callback(r.process(), r.path(), r.kind(), r.units(),
-                               r.amount(), r.desc(), aClosure);
-            NS_ENSURE_SUCCESS(rv, rv);
-        }
-        return NS_OK;
-    }
-
-  private:
-    InfallibleTArray<MemoryReport> mChildReports;
-};
-
-NS_IMPL_ISUPPORTS1(ChildReporter, nsIMemoryReporter)
-
 class MemoryReportRequestParent : public PMemoryReportRequestParent
 {
 public:
     MemoryReportRequestParent();
     virtual ~MemoryReportRequestParent();
 
-    virtual bool Recv__delete__(const InfallibleTArray<MemoryReport>& report);
+    virtual bool Recv__delete__(const uint32_t& generation, const InfallibleTArray<MemoryReport>& report);
 private:
     ContentParent* Owner()
     {
@@ -227,9 +175,13 @@ MemoryReportRequestParent::MemoryReportRequestParent()
 }
 
 bool
-MemoryReportRequestParent::Recv__delete__(const InfallibleTArray<MemoryReport>& childReports)
+MemoryReportRequestParent::Recv__delete__(const uint32_t& generation, const InfallibleTArray<MemoryReport>& childReports)
 {
-    Owner()->SetChildMemoryReports(childReports);
+    nsRefPtr<nsMemoryReporterManager> mgr =
+        nsMemoryReporterManager::GetOrCreate();
+    if (mgr) {
+        mgr->HandleChildReports(generation, childReports);
+    }
     return true;
 }
 
@@ -238,29 +190,21 @@ MemoryReportRequestParent::~MemoryReportRequestParent()
     MOZ_COUNT_DTOR(MemoryReportRequestParent);
 }
 
-/**
- * A memory reporter for ContentParent objects themselves.
- */
-class ContentParentMemoryReporter MOZ_FINAL : public nsIMemoryReporter
+// A memory reporter for ContentParent objects themselves.
+class ContentParentsMemoryReporter MOZ_FINAL : public MemoryMultiReporter
 {
 public:
-    NS_DECL_ISUPPORTS
-    NS_DECL_NSIMEMORYREPORTER
-    NS_MEMORY_REPORTER_MALLOC_SIZEOF_FUN(MallocSizeOf)
+    ContentParentsMemoryReporter()
+      : MemoryMultiReporter("content-parents")
+    {}
+
+    NS_IMETHOD CollectReports(nsIMemoryReporterCallback* cb,
+                              nsISupports* aClosure);
 };
 
-NS_IMPL_ISUPPORTS1(ContentParentMemoryReporter, nsIMemoryReporter)
-
 NS_IMETHODIMP
-ContentParentMemoryReporter::GetName(nsACString& aName)
-{
-    aName.AssignLiteral("ContentParents");
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-ContentParentMemoryReporter::CollectReports(nsIMemoryReporterCallback* cb,
-                                            nsISupports* aClosure)
+ContentParentsMemoryReporter::CollectReports(nsIMemoryReporterCallback* cb,
+                                             nsISupports* aClosure)
 {
     nsAutoTArray<ContentParent*, 16> cps;
     ContentParent::GetAllEvenIfDead(cps);
@@ -323,32 +267,16 @@ static bool sCanLaunchSubprocesses;
 // The first content child has ID 1, so the chrome process can have ID 0.
 static uint64_t gContentChildID = 1;
 
-
-// sNuwaProcess points to the Nuwa process which is used for forking new
-// processes later.
-static StaticRefPtr<ContentParent> sNuwaProcess;
-// Nuwa process is ready for creating new process.
-static bool sNuwaReady = false;
-// The array containing the preallocated processes. 4 as the inline storage size
-// should be enough so we don't need to grow the nsAutoTArray.
-static StaticAutoPtr<nsAutoTArray<nsRefPtr<ContentParent>, 4> > sSpareProcesses;
-static StaticAutoPtr<nsTArray<CancelableTask*> > sNuwaForkWaitTasks;
-
 // We want the prelaunched process to know that it's for apps, but not
 // actually for any app in particular.  Use a magic manifest URL.
 // Can't be a static constant.
 #define MAGIC_PREALLOCATED_APP_MANIFEST_URL NS_LITERAL_STRING("{{template}}")
 
-void
+/* static */ already_AddRefed<ContentParent>
 ContentParent::RunNuwaProcess()
 {
     MOZ_ASSERT(NS_IsMainThread());
-
-    if (sNuwaProcess) {
-        NS_RUNTIMEABORT("sNuwaProcess is created twice.");
-    }
-
-    sNuwaProcess =
+    nsRefPtr<ContentParent> nuwaProcess =
         new ContentParent(/* aApp = */ nullptr,
                           /* aIsForBrowser = */ false,
                           /* aIsForPreallocated = */ true,
@@ -357,108 +285,9 @@ ContentParent::RunNuwaProcess()
                           base::PRIVILEGES_INHERIT,
                           PROCESS_PRIORITY_BACKGROUND,
                           /* aIsNuwaProcess = */ true);
-    sNuwaProcess->Init();
+    nuwaProcess->Init();
+    return nuwaProcess.forget();
 }
-
-#ifdef MOZ_NUWA_PROCESS
-// initialization off the critical path of app startup.
-static CancelableTask* sPreallocateAppProcessTask;
-// This number is fairly arbitrary ... the intention is to put off
-// launching another app process until the last one has finished
-// loading its content, to reduce CPU/memory/IO contention.
-static int sPreallocateDelayMs = 1000;
-
-static void
-DelayedNuwaFork()
-{
-    MOZ_ASSERT(NS_IsMainThread());
-
-    sPreallocateAppProcessTask = nullptr;
-
-    if (!sNuwaReady) {
-        if (!sNuwaProcess) {
-            ContentParent::RunNuwaProcess();
-        }
-        // else sNuwaProcess is starting. It will SendNuwaFork() when ready.
-    } else if (sSpareProcesses->IsEmpty()) {
-        sNuwaProcess->SendNuwaFork();
-    }
-}
-
-static void
-ScheduleDelayedNuwaFork()
-{
-    MOZ_ASSERT(NS_IsMainThread());
-
-    if (sPreallocateAppProcessTask) {
-        // Make sure there is only one request running.
-        return;
-    }
-
-    sPreallocateAppProcessTask = NewRunnableFunction(DelayedNuwaFork);
-    MessageLoop::current()->
-        PostDelayedTask(FROM_HERE,
-                        sPreallocateAppProcessTask,
-                        sPreallocateDelayMs);
-}
-
-/**
- * Get a spare ContentParent from sSpareProcesses list.
- */
-static already_AddRefed<ContentParent>
-GetSpareProcess()
-{
-    MOZ_ASSERT(NS_IsMainThread());
-
-    if (sSpareProcesses->IsEmpty()) {
-        return nullptr;
-    }
-
-    nsRefPtr<ContentParent> process = sSpareProcesses->LastElement();
-    sSpareProcesses->RemoveElementAt(sSpareProcesses->Length() - 1);
-
-    if (sSpareProcesses->IsEmpty() && sNuwaReady) {
-        NS_ASSERTION(sNuwaProcess != nullptr,
-                     "Nuwa process is not present!");
-        ScheduleDelayedNuwaFork();
-    }
-
-    return process.forget();
-}
-
-/**
- * Publish a ContentParent to spare process list.
- */
-static void
-PublishSpareProcess(ContentParent* aContent)
-{
-    MOZ_ASSERT(NS_IsMainThread());
-
-    if (!sNuwaForkWaitTasks->IsEmpty()) {
-        sNuwaForkWaitTasks->ElementAt(0)->Cancel();
-        sNuwaForkWaitTasks->RemoveElementAt(0);
-    }
-
-    sSpareProcesses->AppendElement(aContent);
-}
-
-static void
-MaybeForgetSpare(ContentParent* aContent)
-{
-    MOZ_ASSERT(NS_IsMainThread());
-
-    if (sSpareProcesses->RemoveElement(aContent)) {
-        return;
-    }
-
-    if (aContent == sNuwaProcess) {
-        sNuwaProcess = nullptr;
-        sNuwaReady = false;
-        ScheduleDelayedNuwaFork();
-    }
-}
-
-#endif
 
 // PreallocateAppProcess is called by the PreallocatedProcessManager.
 // ContentParent then takes this process back within
@@ -483,11 +312,7 @@ ContentParent::MaybeTakePreallocatedAppProcess(const nsAString& aAppManifestURL,
                                                ChildPrivileges aPrivs,
                                                ProcessPriority aInitialPriority)
 {
-#ifdef MOZ_NUWA_PROCESS
-    nsRefPtr<ContentParent> process = GetSpareProcess();
-#else
     nsRefPtr<ContentParent> process = PreallocatedProcessManager::Take();
-#endif
     if (!process) {
         return nullptr;
     }
@@ -510,22 +335,12 @@ ContentParent::StartUp()
         return;
     }
 
-    nsRefPtr<ContentParentMemoryReporter> mr = new ContentParentMemoryReporter();
-    NS_RegisterMemoryReporter(mr);
+    NS_RegisterMemoryReporter(new ContentParentsMemoryReporter());
 
     sCanLaunchSubprocesses = true;
 
-    sSpareProcesses = new nsAutoTArray<nsRefPtr<ContentParent>, 4>();
-    ClearOnShutdown(&sSpareProcesses);
-
-    sNuwaForkWaitTasks = new nsTArray<CancelableTask*>();
-    ClearOnShutdown(&sNuwaForkWaitTasks);
-#ifdef MOZ_NUWA_PROCESS
-    ScheduleDelayedNuwaFork();
-#else
     // Try to preallocate a process that we can transform into an app later.
     PreallocatedProcessManager::AllocateAfterDelay();
-#endif
 }
 
 /*static*/ void
@@ -1042,7 +857,6 @@ ContentParent::ShutDownProcess(bool aCloseWithError)
     // shut down the cycle collector.  But by then it's too late to release any
     // CC'ed objects, so we need to null them out here, while we still can.  See
     // bug 899761.
-    mChildReporter = nullptr;
     if (mMessageManager) {
       mMessageManager->Disconnect();
       mMessageManager = nullptr;
@@ -1080,24 +894,12 @@ ContentParent::MarkAsDead()
 }
 
 void
-ContentParent::OnNuwaForkTimeout()
-{
-    if (!sNuwaForkWaitTasks->IsEmpty()) {
-        sNuwaForkWaitTasks->RemoveElementAt(0);
-    }
-
-    // We haven't RecvAddNewProcess() after SendNuwaFork(). Maybe the main
-    // thread of the Nuwa process is in deadlock.
-    MOZ_ASSERT(false, "Can't fork from the nuwa process.");
-}
-
-void
 ContentParent::OnChannelError()
 {
     nsRefPtr<ContentParent> content(this);
     PContentParent::OnChannelError();
 #ifdef MOZ_NUWA_PROCESS
-    MaybeForgetSpare(this);
+    PreallocatedProcessManager::MaybeForgetSpare(this);
 #endif
 }
 
@@ -1191,7 +993,7 @@ ContentParent::ActorDestroy(ActorDestroyReason why)
     if (ppm) {
       ppm->ReceiveMessage(static_cast<nsIContentFrameMessageManager*>(ppm.get()),
                           CHILD_PROCESS_SHUTDOWN_MESSAGE, false,
-                          nullptr, nullptr, nullptr);
+                          nullptr, nullptr, nullptr, nullptr);
     }
     nsCOMPtr<nsIThreadObserver>
         kungFuDeathGrip(static_cast<nsIThreadObserver*>(this));
@@ -1217,8 +1019,12 @@ ContentParent::ActorDestroy(ActorDestroyReason why)
       ppm->Disconnect();
     }
 
-    // unregister the child memory reporter
-    UnregisterChildMemoryReporter();
+    // Tell the memory reporter manager that this ContentParent is going away.
+    nsRefPtr<nsMemoryReporterManager> mgr =
+        nsMemoryReporterManager::GetOrCreate();
+    if (mgr) {
+        mgr->DecrementNumChildProcesses();
+    }
 
     // remove the global remote preferences observers
     Preferences::RemoveObserver(this, "");
@@ -1421,8 +1227,16 @@ ContentParent::ContentParent(mozIApplication* aApp,
     NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
     mSubprocess = new GeckoChildProcessHost(GeckoProcessType_Content,
                                             aOSPrivileges);
+    mSubprocess->SetSandboxEnabled(ShouldSandboxContentProcesses());
 
     IToplevelProtocol::SetTransport(mSubprocess->GetChannel());
+
+    // Tell the memory reporter manager that this ContentParent exists.
+    nsRefPtr<nsMemoryReporterManager> mgr =
+        nsMemoryReporterManager::GetOrCreate();
+    if (mgr) {
+        mgr->IncrementNumChildProcesses();
+    }
 
     std::vector<std::string> extraArgs;
     if (aIsNuwaProcess) {
@@ -1510,7 +1324,9 @@ ContentParent::ContentParent(mozIApplication* aApp,
     // which is otherwise a no-op, to sandbox it at an appropriate point
     // during startup.
     if (aOSPrivileges != base::PRIVILEGES_INHERIT) {
-        SendSetProcessPrivileges(base::PRIVILEGES_INHERIT);
+        if (!SendSetProcessPrivileges(base::PRIVILEGES_INHERIT)) {
+            KillHard();
+        }
     }
 #endif
 }
@@ -1830,8 +1646,8 @@ ContentParent::RecvGetShowPasswordSetting(bool* showPassword)
     *showPassword = true;
 #ifdef MOZ_WIDGET_ANDROID
     NS_ASSERTION(AndroidBridge::Bridge() != nullptr, "AndroidBridge is not available");
-    if (AndroidBridge::Bridge() != nullptr)
-        *showPassword = AndroidBridge::Bridge()->GetShowPasswordSetting();
+
+    *showPassword = GeckoAppShell::GetShowPasswordSetting();
 #endif
     return true;
 }
@@ -1839,19 +1655,12 @@ ContentParent::RecvGetShowPasswordSetting(bool* showPassword)
 bool
 ContentParent::RecvFirstIdle()
 {
-#ifdef MOZ_NUWA_PROCESS
-    if (sSpareProcesses->IsEmpty() && sNuwaReady) {
-        ScheduleDelayedNuwaFork();
-    }
-    return true;
-#else
     // When the ContentChild goes idle, it sends us a FirstIdle message
     // which we use as a good time to prelaunch another process. If we
     // prelaunch any sooner than this, then we'll be competing with the
     // child process and slowing it down.
     PreallocatedProcessManager::AllocateAfterDelay();
     return true;
-#endif
 }
 
 bool
@@ -1936,33 +1745,15 @@ ContentParent::RecvBroadcastVolume(const nsString& aVolumeName)
 }
 
 bool
-ContentParent::SendNuwaFork()
-{
-    if (this != sNuwaProcess) {
-        return false;
-    }
-
-    CancelableTask* nuwaForkTimeoutTask = NewRunnableMethod(
-        this, &ContentParent::OnNuwaForkTimeout);
-    sNuwaForkWaitTasks->AppendElement(nuwaForkTimeoutTask);
-
-    MessageLoop::current()->
-        PostDelayedTask(FROM_HERE,
-                        nuwaForkTimeoutTask,
-                        NUWA_FORK_WAIT_DURATION_MS);
-
-    return PContentParent::SendNuwaFork();
-}
-
-bool
 ContentParent::RecvNuwaReady()
 {
-    NS_ASSERTION(!sNuwaReady, "Multiple Nuwa processes created!");
-    ProcessPriorityManager::SetProcessPriority(sNuwaProcess,
-                                               hal::PROCESS_PRIORITY_FOREGROUND);
-    sNuwaReady = true;
-    SendNuwaFork();
+#ifdef MOZ_NUWA_PROCESS
+    PreallocatedProcessManager::OnNuwaReady();
     return true;
+#else
+    NS_ERROR("ContentParent::RecvNuwaReady() not implemented!");
+    return false;
+#endif
 }
 
 bool
@@ -1977,7 +1768,7 @@ ContentParent::RecvAddNewProcess(const uint32_t& aPid,
                                 aFds,
                                 base::PRIVILEGES_DEFAULT);
     content->Init();
-    PublishSpareProcess(content);
+    PreallocatedProcessManager::PublishSpareProcess(content);
     return true;
 #else
     NS_ERROR("ContentParent::RecvAddNewProcess() not implemented!");
@@ -2035,7 +1826,7 @@ ContentParent::Observe(nsISupports* aSubject,
             return NS_ERROR_NOT_AVAILABLE;
     }
     else if (!strcmp(aTopic, "child-memory-reporter-request")) {
-        unused << SendPMemoryReportRequestConstructor();
+        unused << SendPMemoryReportRequestConstructor((uint32_t)(uintptr_t)aData);
     }
     else if (!strcmp(aTopic, "child-gc-request")){
         unused << SendGarbageCollect();
@@ -2479,7 +2270,7 @@ ContentParent::RecvPIndexedDBConstructor(PIndexedDBParent* aActor)
 }
 
 PMemoryReportRequestParent*
-ContentParent::AllocPMemoryReportRequestParent()
+ContentParent::AllocPMemoryReportRequestParent(const uint32_t& generation)
 {
   MemoryReportRequestParent* parent = new MemoryReportRequestParent();
   return parent;
@@ -2490,32 +2281,6 @@ ContentParent::DeallocPMemoryReportRequestParent(PMemoryReportRequestParent* act
 {
   delete actor;
   return true;
-}
-
-void
-ContentParent::SetChildMemoryReports(const InfallibleTArray<MemoryReport>& childReports)
-{
-    nsCOMPtr<nsIMemoryReporterManager> mgr =
-        do_GetService("@mozilla.org/memory-reporter-manager;1");
-
-    if (mChildReporter)
-        mgr->UnregisterReporter(mChildReporter);
-
-    mChildReporter = new ChildReporter(childReports);
-    mgr->RegisterReporter(mChildReporter);
-
-    nsCOMPtr<nsIObserverService> obs =
-        do_GetService("@mozilla.org/observer-service;1");
-    if (obs)
-        obs->NotifyObservers(nullptr, "child-memory-reporter-update", nullptr);
-}
-
-void
-ContentParent::UnregisterChildMemoryReporter()
-{
-    nsCOMPtr<nsIMemoryReporterManager> mgr =
-        do_GetService("@mozilla.org/memory-reporter-manager;1");
-    mgr->UnregisterReporter(mChildReporter);
 }
 
 PTestShellParent*
@@ -2899,29 +2664,40 @@ bool
 ContentParent::RecvShowAlertNotification(const nsString& aImageUrl, const nsString& aTitle,
                                          const nsString& aText, const bool& aTextClickable,
                                          const nsString& aCookie, const nsString& aName,
-                                         const nsString& aBidi, const nsString& aLang)
+                                         const nsString& aBidi, const nsString& aLang,
+                                         const IPC::Principal& aPrincipal)
 {
-    if (!AssertAppProcessPermission(this, "desktop-notification")) {
-        return false;
+#ifdef MOZ_CHILD_PERMISSIONS
+    uint32_t permission = mozilla::CheckPermission(this, aPrincipal,
+                                                   "desktop-notification");
+    if (permission != nsIPermissionManager::ALLOW_ACTION) {
+        return true;
     }
+#endif /* MOZ_CHILD_PERMISSIONS */
+
     nsCOMPtr<nsIAlertsService> sysAlerts(do_GetService(NS_ALERTSERVICE_CONTRACTID));
     if (sysAlerts) {
         sysAlerts->ShowAlertNotification(aImageUrl, aTitle, aText, aTextClickable,
-                                         aCookie, this, aName, aBidi, aLang);
+                                         aCookie, this, aName, aBidi, aLang, aPrincipal);
     }
-
     return true;
 }
 
 bool
-ContentParent::RecvCloseAlert(const nsString& aName)
+ContentParent::RecvCloseAlert(const nsString& aName,
+                              const IPC::Principal& aPrincipal)
 {
-    if (!AssertAppProcessPermission(this, "desktop-notification")) {
-        return false;
+#ifdef MOZ_CHILD_PERMISSIONS
+    uint32_t permission = mozilla::CheckPermission(this, aPrincipal,
+                                                   "desktop-notification");
+    if (permission != nsIPermissionManager::ALLOW_ACTION) {
+        return true;
     }
+#endif
+
     nsCOMPtr<nsIAlertsService> sysAlerts(do_GetService(NS_ALERTSERVICE_CONTRACTID));
     if (sysAlerts) {
-        sysAlerts->CloseAlert(aName);
+        sysAlerts->CloseAlert(aName, aPrincipal);
     }
 
     return true;
@@ -2931,14 +2707,21 @@ bool
 ContentParent::RecvSyncMessage(const nsString& aMsg,
                                const ClonedMessageData& aData,
                                const InfallibleTArray<CpowEntry>& aCpows,
+                               const IPC::Principal& aPrincipal,
                                InfallibleTArray<nsString>* aRetvals)
 {
+  nsIPrincipal* principal = aPrincipal;
+  if (principal && !AssertAppPrincipal(this, principal)) {
+    return false;
+  }
+
   nsRefPtr<nsFrameMessageManager> ppm = mMessageManager;
   if (ppm) {
     StructuredCloneData cloneData = ipc::UnpackClonedMessageDataForParent(aData);
     CpowIdHolder cpows(GetCPOWManager(), aCpows);
+
     ppm->ReceiveMessage(static_cast<nsIContentFrameMessageManager*>(ppm.get()),
-                        aMsg, true, &cloneData, &cpows, aRetvals);
+                        aMsg, true, &cloneData, &cpows, aPrincipal, aRetvals);
   }
   return true;
 }
@@ -2947,14 +2730,20 @@ bool
 ContentParent::AnswerRpcMessage(const nsString& aMsg,
                                 const ClonedMessageData& aData,
                                 const InfallibleTArray<CpowEntry>& aCpows,
+                                const IPC::Principal& aPrincipal,
                                 InfallibleTArray<nsString>* aRetvals)
 {
+  nsIPrincipal* principal = aPrincipal;
+  if (principal && !AssertAppPrincipal(this, principal)) {
+    return false;
+  }
+
   nsRefPtr<nsFrameMessageManager> ppm = mMessageManager;
   if (ppm) {
     StructuredCloneData cloneData = ipc::UnpackClonedMessageDataForParent(aData);
     CpowIdHolder cpows(GetCPOWManager(), aCpows);
     ppm->ReceiveMessage(static_cast<nsIContentFrameMessageManager*>(ppm.get()),
-                        aMsg, true, &cloneData, &cpows, aRetvals);
+                        aMsg, true, &cloneData, &cpows, aPrincipal, aRetvals);
   }
   return true;
 }
@@ -2962,14 +2751,20 @@ ContentParent::AnswerRpcMessage(const nsString& aMsg,
 bool
 ContentParent::RecvAsyncMessage(const nsString& aMsg,
                                 const ClonedMessageData& aData,
-                                const InfallibleTArray<CpowEntry>& aCpows)
+                                const InfallibleTArray<CpowEntry>& aCpows,
+                                const IPC::Principal& aPrincipal)
 {
+  nsIPrincipal* principal = aPrincipal;
+  if (principal && !AssertAppPrincipal(this, principal)) {
+    return false;
+  }
+
   nsRefPtr<nsFrameMessageManager> ppm = mMessageManager;
   if (ppm) {
     StructuredCloneData cloneData = ipc::UnpackClonedMessageDataForParent(aData);
     CpowIdHolder cpows(GetCPOWManager(), aCpows);
     ppm->ReceiveMessage(static_cast<nsIContentFrameMessageManager*>(ppm.get()),
-                        aMsg, false, &cloneData, &cpows, nullptr);
+                        aMsg, false, &cloneData, &cpows, aPrincipal, nullptr);
   }
   return true;
 }
@@ -3176,7 +2971,8 @@ bool
 ContentParent::DoSendAsyncMessage(JSContext* aCx,
                                   const nsAString& aMessage,
                                   const mozilla::dom::StructuredCloneData& aData,
-                                  JS::Handle<JSObject *> aCpows)
+                                  JS::Handle<JSObject *> aCpows,
+                                  nsIPrincipal* aPrincipal)
 {
   ClonedMessageData data;
   if (!BuildClonedMessageDataForParent(this, aData, data)) {
@@ -3186,7 +2982,7 @@ ContentParent::DoSendAsyncMessage(JSContext* aCx,
   if (!GetCPOWManager()->Wrap(aCx, aCpows, &cpows)) {
     return false;
   }
-  return SendAsyncMessage(nsString(aMessage), data, cpows);
+  return SendAsyncMessage(nsString(aMessage), data, cpows, aPrincipal);
 }
 
 bool
@@ -3280,6 +3076,16 @@ ContentParent::ShouldContinueFromReplyTimeout()
   // timeouts should only ever occur in electrolysis-enabled sessions.
   MOZ_ASSERT(Preferences::GetBool("browser.tabs.remote", false));
   return false;
+}
+
+bool
+ContentParent::ShouldSandboxContentProcesses()
+{
+#ifdef MOZ_CONTENT_SANDBOX
+  return !PR_GetEnv("MOZ_DISABLE_CONTENT_SANDBOX");
+#else
+  return true;
+#endif
 }
 
 } // namespace dom

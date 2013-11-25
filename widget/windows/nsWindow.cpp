@@ -125,6 +125,7 @@
 #include "nsIWidgetListener.h"
 #include "mozilla/dom/Touch.h"
 #include "mozilla/gfx/2D.h"
+#include "mozilla/WindowsVersion.h"
 
 #ifdef MOZ_ENABLE_D3D9_LAYER
 #include "LayerManagerD3D9.h"
@@ -253,7 +254,7 @@ uint32_t        nsWindow::sOOPPPluginFocusEvent   =
 static const char *sScreenManagerContractID       = "@mozilla.org/gfx/screenmanager;1";
 
 #ifdef PR_LOGGING
-PRLogModuleInfo* gWindowsLog                      = nullptr;
+extern PRLogModuleInfo* gWindowsLog;
 #endif
 
 // Global used in Show window enumerations.
@@ -311,12 +312,6 @@ static const int32_t kResizableBorderMinSize = 3;
 
 nsWindow::nsWindow() : nsWindowBase()
 {
-#ifdef PR_LOGGING
-  if (!gWindowsLog) {
-    gWindowsLog = PR_NewLogModule("nsWindow");
-  }
-#endif
-
   mIconSmall            = nullptr;
   mIconBig              = nullptr;
   mWnd                  = nullptr;
@@ -487,9 +482,7 @@ nsWindow::Create(nsIWidget *aParent,
       parent = nullptr;
     }
 
-    if (WinUtils::GetWindowsVersion() >= WinUtils::VISTA_VERSION &&
-        WinUtils::GetWindowsVersion() <= WinUtils::WIN7_VERSION &&
-        HasBogusPopupsDropShadowOnMultiMonitor()) {
+    if (IsVistaOrLater() && !IsWin8OrLater()) {
       extendedStyle |= WS_EX_COMPOSITED;
     }
 
@@ -612,7 +605,7 @@ nsWindow::Create(nsIWidget *aParent,
     // bugs over the years, disable it (sTrimOnMinimize=1) on Vista and up.
     sTrimOnMinimize =
       Preferences::GetBool("config.trim_on_minimize",
-        (WinUtils::GetWindowsVersion() >= WinUtils::VISTA_VERSION)) ? 1 : 0;
+        IsVistaOrLater() ? 1 : 0);
     sSwitchKeyboardLayout =
       Preferences::GetBool("intl.keyboard.per_window_layout", false);
   }
@@ -1232,8 +1225,7 @@ bool nsWindow::IsVisible() const
 // transparency. These routines are called on size and move operations.
 void nsWindow::ClearThemeRegion()
 {
-  if (WinUtils::GetWindowsVersion() >= WinUtils::VISTA_VERSION &&
-      !HasGlass() &&
+  if (IsVistaOrLater() && !HasGlass() &&
       (mWindowType == eWindowType_popup && !IsPopupWithTitleBar() &&
        (mPopupType == ePopupTypeTooltip || mPopupType == ePopupTypePanel))) {
     SetWindowRgn(mWnd, nullptr, false);
@@ -1247,8 +1239,7 @@ void nsWindow::SetThemeRegion()
   // so default constants are used for part and state. At some point we might need part and
   // state values from nsNativeThemeWin's GetThemePartAndState, but currently windows that
   // change shape based on state haven't come up.
-  if (WinUtils::GetWindowsVersion() >= WinUtils::VISTA_VERSION &&
-      !HasGlass() &&
+  if (IsVistaOrLater() && !HasGlass() &&
       (mWindowType == eWindowType_popup && !IsPopupWithTitleBar() &&
        (mPopupType == ePopupTypeTooltip || mPopupType == ePopupTypePanel))) {
     HRGN hRgn = nullptr;
@@ -3501,7 +3492,7 @@ nsWindow::OverrideSystemMouseScrollSpeed(double aOriginalDeltaX,
 
   // Only Vista and later, Windows has the system setting of horizontal
   // scrolling by the mouse wheel.
-  if (WinUtils::GetWindowsVersion() >= WinUtils::VISTA_VERSION) {
+  if (IsVistaOrLater()) {
     if (!::SystemParametersInfo(SPI_GETWHEELSCROLLCHARS, 0, &systemSpeed, 0)) {
       return NS_ERROR_FAILURE;
     }
@@ -6526,7 +6517,7 @@ void nsWindow::OnDestroy()
   }
   if (this == rollupWidget) {
     if ( rollupListener )
-      rollupListener->Rollup(0, nullptr);
+      rollupListener->Rollup(0, nullptr, nullptr);
     CaptureRollupEvents(nullptr, false);
   }
 
@@ -7348,9 +7339,21 @@ nsWindow::DealWithPopups(HWND inWnd, UINT inMsg, WPARAM inWParam, LPARAM inLPara
     else if (rollup) {
       // only need to deal with the last rollup for left mouse down events.
       NS_ASSERTION(!mLastRollup, "mLastRollup is null");
-      bool consumeRollupEvent =
-        rollupListener->Rollup(popupsToRollup, inMsg == WM_LBUTTONDOWN ? &mLastRollup : nullptr);
-      NS_IF_ADDREF(mLastRollup);
+
+      bool consumeRollupEvent;
+      if (inMsg == WM_LBUTTONDOWN) {
+        POINT pt;
+        pt.x = GET_X_LPARAM(inLParam);
+        pt.y = GET_Y_LPARAM(inLParam);
+        ::ClientToScreen(inWnd, &pt);
+        nsIntPoint pos(pt.x, pt.y);
+
+        consumeRollupEvent = rollupListener->Rollup(popupsToRollup, &pos, &mLastRollup);
+        NS_IF_ADDREF(mLastRollup);
+      }
+      else {
+        consumeRollupEvent = rollupListener->Rollup(popupsToRollup, nullptr, nullptr);
+      }
 
       // Tell hook to stop processing messages
       sProcessHook = false;

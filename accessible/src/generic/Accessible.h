@@ -13,9 +13,9 @@
 
 #include "nsIAccessible.h"
 #include "nsIAccessibleHyperLink.h"
-#include "nsIAccessibleSelectable.h"
-#include "nsIAccessibleValue.h"
 #include "nsIAccessibleStates.h"
+#include "xpcAccessibleSelectable.h"
+#include "xpcAccessibleValue.h"
 
 #include "nsIContent.h"
 #include "nsString.h"
@@ -104,8 +104,8 @@ typedef nsRefPtrHashtable<nsPtrHashKey<const void>, Accessible>
 
 class Accessible : public nsIAccessible,
                    public nsIAccessibleHyperLink,
-                   public nsIAccessibleSelectable,
-                   public nsIAccessibleValue
+                   public xpcAccessibleSelectable,
+                   public xpcAccessibleValue
 {
 public:
   Accessible(nsIContent* aContent, DocAccessible* aDoc);
@@ -116,8 +116,6 @@ public:
 
   NS_DECL_NSIACCESSIBLE
   NS_DECL_NSIACCESSIBLEHYPERLINK
-  NS_DECL_NSIACCESSIBLESELECTABLE
-  NS_DECL_NSIACCESSIBLEVALUE
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_ACCESSIBLE_IMPL_IID)
 
   //////////////////////////////////////////////////////////////////////////////
@@ -201,6 +199,7 @@ public:
    * Return true if ARIA role is specified on the element.
    */
   bool HasARIARole() const { return mRoleMapEntry; }
+  bool IsARIARole(nsIAtom* aARIARole) const;
 
   /**
    * Retrun ARIA role map if any.
@@ -243,6 +242,16 @@ public:
     uint64_t state = NativeLinkState();
     ApplyARIAState(&state);
     return state;
+  }
+
+  /**
+   * Return if accessible is unavailable.
+   */
+  bool Unavailable() const
+  {
+    uint64_t state = NativelyUnavailable() ? states::UNAVAILABLE : 0;
+    ApplyARIAState(&state);
+    return state & states::UNAVAILABLE;
   }
 
   /**
@@ -631,11 +640,6 @@ public:
   }
 
   /**
-   * Return true if the link currently has the focus.
-   */
-  bool IsLinkSelected();
-
-  /**
    * Return the number of anchors within the link.
    */
   virtual uint32_t AnchorCount();
@@ -692,6 +696,15 @@ public:
    * Unselect all items. Return true if success.
    */
   virtual bool UnselectAll();
+
+  //////////////////////////////////////////////////////////////////////////////
+  // Value (numeric value interface)
+
+  virtual double MaxValue() const;
+  virtual double MinValue() const;
+  virtual double CurValue() const;
+  virtual double Step() const;
+  virtual bool SetCurValue(double aValue);
 
   //////////////////////////////////////////////////////////////////////////////
   // Widgets
@@ -916,14 +929,12 @@ protected:
   nsIContent* GetAtomicRegion() const;
 
   /**
-   * Get numeric value of the given ARIA attribute.
+   * Return numeric value of the given ARIA attribute, NaN if not applicable.
    *
-   * @param aAriaProperty - the ARIA property we're using
-   * @param aValue - value of the attribute
-   *
-   * @return - NS_OK_NO_ARIA_VALUE if there is no setted ARIA attribute
+   * @param aARIAProperty  [in] the ARIA property we're using
+   * @return  a numeric value
    */
-  nsresult GetAttrValue(nsIAtom *aAriaProperty, double *aValue);
+  double AttrNumericValue(nsIAtom* aARIAAttr) const;
 
   /**
    * Return the action rule based on ARIA enum constants EActionRule

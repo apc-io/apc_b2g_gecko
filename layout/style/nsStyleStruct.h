@@ -443,6 +443,7 @@ struct nsStyleBackground {
     uint8_t mAttachment;                // [reset] See nsStyleConsts.h
     uint8_t mClip;                      // [reset] See nsStyleConsts.h
     uint8_t mOrigin;                    // [reset] See nsStyleConsts.h
+    uint8_t mBlendMode;                 // [reset] See nsStyleConsts.h
     Repeat mRepeat;                     // [reset] See nsStyleConsts.h
     Position mPosition;                 // [reset]
     nsStyleImage mImage;                // [reset]
@@ -488,7 +489,8 @@ struct nsStyleBackground {
            mRepeatCount,
            mPositionCount,
            mImageCount,
-           mSizeCount;
+           mSizeCount,
+           mBlendModeCount;
   // Layers are stored in an array, matching the top-to-bottom order in
   // which they are specified in CSS.  The number of layers to be used
   // should come from the background-image property.  We create
@@ -1780,6 +1782,17 @@ struct nsStyleDisplay {
     return IsDisplayTypeInlineOutside(mOriginalDisplay);
   }
 
+  bool IsInnerTableStyle() const {
+    return NS_STYLE_DISPLAY_TABLE_CAPTION == mDisplay ||
+           NS_STYLE_DISPLAY_TABLE_CELL == mDisplay ||
+           NS_STYLE_DISPLAY_TABLE_ROW == mDisplay ||
+           NS_STYLE_DISPLAY_TABLE_ROW_GROUP == mDisplay ||
+           NS_STYLE_DISPLAY_TABLE_HEADER_GROUP == mDisplay ||
+           NS_STYLE_DISPLAY_TABLE_FOOTER_GROUP == mDisplay ||
+           NS_STYLE_DISPLAY_TABLE_COLUMN == mDisplay ||
+           NS_STYLE_DISPLAY_TABLE_COLUMN_GROUP == mDisplay;
+  }
+
   bool IsFloatingStyle() const {
     return NS_STYLE_FLOAT_NONE != mFloats;
   }
@@ -2373,6 +2386,22 @@ struct nsStyleSVG {
 
   bool HasMarker() const {
     return mMarkerStart || mMarkerMid || mMarkerEnd;
+  }
+
+  /**
+   * Returns true if the stroke is not "none" and the stroke-opacity is greater
+   * than zero. This ignores stroke-widths as that depends on the context.
+   */
+  bool HasStroke() const {
+    return mStroke.mType != eStyleSVGPaintType_None && mStrokeOpacity > 0;
+  }
+
+  /**
+   * Returns true if the fill is not "none" and the fill-opacity is greater
+   * than zero.
+   */
+  bool HasFill() const {
+    return mFill.mType != eStyleSVGPaintType_None && mFillOpacity > 0;
   }
 };
 

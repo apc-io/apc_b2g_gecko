@@ -6,10 +6,12 @@
 
 TEST_TOOL_DIRS += ['chrome']
 
-MODULE = 'layout'
-
 HOST_SOURCES += [
     'ListCSSProperties.cpp',
+]
+
+HOST_SIMPLE_PROGRAMS += [
+    'host_%s' % f.replace('.cpp', '') for f in HOST_SOURCES
 ]
 
 BROWSER_CHROME_MANIFESTS += ['browser.ini']

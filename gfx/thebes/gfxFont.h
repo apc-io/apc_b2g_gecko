@@ -950,12 +950,15 @@ public:
                                 FontCacheSizes* aSizes) const;
 
 protected:
-    class MemoryReporter MOZ_FINAL
-        : public nsIMemoryReporter
+    class MemoryReporter MOZ_FINAL : public mozilla::MemoryMultiReporter
     {
     public:
-        NS_DECL_ISUPPORTS
-        NS_DECL_NSIMEMORYREPORTER
+        MemoryReporter()
+            : MemoryMultiReporter("font-cache")
+        {}
+
+        NS_IMETHOD CollectReports(nsIMemoryReporterCallback* aCb,
+                                  nsISupports* aClosure);
     };
 
     // Observer for notifications that the font cache cares about
@@ -3378,6 +3381,24 @@ public:
         return MakeTextRun(aString, aLength, &params, aFlags);
     }
 
+    /**
+     * Get the (possibly-cached) width of the hyphen character.
+     * The aCtx and aAppUnitsPerDevUnit parameters will be used only if
+     * needed to initialize the cached hyphen width; otherwise they are
+     * ignored.
+     */
+    gfxFloat GetHyphenWidth(gfxContext *aCtx, uint32_t aAppUnitsPerDevUnit);
+
+    /**
+     * Make a text run representing a single hyphen character.
+     * This will use U+2010 HYPHEN if available in the first font,
+     * otherwise fall back to U+002D HYPHEN-MINUS.
+     * The caller is responsible for deleting the returned text run
+     * when no longer required.
+     */
+    gfxTextRun *MakeHyphenTextRun(gfxContext *aCtx,
+                                  uint32_t aAppUnitsPerDevUnit);
+
     /* helper function for splitting font families on commas and
      * calling a function for each family to fill the mFonts array
      */
@@ -3460,6 +3481,7 @@ protected:
     gfxFontStyle mStyle;
     nsTArray<FamilyFace> mFonts;
     gfxFloat mUnderlineOffset;
+    gfxFloat mHyphenWidth;
 
     gfxUserFontSet* mUserFontSet;
     uint64_t mCurrGeneration;  // track the current user font set generation, rebuild font list if needed

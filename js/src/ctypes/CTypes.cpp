@@ -2645,10 +2645,7 @@ ExplicitConvert(JSContext* cx, HandleValue val, HandleObject targetType, void* b
 
   switch (type) {
   case TYPE_bool: {
-    // Convert according to the ECMAScript ToBoolean() function.
-    bool result;
-    ASSERT_OK(JS_ValueToBoolean(cx, val, &result));
-    *static_cast<bool*>(buffer) = result != false;
+    *static_cast<bool*>(buffer) = ToBoolean(val);
     break;
   }
 #define DEFINE_INT_TYPE(name, type, ffiType)                                   \
@@ -6795,7 +6792,7 @@ CDataFinalizer::Methods::ToString(JSContext *cx, unsigned argc, jsval *vp)
   } else if (!CDataFinalizer::GetValue(cx, objThis, value.address())) {
     MOZ_ASSUME_UNREACHABLE("Could not convert an empty CDataFinalizer");
   } else {
-    strMessage = JS_ValueToString(cx, value);
+    strMessage = ToString(cx, value);
     if (!strMessage) {
       return false;
     }

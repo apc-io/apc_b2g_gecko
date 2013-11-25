@@ -13,6 +13,7 @@
 #include "mozilla/dom/UnionTypes.h"
 #include "mozilla/ErrorResult.h"
 #include "nsCOMPtr.h"
+#include "nsGenericHTMLElement.h"
 #include "nsWrapperCache.h"
 
 // Forward declare this before we include TestCodeGenBinding.h, because that header relies on including
@@ -161,9 +162,9 @@ public:
   void PassByte(int8_t);
   int8_t ReceiveByte();
   void PassOptionalByte(const Optional<int8_t>&);
-  void PassOptionalUndefinedMissingByte(const Optional<int8_t>&);
+  void PassOptionalByteBeforeRequired(const Optional<int8_t>&, int8_t);
   void PassOptionalByteWithDefault(int8_t);
-  void PassOptionalUndefinedMissingByteWithDefault(int8_t);
+  void PassOptionalByteWithDefaultBeforeRequired(int8_t, int8_t);
   void PassNullableByte(const Nullable<int8_t>&);
   void PassOptionalNullableByte(const Optional< Nullable<int8_t> >&);
   void PassVariadicByte(const Sequence<int8_t>&);
@@ -410,9 +411,7 @@ public:
   void PassString(const nsAString&);
   void PassNullableString(const nsAString&);
   void PassOptionalString(const Optional<nsAString>&);
-  void PassOptionalUndefinedMissingString(const Optional<nsAString>&);
   void PassOptionalStringWithDefaultValue(const nsAString&);
-  void PassOptionalUndefinedMissingStringWithDefaultValue(const nsAString&);
   void PassOptionalNullableString(const Optional<nsAString>&);
   void PassOptionalNullableStringWithDefaultValue(const nsAString&);
   void PassVariadicString(const Sequence<nsString>&);
@@ -634,6 +633,22 @@ public:
   void Overload7(const nsCString&);
   void Overload8(int32_t);
   void Overload8(TestInterface&);
+  void Overload9(const Nullable<int32_t>&);
+  void Overload9(const nsAString&);
+  void Overload10(const Nullable<int32_t>&);
+  void Overload10(JSContext*, JS::Handle<JSObject*>);
+  void Overload11(int32_t);
+  void Overload11(const nsAString&);
+  void Overload12(int32_t);
+  void Overload12(const Nullable<bool>&);
+  void Overload13(const Nullable<int32_t>&);
+  void Overload13(bool);
+  void Overload14(const Optional<int32_t>&);
+  void Overload14(TestInterface&);
+  void Overload15(int32_t);
+  void Overload15(const Optional<NonNull<TestInterface> >&);
+  void Overload16(int32_t);
+  void Overload16(const Optional<TestInterface*>&);
 
   // Variadic handling
   void PassVariadicThirdArg(const nsAString&, int32_t,

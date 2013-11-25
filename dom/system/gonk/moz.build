@@ -18,6 +18,7 @@ XPIDL_SOURCES += [
     'nsIAudioManager.idl',
     'nsINetworkInterfaceListService.idl',
     'nsINetworkManager.idl',
+    'nsINetworkService.idl',
     'nsISystemWorkerManager.idl',
     'nsIVolume.idl',
     'nsIVolumeMountLock.idl',
@@ -27,8 +28,6 @@ XPIDL_SOURCES += [
 ]
 
 XPIDL_MODULE = 'dom_system_gonk'
-
-MODULE = 'dom'
 
 EXPORTS += [
     'GonkGPSGeolocationProvider.h',
@@ -62,9 +61,11 @@ EXTRA_COMPONENTS += [
     'NetworkInterfaceListService.js',
     'NetworkInterfaceListService.manifest',
     'NetworkManager.manifest',
+    'NetworkService.manifest',
 ]
 EXTRA_PP_COMPONENTS += [
     'NetworkManager.js',
+    'NetworkService.js',
 ]
 EXTRA_JS_MODULES += [
     'net_worker.js',
@@ -85,11 +86,42 @@ if CONFIG['MOZ_B2G_RIL']:
         'ril_worker.js',
     ]
 
+if CONFIG['MOZ_NFC']:
+    XPIDL_SOURCES += [
+        'nsINfcContentHelper.idl',
+    ]
+    EXTRA_COMPONENTS += [
+        'Nfc.js',
+        'Nfc.manifest',
+        'NfcContentHelper.js',
+    ]
+    EXTRA_JS_MODULES += [
+    'nfc_consts.js',
+    'nfc_worker.js',
+    ]
+
+# include different BluetoothHfpManager.h under dom/bluetooth/
+if CONFIG['MOZ_B2G_BT_BLUEZ']:
+    LOCAL_INCLUDES += [
+        '/dom/bluetooth/bluez',
+    ]
+elif CONFIG['MOZ_B2G_BT_BLUEDROID']:
+    LOCAL_INCLUDES += [
+        '/dom/bluetooth/bluedroid',
+    ]
+
 FAIL_ON_WARNINGS = True
-
-LIBXUL_LIBRARY = True
-
-LIBRARY_NAME = 'domsystemgonk_s'
 
 include('/ipc/chromium/chromium-config.mozbuild')
 
+LOCAL_INCLUDES += [
+    '/content/events/src',
+    '/dom/base',
+    '/dom/bluetooth',
+    '/dom/ethernet',
+    '/dom/nfc',
+    '/dom/src/geolocation',
+    '/dom/wifi',
+]
+
+FINAL_LIBRARY = 'gklayout'

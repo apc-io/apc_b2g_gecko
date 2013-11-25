@@ -972,7 +972,7 @@ size_t RNG_FileUpdate(const char *fileName, size_t limit)
 	return fileBytes;
     RNG_RandomUpdate(&stat_buf, sizeof(stat_buf));
     
-    file = fopen((char *)fileName, "r");
+    file = fopen(fileName, "r");
     if (file != NULL) {
 	while (limit > fileBytes) {
 	    bytes = PR_MIN(sizeof buffer, limit - fileBytes);
@@ -1009,7 +1009,7 @@ void ReadSingleFile(const char *fileName)
     FILE *        file;
     unsigned char buffer[BUFSIZ];
     
-    file = fopen((char *)fileName, "rb");
+    file = fopen(fileName, "rb");
     if (file != NULL) {
 	while (fread(buffer, 1, sizeof(buffer), file) > 0)
 	    ;

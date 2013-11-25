@@ -20,7 +20,7 @@
 #include "mozilla/layers/CompositorTypes.h"  // for TextureInfo, etc
 #include "mozilla/layers/ISurfaceAllocator.h"  // for ISurfaceAllocator
 #include "mozilla/layers/LayersSurfaces.h"  // for SurfaceDescriptor
-#include "mozilla/layers/LayersTypes.h"  // for MOZ_LAYERS_HAVE_LOG, etc
+#include "mozilla/layers/LayersTypes.h"  // for etc
 #include "mozilla/layers/TextureHost.h"  // for DeprecatedTextureHost
 #include "mozilla/mozalloc.h"           // for operator delete
 #include "nsAutoPtr.h"                  // for nsAutoPtr
@@ -96,7 +96,6 @@ public:
   virtual void Composite(EffectChain& aEffectChain,
                          float aOpacity,
                          const gfx::Matrix4x4& aTransform,
-                         const gfx::Point& aOffset,
                          const gfx::Filter& aFilter,
                          const gfx::Rect& aClipRect,
                          const nsIntRegion* aVisibleRegion = nullptr,
@@ -127,6 +126,8 @@ public:
   // texture hosts and SurfaceDescriptors. Note that we don't immediately
   // destroy our front buffer so that we can continue to composite.
   virtual void DestroyTextures() = 0;
+
+  virtual void OnActorDestroy() MOZ_OVERRIDE;
 
 protected:
   virtual nsIntPoint GetOriginOffset()
@@ -178,15 +179,15 @@ public:
                                  const TextureInfo& aTextureInfo) MOZ_OVERRIDE;
   virtual void DestroyTextures() MOZ_OVERRIDE;
 
+  virtual void OnActorDestroy() MOZ_OVERRIDE;
+
 #ifdef MOZ_DUMP_PAINTING
   virtual void Dump(FILE* aFile=nullptr,
                     const char* aPrefix="",
                     bool aDumpHtml=false) MOZ_OVERRIDE;
 #endif
 
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual void PrintInfo(nsACString& aTo, const char* aPrefix);
-#endif
 protected:
   nsIntRegion mValidRegionForNextBackBuffer;
   // Texture host for the back buffer. We never read or write this buffer. We
@@ -221,9 +222,7 @@ public:
                                  const TextureInfo& aTextureInfo) MOZ_OVERRIDE;
   virtual void DestroyTextures() MOZ_OVERRIDE;
 
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual void PrintInfo(nsACString& aTo, const char* aPrefix);
-#endif
 };
 
 /**
@@ -275,7 +274,6 @@ public:
   virtual void Composite(EffectChain& aEffectChain,
                          float aOpacity,
                          const gfx::Matrix4x4& aTransform,
-                         const gfx::Point& aOffset,
                          const gfx::Filter& aFilter,
                          const gfx::Rect& aClipRect,
                          const nsIntRegion* aVisibleRegion = nullptr,
@@ -284,7 +282,7 @@ public:
     ProcessTextureUpdates();
 
     ContentHostBase::Composite(aEffectChain, aOpacity,
-                               aTransform, aOffset, aFilter,
+                               aTransform, aFilter,
                                aClipRect, aVisibleRegion,
                                aLayerProperties);
   }
@@ -298,6 +296,7 @@ public:
 
 private:
 
+  void FlushUpdateQueue();
   void ProcessTextureUpdates();
 
   class Request

@@ -129,7 +129,7 @@ public:
   };
 
   State GetState() {
-    mDecoder->GetReentrantMonitor().AssertCurrentThreadIn();
+    AssertCurrentThreadInMonitor();
     return mState;
   }
 
@@ -227,14 +227,14 @@ public:
   // This is called on the state machine thread and audio thread.
   // The decoder monitor must be obtained before calling this.
   bool HasAudio() const {
-    mDecoder->GetReentrantMonitor().AssertCurrentThreadIn();
+    AssertCurrentThreadInMonitor();
     return mInfo.HasAudio();
   }
 
   // This is called on the state machine thread and audio thread.
   // The decoder monitor must be obtained before calling this.
   bool HasVideo() const {
-    mDecoder->GetReentrantMonitor().AssertCurrentThreadIn();
+    AssertCurrentThreadInMonitor();
     return mInfo.HasVideo();
   }
 
@@ -243,19 +243,19 @@ public:
 
   // Must be called with the decode monitor held.
   bool IsBuffering() const {
-    mDecoder->GetReentrantMonitor().AssertCurrentThreadIn();
+    AssertCurrentThreadInMonitor();
 
     return mState == DECODER_STATE_BUFFERING;
   }
 
   // Must be called with the decode monitor held.
   bool IsSeeking() const {
-    mDecoder->GetReentrantMonitor().AssertCurrentThreadIn();
+    AssertCurrentThreadInMonitor();
 
     return mState == DECODER_STATE_SEEKING;
   }
 
-  nsresult GetBuffered(TimeRanges* aBuffered);
+  nsresult GetBuffered(dom::TimeRanges* aBuffered);
 
   void SetPlaybackRate(double aPlaybackRate);
   void SetPreservesPitch(bool aPreservesPitch);
@@ -277,17 +277,17 @@ public:
   void NotifyDataArrived(const char* aBuffer, uint32_t aLength, int64_t aOffset);
 
   int64_t GetEndMediaTime() const {
-    mDecoder->GetReentrantMonitor().AssertCurrentThreadIn();
+    AssertCurrentThreadInMonitor();
     return mEndTime;
   }
 
   bool IsTransportSeekable() {
-    mDecoder->GetReentrantMonitor().AssertCurrentThreadIn();
+    AssertCurrentThreadInMonitor();
     return mTransportSeekable;
   }
 
   bool IsMediaSeekable() {
-    mDecoder->GetReentrantMonitor().AssertCurrentThreadIn();
+    AssertCurrentThreadInMonitor();
     return mMediaSeekable;
   }
 
@@ -348,6 +348,8 @@ public:
 protected:
   virtual uint32_t GetAmpleVideoFrames() { return mAmpleVideoFrames; }
 
+  void AssertCurrentThreadInMonitor() const { mDecoder->GetReentrantMonitor().AssertCurrentThreadIn(); }
+
 private:
   class WakeDecoderRunnable : public nsRunnable {
   public:
@@ -392,9 +394,8 @@ private:
   // The decoder monitor must be held.
   bool HasLowUndecodedData() const;
 
-  // Returns the number of microseconds of undecoded data available for
-  // decoding. The decoder monitor must be held.
-  int64_t GetUndecodedData() const;
+  // Returns true if we have less than aUsecs of undecoded data available.
+  bool HasLowUndecodedData(double aUsecs) const;
 
   // Returns the number of unplayed usecs of audio we've got decoded and/or
   // pushed to the hardware waiting to play. This is how much audio we can
@@ -503,13 +504,11 @@ private:
   void AudioLoop();
 
   // Sets internal state which causes playback of media to pause.
-  // The decoder monitor must be held. Called on the state machine,
-  // and decode threads.
+  // The decoder monitor must be held.
   void StopPlayback();
 
   // Sets internal state which causes playback of media to begin or resume.
-  // Must be called with the decode monitor held. Called on the state machine
-  // and decode threads.
+  // Must be called with the decode monitor held.
   void StartPlayback();
 
   // Moves the decoder into decoding state. Called on the state machine
@@ -530,7 +529,7 @@ private:
   // not start at 0. Note this is different to the value returned
   // by GetCurrentTime(), which is in the range [0,duration].
   int64_t GetMediaTime() const {
-    mDecoder->GetReentrantMonitor().AssertCurrentThreadIn();
+    AssertCurrentThreadInMonitor();
     return mStartTime + mCurrentFrameTime;
   }
 
@@ -573,7 +572,7 @@ private:
   nsresult RunStateMachine();
 
   bool IsStateMachineScheduled() const {
-    mDecoder->GetReentrantMonitor().AssertCurrentThreadIn();
+    AssertCurrentThreadInMonitor();
     return !mTimeout.IsNull() || mRunAgain;
   }
 

@@ -24,6 +24,7 @@ which makes Windows Media Foundation unavailable.
 #include <mfidl.h>
 #include <mfreadwrite.h>
 #include <mfobjects.h>
+#include <ks.h>
 #include <stdio.h>
 #include <mferror.h>
 #include <propvarutil.h>
@@ -32,6 +33,7 @@ which makes Windows Media Foundation unavailable.
 #include <d3d9.h>
 #include <dxva2api.h>
 #include <wmcodecdsp.h>
+#include <codecapi.h>
 
 // Some SDK versions don't define the AAC decoder CLSID.
 #ifndef CLSID_CMSAACDecMFT

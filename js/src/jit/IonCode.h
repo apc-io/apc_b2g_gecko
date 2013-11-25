@@ -131,6 +131,7 @@ class IonCode : public gc::BarrieredCell<IonCode>
     // Allocates a new IonCode object which will be managed by the GC. If no
     // object can be allocated, nullptr is returned. On failure, |pool| is
     // automatically released, so the code may be freed.
+    template <AllowGC allowGC>
     static IonCode *New(JSContext *cx, uint8_t *code, uint32_t bufferSize, JSC::ExecutablePool *pool);
 
   public:
@@ -189,10 +190,6 @@ struct IonScript
 
     // Number of times this script bailed out without invalidation.
     uint32_t numBailouts_;
-
-    // Number of times this scripted bailed out to enter a catch or
-    // finally block.
-    uint32_t numExceptionBailouts_;
 
     // Flag set when it is likely that one of our (transitive) call
     // targets is not compiled.  Used in ForkJoin.cpp to decide when
@@ -411,12 +408,6 @@ struct IonScript
     }
     bool bailoutExpected() const {
         return numBailouts_ > 0;
-    }
-    void incNumExceptionBailouts() {
-        numExceptionBailouts_++;
-    }
-    uint32_t numExceptionBailouts() const {
-        return numExceptionBailouts_;
     }
     void setHasUncompiledCallTarget() {
         hasUncompiledCallTarget_ = true;

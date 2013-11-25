@@ -24,6 +24,7 @@ const BUTTON_POSITION_SAVE       = 0;
 const BUTTON_POSITION_CANCEL     = 1;
 const BUTTON_POSITION_DONT_SAVE  = 2;
 const BUTTON_POSITION_REVERT     = 0;
+const EVAL_FUNCTION_TIMEOUT      = 1000; // milliseconds
 
 const SCRATCHPAD_L10N = "chrome://browser/locale/devtools/scratchpad.properties";
 const DEVTOOLS_CHROME_ENABLED = "devtools.chrome.enabled";
@@ -34,7 +35,6 @@ const VARIABLES_VIEW_URL = "chrome://browser/content/devtools/widgets/VariablesV
 const require   = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools.require;
 const promise   = require("sdk/core/promise");
 const Telemetry = require("devtools/shared/telemetry");
-const escodegen = require("escodegen/escodegen");
 const Editor    = require("devtools/sourceeditor/editor");
 const TargetFactory = require("devtools/framework/target").TargetFactory;
 
@@ -75,6 +75,9 @@ XPCOMUtils.defineLazyGetter(this, "REMOTE_TIMEOUT", () =>
 
 XPCOMUtils.defineLazyModuleGetter(this, "ShortcutUtils",
   "resource://gre/modules/ShortcutUtils.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "Reflect",
+  "resource://gre/modules/reflect.jsm");
 
 // Because we have no constructor / destructor where we can log metrics we need
 // to do so here.
@@ -159,7 +162,7 @@ var Scratchpad = {
   {
     this._dirty = aValue;
     if (!aValue && this.editor)
-      this.editor.markClean();
+      this.editor.setClean();
     this._updateTitle();
   },
 
@@ -351,7 +354,7 @@ var Scratchpad = {
         if (aResponse.error) {
           deferred.reject(aResponse);
         }
-        else if (aResponse.exception) {
+        else if (aResponse.exception !== null) {
           deferred.resolve([aString, aResponse]);
         }
         else {
@@ -501,12 +504,7 @@ var Scratchpad = {
             reject(aResponse);
           }
           else {
-            let string = aResponse.displayString;
-            if (string && string.type == "null") {
-              string = "Exception: " +
-                       this.strings.GetStringFromName("stringConversionFailed");
-            }
-            this.writeAsComment(string);
+            this.writeAsComment(aResponse.displayString);
             resolve();
           }
         });
@@ -516,25 +514,223 @@ var Scratchpad = {
     return deferred.promise;
   },
 
+  _prettyPrintWorker: null,
+
+  /**
+   * Get or create the worker that handles pretty printing.
+   */
+  get prettyPrintWorker() {
+    if (!this._prettyPrintWorker) {
+      this._prettyPrintWorker = new ChromeWorker(
+        "resource://gre/modules/devtools/server/actors/pretty-print-worker.js");
+
+      this._prettyPrintWorker.addEventListener("error", ({ message, filename, lineno }) => {
+        DevToolsUtils.reportException(message + " @ " + filename + ":" + lineno);
+      }, false);
+    }
+    return this._prettyPrintWorker;
+  },
+
   /**
    * Pretty print the source text inside the scratchpad.
+   *
+   * @return Promise
+   *         A promise resolved with the pretty printed code, or rejected with
+   *         an error.
    */
   prettyPrint: function SP_prettyPrint() {
     const uglyText = this.getText();
     const tabsize = Services.prefs.getIntPref("devtools.editor.tabsize");
+    const id = Math.random();
+    const deferred = promise.defer();
+
+    const onReply = ({ data }) => {
+      if (data.id !== id) {
+        return;
+      }
+      this.prettyPrintWorker.removeEventListener("message", onReply, false);
+
+      if (data.error) {
+        let errorString = DevToolsUtils.safeErrorString(data.error);
+        this.writeAsErrorComment(errorString);
+        deferred.reject(errorString);
+      } else {
+        this.editor.setText(data.code);
+        deferred.resolve(data.code);
+      }
+    };
+
+    this.prettyPrintWorker.addEventListener("message", onReply, false);
+    this.prettyPrintWorker.postMessage({
+      id: id,
+      url: "(scratchpad)",
+      indent: tabsize,
+      source: uglyText
+    });
+
+    return deferred.promise;
+  },
+
+  /**
+   * Parse the text and return an AST. If we can't parse it, write an error
+   * comment and return false.
+   */
+  _parseText: function SP__parseText(aText) {
     try {
-      const ast = Reflect.parse(uglyText);
-      const prettyText = escodegen.generate(ast, {
-        format: {
-          indent: {
-            style: " ".repeat(tabsize)
-          }
-        }
-      });
-      this.editor.setText(prettyText);
+      return Reflect.parse(aText);
     } catch (e) {
       this.writeAsErrorComment(DevToolsUtils.safeErrorString(e));
+      return false;
     }
+  },
+
+  /**
+   * Determine if the given AST node location contains the given cursor
+   * position.
+   *
+   * @returns Boolean
+   */
+  _containsCursor: function (aLoc, aCursorPos) {
+    // Our line numbers are 1-based, while CodeMirror's are 0-based.
+    const lineNumber = aCursorPos.line + 1;
+    const columnNumber = aCursorPos.ch;
+
+    if (aLoc.start.line <= lineNumber && aLoc.end.line >= lineNumber) {
+      if (aLoc.start.line === aLoc.end.line) {
+        return aLoc.start.column <= columnNumber
+          && aLoc.end.column >= columnNumber;
+      }
+
+      if (aLoc.start.line == lineNumber) {
+        return columnNumber >= aLoc.start.column;
+      }
+
+      if (aLoc.end.line == lineNumber) {
+        return columnNumber <= aLoc.end.column;
+      }
+
+      return true;
+    }
+
+    return false;
+  },
+
+  /**
+   * Find the top level function AST node that the cursor is within.
+   *
+   * @returns Object|null
+   */
+  _findTopLevelFunction: function SP__findTopLevelFunction(aAst, aCursorPos) {
+    for (let statement of aAst.body) {
+      switch (statement.type) {
+      case "FunctionDeclaration":
+        if (this._containsCursor(statement.loc, aCursorPos)) {
+          return statement;
+        }
+        break;
+
+      case "VariableDeclaration":
+        for (let decl of statement.declarations) {
+          if (!decl.init) {
+            continue;
+          }
+          if ((decl.init.type == "FunctionExpression"
+               || decl.init.type == "ArrowExpression")
+              && this._containsCursor(decl.loc, aCursorPos)) {
+            return decl;
+          }
+        }
+        break;
+      }
+    }
+
+    return null;
+  },
+
+  /**
+   * Get the source text associated with the given function statement.
+   *
+   * @param Object aFunction
+   * @param String aFullText
+   * @returns String
+   */
+  _getFunctionText: function SP__getFunctionText(aFunction, aFullText) {
+    let functionText = "";
+    // Initially set to 0, but incremented first thing in the loop below because
+    // line numbers are 1 based, not 0 based.
+    let lineNumber = 0;
+    const { start, end } = aFunction.loc;
+    const singleLine = start.line === end.line;
+
+    for (let line of aFullText.split(/\n/g)) {
+      lineNumber++;
+
+      if (singleLine && start.line === lineNumber) {
+        functionText = line.slice(start.column, end.column);
+        break;
+      }
+
+      if (start.line === lineNumber) {
+        functionText += line.slice(start.column) + "\n";
+        continue;
+      }
+
+      if (end.line === lineNumber) {
+        functionText += line.slice(0, end.column);
+        break;
+      }
+
+      if (start.line < lineNumber && end.line > lineNumber) {
+        functionText += line + "\n";
+      }
+    }
+
+    return functionText;
+  },
+
+  /**
+   * Evaluate the top level function that the cursor is resting in.
+   *
+   * @returns Promise [text, error, result]
+   */
+  evalTopLevelFunction: function SP_evalTopLevelFunction() {
+    const text = this.getText();
+    const ast = this._parseText(text);
+    if (!ast) {
+      return promise.resolve([text, undefined, undefined]);
+    }
+
+    const cursorPos = this.editor.getCursor();
+    const funcStatement = this._findTopLevelFunction(ast, cursorPos);
+    if (!funcStatement) {
+      return promise.resolve([text, undefined, undefined]);
+    }
+
+    let functionText = this._getFunctionText(funcStatement, text);
+
+    // TODO: This is a work around for bug 940086. It should be removed when
+    // that is fixed.
+    if (funcStatement.type == "FunctionDeclaration"
+        && !functionText.startsWith("function ")) {
+      functionText = "function " + functionText;
+      funcStatement.loc.start.column -= 9;
+    }
+
+    // The decrement by one is because our line numbers are 1-based, while
+    // CodeMirror's are 0-based.
+    const from = {
+      line: funcStatement.loc.start.line - 1,
+      ch: funcStatement.loc.start.column
+    };
+    const to = {
+      line: funcStatement.loc.end.line - 1,
+      ch: funcStatement.loc.end.column
+    };
+
+    const marker = this.editor.markText(from, to, { className: "eval-text" });
+    setTimeout(() => marker.clear(), EVAL_FUNCTION_TIMEOUT);
+
+    return this.evaluate(functionText);
   },
 
   /**
@@ -609,7 +805,21 @@ var Scratchpad = {
     let deferred = promise.defer();
 
     if (VariablesView.isPrimitive({ value: aError })) {
-      deferred.resolve(aError);
+      let type = aError.type;
+      if (type == "undefined" ||
+          type == "null" ||
+          type == "Infinity" ||
+          type == "-Infinity" ||
+          type == "NaN" ||
+          type == "-0") {
+        deferred.resolve(type);
+      }
+      else if (type == "longString") {
+        deferred.resolve(aError.initial + "\u2026");
+      }
+      else {
+        deferred.resolve(aError);
+      }
     }
     else {
       let objectClient = new ObjectClient(this.debuggerClient, aError);
@@ -1350,6 +1560,7 @@ var Scratchpad = {
     }
 
     PreferenceObserver.uninit();
+    CloseObserver.uninit();
 
     this.editor.off("change", this._onChanged);
     this.editor.destroy();
@@ -1360,6 +1571,12 @@ var Scratchpad = {
       this._sidebar = null;
     }
 
+    if (this._prettyPrintWorker) {
+      this._prettyPrintWorker.terminate();
+      this._prettyPrintWorker = null;
+    }
+
+    scratchpadTargets = null;
     this.webConsoleClient = null;
     this.debuggerClient = null;
     this.initialized = false;
@@ -1465,7 +1682,7 @@ var Scratchpad = {
    * Add an observer for Scratchpad events.
    *
    * The observer implements IScratchpadObserver := {
-   *   onReady:      Called when the Scratchpad and its SourceEditor are ready.
+   *   onReady:      Called when the Scratchpad and its Editor are ready.
    *                 Arguments: (Scratchpad aScratchpad)
    * }
    *

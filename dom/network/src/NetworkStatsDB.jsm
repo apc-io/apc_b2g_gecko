@@ -13,9 +13,10 @@ const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/IndexedDBHelper.jsm");
+Cu.importGlobalProperties(["indexedDB"]);
 
 const DB_NAME = "net_stats";
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const STORE_NAME = "net_stats";
 
 // Constant defining the maximum values allowed per interface. If more, older
@@ -90,6 +91,34 @@ NetworkStatsDB.prototype = {
 
         if (DEBUG) {
           debug("Created object stores and indexes for version 3");
+        }
+      } else if (currVersion == 3) {
+        // Delete redundent indexes (leave "network" only).
+        objectStore = aTransaction.objectStore(STORE_NAME);
+        if (objectStore.indexNames.contains("appId")) {
+          objectStore.deleteIndex("appId");
+        }
+        if (objectStore.indexNames.contains("networkType")) {
+          objectStore.deleteIndex("networkType");
+        }
+        if (objectStore.indexNames.contains("timestamp")) {
+          objectStore.deleteIndex("timestamp");
+        }
+        if (objectStore.indexNames.contains("rxBytes")) {
+          objectStore.deleteIndex("rxBytes");
+        }
+        if (objectStore.indexNames.contains("txBytes")) {
+          objectStore.deleteIndex("txBytes");
+        }
+        if (objectStore.indexNames.contains("rxTotalBytes")) {
+          objectStore.deleteIndex("rxTotalBytes");
+        }
+        if (objectStore.indexNames.contains("txTotalBytes")) {
+          objectStore.deleteIndex("txTotalBytes");
+        }
+
+        if (DEBUG) {
+          debug("Deleted redundent indexes for version 4");
         }
       }
     }
@@ -471,6 +500,41 @@ NetworkStatsDB.prototype = {
                    txBytes: undefined,
                    date: new Date(aData[aData.length - 1].date.getTime() + SAMPLE_RATE) });
     }
+  },
+
+  getAvailableNetworks: function getAvailableNetworks(aResultCb) {
+    this.dbNewTxn("readonly", function(aTxn, aStore) {
+      if (!aTxn.result) {
+        aTxn.result = [];
+      }
+
+      let request = aStore.index("network").openKeyCursor(null, "nextunique");
+      request.onsuccess = function onsuccess(event) {
+        let cursor = event.target.result;
+        if (cursor) {
+          aTxn.result.push({ id: cursor.key[0],
+                             type: cursor.key[1] });
+          cursor.continue();
+          return;
+        }
+      };
+    }, aResultCb);
+  },
+
+  isNetworkAvailable: function isNetworkAvailable(aNetwork, aResultCb) {
+    this.dbNewTxn("readonly", function(aTxn, aStore) {
+      if (!aTxn.result) {
+        aTxn.result = false;
+      }
+
+      var network = [aNetwork.id, aNetwork.type];
+      let request = aStore.index("network").openKeyCursor(IDBKeyRange.only(network));
+      request.onsuccess = function onsuccess(event) {
+        if (event.target.result) {
+          aTxn.result = true;
+        }
+      };
+    }, aResultCb);
   },
 
   get sampleRate () {

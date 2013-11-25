@@ -66,8 +66,6 @@ SharedTextureClientOGL::IsAllocated() const
   return mHandle != 0;
 }
 
-
-
 DeprecatedTextureClientSharedOGL::DeprecatedTextureClientSharedOGL(CompositableForwarder* aForwarder,
                                                const TextureInfo& aTextureInfo)
   : DeprecatedTextureClient(aForwarder, aTextureInfo)

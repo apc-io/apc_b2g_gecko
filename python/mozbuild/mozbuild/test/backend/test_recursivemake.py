@@ -324,9 +324,6 @@ class TestRecursiveMakeBackend(BackendTester):
             'HOST_LIBRARY_NAME': [
                 'HOST_LIBRARY_NAME := host_bar',
             ],
-            'LIBRARY_NAME': [
-                'LIBRARY_NAME := lib_name',
-            ],
             'LIBXUL_LIBRARY': [
                 'LIBXUL_LIBRARY := 1',
             ],
@@ -341,14 +338,6 @@ class TestRecursiveMakeBackend(BackendTester):
             'SDK_LIBRARY': [
                 'SDK_LIBRARY += bar.sdk',
                 'SDK_LIBRARY += foo.sdk',
-            ],
-            'SHARED_LIBRARY_LIBS': [
-                'SHARED_LIBRARY_LIBS += bar.sll',
-                'SHARED_LIBRARY_LIBS += foo.sll',
-            ],
-            'SIMPLE_PROGRAMS': [
-                'SIMPLE_PROGRAMS += bar.x',
-                'SIMPLE_PROGRAMS += foo.x',
             ],
             'SSRCS': [
                 'SSRCS += baz.S',

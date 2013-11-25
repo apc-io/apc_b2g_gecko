@@ -1,3 +1,4 @@
+/* -*- js-indent-level: 4 -*- */
 /*
  * e10s event dispatcher from content->chrome
  *
@@ -84,6 +85,9 @@ TestRunner._expectedMaxAsserts = 0;
 TestRunner.timeout = 5 * 60 * 1000; // 5 minutes.
 TestRunner.maxTimeouts = 4; // halt testing after too many timeouts
 TestRunner.runSlower = false;
+TestRunner.dumpOutputDirectory = "";
+TestRunner.dumpAboutMemoryAfterTest = false;
+TestRunner.dumpDMDAfterTest = false;
 TestRunner.slowestTestTime = 0;
 TestRunner.slowestTestURL = "";
 
@@ -212,6 +216,16 @@ TestRunner.error = function(msg) {
         TestRunner.logger.error(msg);
     } else {
         dump(msg + "\n");
+    }
+
+    if (TestRunner.runUntilFailure) {
+      TestRunner._haltTests = true;
+    }
+
+    if (TestRunner.debugOnFailure) {
+      // You've hit this line because you requested to break into the
+      // debugger upon a testcase failure on your test run.
+      debugger;
     }
 };
 
@@ -360,10 +374,7 @@ TestRunner.runNextTest = function() {
              TestRunner.onComplete();
          }
 
-        var failCount = parseInt($("fail-count").innerHTML);
-        var stopLooping = failCount > 0 && TestRunner.runUntilFailure;
-
-        if (TestRunner._currentLoop <= TestRunner.repeat && !stopLooping) {
+        if (TestRunner._currentLoop <= TestRunner.repeat && !TestRunner._haltTests) {
           TestRunner._currentLoop++;
           TestRunner.resetTests(TestRunner._urls);
           TestRunner._loopIsRestarting = true;
@@ -401,6 +412,12 @@ TestRunner.testFinished = function(tests) {
     }
     TestRunner._lastTestFinished = TestRunner._currentTest;
     TestRunner._loopIsRestarting = false;
+
+    MemoryStats.dump(TestRunner.log, TestRunner._currentTest,
+                     TestRunner.currentTestURL,
+                     TestRunner.dumpOutputDirectory,
+                     TestRunner.dumpAboutMemoryAfterTest,
+                     TestRunner.dumpDMDAfterTest);
 
     function cleanUpCrashDumpFiles() {
         if (!SpecialPowers.removeExpectedCrashDumpFiles(TestRunner._expectingProcessCrash)) {

@@ -345,6 +345,8 @@ static void
 Discard(const uint64_t *begin, const uint64_t *end)
 {
     const uint64_t *point = begin;
+    if (begin >= end)
+        return; // Empty buffer
 
     uint64_t u = LittleEndian::readUint64(point++);
     uint32_t tag = uint32_t(u >> 32);
@@ -1447,7 +1449,7 @@ JSStructuredCloneReader::readId(jsid *idp)
         JSString *str = readString(data);
         if (!str)
             return false;
-        JSAtom *atom = AtomizeString<CanGC>(context(), str);
+        JSAtom *atom = AtomizeString(context(), str);
         if (!atom)
             return false;
         *idp = NON_INTEGER_ATOM_TO_JSID(atom);

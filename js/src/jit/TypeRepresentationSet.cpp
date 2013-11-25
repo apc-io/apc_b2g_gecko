@@ -162,20 +162,29 @@ TypeRepresentationSet::TypeRepresentationSet()
 bool
 TypeRepresentationSet::empty()
 {
-    return length() == 0;
+    return length_ == 0;
 }
 
-size_t
-TypeRepresentationSet::length()
+bool
+TypeRepresentationSet::singleton()
 {
-    return length_;
+    return length_ == 1;
 }
 
 TypeRepresentation *
-TypeRepresentationSet::get(size_t i)
+TypeRepresentationSet::getTypeRepresentation()
 {
-    JS_ASSERT(i < length());
-    return entries_[i];
+    JS_ASSERT(singleton());
+    return get(0);
+}
+
+bool
+TypeRepresentationSet::allOfArrayKind()
+{
+    if (empty())
+        return false;
+
+    return kind() == TypeRepresentation::Array;
 }
 
 bool
@@ -185,6 +194,22 @@ TypeRepresentationSet::allOfKind(TypeRepresentation::Kind aKind)
         return false;
 
     return kind() == aKind;
+}
+
+bool
+TypeRepresentationSet::allHaveSameSize(size_t *out)
+{
+    if (empty())
+        return false;
+
+    size_t size = get(0)->size();
+    for (size_t i = 1; i < length(); i++) {
+        if (get(i)->size() != size)
+            return false;
+    }
+
+    *out = size;
+    return true;
 }
 
 TypeRepresentation::Kind

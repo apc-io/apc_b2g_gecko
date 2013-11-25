@@ -545,6 +545,19 @@ CSS_PROP_BACKGROUND(
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 CSS_PROP_BACKGROUND(
+    background-blend-mode,
+    background_blend_mode,
+    BackgroundBlendMode,
+    CSS_PROPERTY_PARSE_VALUE_LIST |
+        CSS_PROPERTY_APPLIES_TO_FIRST_LETTER_AND_FIRST_LINE |
+        CSS_PROPERTY_APPLIES_TO_PLACEHOLDER |
+        CSS_PROPERTY_VALUE_LIST_USES_COMMAS,
+    "layout.css.background-blend-mode.enabled",
+    VARIANT_KEYWORD, // used by list parsing
+    kBlendModeKTable,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_None)
+CSS_PROP_BACKGROUND(
     background-origin,
     background_origin,
     BackgroundOrigin,
@@ -1590,7 +1603,7 @@ CSS_PROP_POSITION(
     align_items,
     AlignItems,
     CSS_PROPERTY_PARSE_VALUE,
-    "layout.css.flexbox.enabled",
+    "",
     VARIANT_HK,
     kAlignItemsKTable,
     offsetof(nsStylePosition, mAlignItems),
@@ -1600,7 +1613,7 @@ CSS_PROP_POSITION(
     align_self,
     AlignSelf,
     CSS_PROPERTY_PARSE_VALUE,
-    "layout.css.flexbox.enabled",
+    "",
     VARIANT_HK,
     kAlignSelfKTable,
     offsetof(nsStylePosition, mAlignSelf),
@@ -1610,7 +1623,7 @@ CSS_PROP_SHORTHAND(
     flex,
     Flex,
     CSS_PROPERTY_PARSE_FUNCTION,
-    "layout.css.flexbox.enabled")
+    "")
 CSS_PROP_POSITION(
     flex-basis,
     flex_basis,
@@ -1618,7 +1631,7 @@ CSS_PROP_POSITION(
     CSS_PROPERTY_PARSE_VALUE |
         CSS_PROPERTY_VALUE_NONNEGATIVE |
         CSS_PROPERTY_STORES_CALC,
-    "layout.css.flexbox.enabled",
+    "",
     // NOTE: The parsing implementation for the 'flex' shorthand property has
     // its own code to parse each subproperty. It does not depend on the
     // longhand parsing defined here.
@@ -1631,7 +1644,7 @@ CSS_PROP_POSITION(
     flex_direction,
     FlexDirection,
     CSS_PROPERTY_PARSE_VALUE,
-    "layout.css.flexbox.enabled",
+    "",
     VARIANT_HK,
     kFlexDirectionKTable,
     offsetof(nsStylePosition, mFlexDirection),
@@ -1642,7 +1655,7 @@ CSS_PROP_POSITION(
     FlexGrow,
     CSS_PROPERTY_PARSE_VALUE |
       CSS_PROPERTY_VALUE_NONNEGATIVE,
-    "layout.css.flexbox.enabled",
+    "",
     // NOTE: The parsing implementation for the 'flex' shorthand property has
     // its own code to parse each subproperty. It does not depend on the
     // longhand parsing defined here.
@@ -1656,7 +1669,7 @@ CSS_PROP_POSITION(
     FlexShrink,
     CSS_PROPERTY_PARSE_VALUE |
       CSS_PROPERTY_VALUE_NONNEGATIVE,
-    "layout.css.flexbox.enabled",
+    "",
     // NOTE: The parsing implementation for the 'flex' shorthand property has
     // its own code to parse each subproperty. It does not depend on the
     // longhand parsing defined here.
@@ -1669,7 +1682,7 @@ CSS_PROP_POSITION(
     order,
     Order,
     CSS_PROPERTY_PARSE_VALUE,
-    "layout.css.flexbox.enabled",
+    "",
     VARIANT_HI,
     nullptr,
     offsetof(nsStylePosition, mOrder),
@@ -1679,7 +1692,7 @@ CSS_PROP_POSITION(
     justify_content,
     JustifyContent,
     CSS_PROPERTY_PARSE_VALUE,
-    "layout.css.flexbox.enabled",
+    "",
     VARIANT_HK,
     kJustifyContentKTable,
     offsetof(nsStylePosition, mJustifyContent),

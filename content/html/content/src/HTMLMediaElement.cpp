@@ -1083,12 +1083,9 @@ nsresult HTMLMediaElement::LoadResource()
   }
 
   // Check if media is allowed for the docshell.
-  nsCOMPtr<nsISupports> container = OwnerDoc()->GetContainer();
-  if (container) {
-    nsCOMPtr<nsIDocShell> docShell = do_QueryInterface(container);
-    if (docShell && !docShell->GetAllowMedia()) {
-      return NS_ERROR_FAILURE;
-    }
+  nsCOMPtr<nsIDocShell> docShell = OwnerDoc()->GetDocShell();
+  if (docShell && !docShell->GetAllowMedia()) {
+    return NS_ERROR_FAILURE;
   }
 
   int16_t shouldLoad = nsIContentPolicy::ACCEPT;
@@ -1401,17 +1398,7 @@ already_AddRefed<TimeRanges>
 HTMLMediaElement::Seekable() const
 {
   nsRefPtr<TimeRanges> ranges = new TimeRanges();
-  if (mMediaSource) {
-    double duration = mMediaSource->Duration();
-    if (IsNaN(duration)) {
-      // Return empty range.
-    } else if (duration > 0 && IsInfinite(duration)) {
-      nsRefPtr<TimeRanges> bufferedRanges = Buffered();
-      ranges->Add(0, bufferedRanges->GetFinalEndTime());
-    } else {
-      ranges->Add(0, duration);
-    }
-  } else if (mDecoder && mReadyState > nsIDOMHTMLMediaElement::HAVE_NOTHING) {
+  if (mDecoder && mReadyState > nsIDOMHTMLMediaElement::HAVE_NOTHING) {
     mDecoder->GetSeekable(ranges);
   }
   ranges->Normalize();
@@ -1591,7 +1578,7 @@ HTMLMediaElement::GetMozSampleRate(uint32_t* aMozSampleRate)
 // Helper struct with arguments for our hash iterator.
 typedef struct MOZ_STACK_CLASS {
   JSContext* cx;
-  JS::HandleObject  tags;
+  JS::Handle<JSObject*> tags;
   bool error;
 } MetadataIterCx;
 
@@ -2076,6 +2063,19 @@ void HTMLMediaElement::SetPlayedOrSeeked(bool aValue)
   frame->PresContext()->PresShell()->FrameNeedsReflow(frame,
                                                       nsIPresShell::eTreeChange,
                                                       NS_FRAME_IS_DIRTY);
+}
+
+void
+HTMLMediaElement::ResetConnectionState()
+{
+  mBegun = false;
+  SetCurrentTime(0);
+  FireTimeUpdate(false);
+  DispatchAsyncEvent(NS_LITERAL_STRING("ended"));
+  mNetworkState = nsIDOMHTMLMediaElement::NETWORK_EMPTY;
+  AddRemoveSelfReference();
+  ChangeDelayLoadStatus(false);
+  ChangeReadyState(nsIDOMHTMLMediaElement::HAVE_NOTHING);
 }
 
 void
@@ -3601,9 +3601,7 @@ already_AddRefed<TimeRanges>
 HTMLMediaElement::Buffered() const
 {
   nsRefPtr<TimeRanges> ranges = new TimeRanges();
-  if (mMediaSource) {
-    mMediaSource->GetBuffered(ranges);
-  } else if (mDecoder && mReadyState > nsIDOMHTMLMediaElement::HAVE_NOTHING) {
+  if (mDecoder && mReadyState > nsIDOMHTMLMediaElement::HAVE_NOTHING) {
     // If GetBuffered fails we ignore the error result and just return the
     // time ranges we found up till the error.
     mDecoder->GetBuffered(ranges);

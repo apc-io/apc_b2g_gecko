@@ -36,17 +36,23 @@ endif
 _MOZBUILD_EXTERNAL_VARIABLES := \
   ANDROID_GENERATED_RESFILES \
   ANDROID_RESFILES \
+  CMSRCS \
   CMMSRCS \
   CPP_UNIT_TESTS \
   DIRS \
   EXTRA_PP_COMPONENTS \
   EXTRA_PP_JS_MODULES \
+  FORCE_SHARED_LIB \
   FORCE_STATIC_LIB \
+  FINAL_LIBRARY \
   GTEST_CMMSRCS \
   GTEST_CPPSRCS \
   GTEST_CSRCS \
   HOST_CSRCS \
+  HOST_CMMSRCS \
   HOST_LIBRARY_NAME \
+  HOST_PROGRAM \
+  HOST_SIMPLE_PROGRAMS \
   IS_COMPONENT \
   JAVA_JAR_TARGETS \
   JS_MODULES_PATH \
@@ -56,6 +62,7 @@ _MOZBUILD_EXTERNAL_VARIABLES := \
   MSVC_ENABLE_PGO \
   NO_DIST_INSTALL \
   PARALLEL_DIRS \
+  PROGRAM \
   SDK_HEADERS \
   SIMPLE_PROGRAMS \
   TEST_DIRS \
@@ -68,6 +75,7 @@ _MOZBUILD_EXTERNAL_VARIABLES := \
 _DEPRECATED_VARIABLES := \
   MOCHITEST_FILES_PARTS \
   MOCHITEST_BROWSER_FILES_PARTS \
+  SHORT_LIBNAME \
   $(NULL)
 
 ifndef EXTERNALLY_MANAGED_MAKE_FILE
@@ -128,7 +136,6 @@ CHECK_VARS := \
  LIBRARY_NAME \
  MODULE \
  DEPTH \
- SHORT_LIBNAME \
  XPI_PKGNAME \
  INSTALL_EXTENSION_ID \
  SHARED_LIBRARY_NAME \
@@ -190,9 +197,8 @@ MOZ_PSEUDO_DERECURSE :=
 endif
 endif
 
-# Disable MOZ_PSEUDO_DERECURSE on the second PGO pass until it's widely
-# tested.
-ifdef MOZ_PROFILE_USE
+# Disable MOZ_PSEUDO_DERECURSE on PGO builds until it's fixed.
+ifneq (,$(MOZ_PROFILE_USE)$(MOZ_PROFILE_GENERATE))
 MOZ_PSEUDO_DERECURSE :=
 endif
 
@@ -213,9 +219,6 @@ endif
 endif
 
 OS_CONFIG	:= $(OS_ARCH)$(OS_RELEASE)
-
-MOZ_UNICHARUTIL_LIBS = $(LIBXUL_DIST)/lib/$(LIB_PREFIX)unicharutil_s.$(LIB_SUFFIX)
-MOZ_WIDGET_SUPPORT_LIBS    = $(DIST)/lib/$(LIB_PREFIX)widgetsupport_s.$(LIB_SUFFIX)
 
 ifdef _MSC_VER
 CC_WRAPPER ?= $(call py_action,cl)
@@ -331,20 +334,18 @@ _ENABLE_PIC=1
 # Determine if module being compiled is destined
 # to be merged into libxul
 
+ifeq ($(FINAL_LIBRARY),xul)
+  ifdef LIBXUL_LIBRARY
+    $(error FINAL_LIBRARY is "xul", LIBXUL_LIBRARY is implied)
+  endif
+  LIBXUL_LIBRARY := 1
+endif
+
 ifdef LIBXUL_LIBRARY
 ifdef IS_COMPONENT
 $(error IS_COMPONENT is set, but is not compatible with LIBXUL_LIBRARY)
 endif
-ifdef MODULE_NAME
-$(error MODULE_NAME is $(MODULE_NAME) but MODULE_NAME and LIBXUL_LIBRARY are not compatible)
-endif
-ifdef FORCE_STATIC_LIB
-$(error Makefile sets FORCE_STATIC_LIB which was already implied by LIBXUL_LIBRARY)
-endif
 FORCE_STATIC_LIB=1
-ifneq ($(SHORT_LIBNAME),)
-$(error SHORT_LIBNAME is $(SHORT_LIBNAME) but SHORT_LIBNAME is not compatable with LIBXUL_LIBRARY)
-endif
 endif
 
 # If we are building this component into an extension/xulapp, it cannot be
@@ -395,10 +396,10 @@ NO_PROFILE_GUIDED_OPTIMIZE = 1
 endif
 
 # Enable profile-based feedback
-ifndef NO_PROFILE_GUIDED_OPTIMIZE
+ifneq (1,$(NO_PROFILE_GUIDED_OPTIMIZE))
 ifdef MOZ_PROFILE_GENERATE
-OS_CFLAGS += $(PROFILE_GEN_CFLAGS)
-OS_CXXFLAGS += $(PROFILE_GEN_CFLAGS)
+OS_CFLAGS += $(if $(filter $(notdir $<),$(notdir $(NO_PROFILE_GUIDED_OPTIMIZE))),,$(PROFILE_GEN_CFLAGS))
+OS_CXXFLAGS += $(if $(filter $(notdir $<),$(notdir $(NO_PROFILE_GUIDED_OPTIMIZE))),,$(PROFILE_GEN_CFLAGS))
 OS_LDFLAGS += $(PROFILE_GEN_LDFLAGS)
 ifeq (WINNT,$(OS_ARCH))
 AR_FLAGS += -LTCG
@@ -406,8 +407,8 @@ endif
 endif # MOZ_PROFILE_GENERATE
 
 ifdef MOZ_PROFILE_USE
-OS_CFLAGS += $(PROFILE_USE_CFLAGS)
-OS_CXXFLAGS += $(PROFILE_USE_CFLAGS)
+OS_CFLAGS += $(if $(filter $(notdir $<),$(notdir $(NO_PROFILE_GUIDED_OPTIMIZE))),,$(PROFILE_USE_CFLAGS))
+OS_CXXFLAGS += $(if $(filter $(notdir $<),$(notdir $(NO_PROFILE_GUIDED_OPTIMIZE))),,$(PROFILE_USE_CFLAGS))
 OS_LDFLAGS += $(PROFILE_USE_LDFLAGS)
 ifeq (WINNT,$(OS_ARCH))
 AR_FLAGS += -LTCG
@@ -473,9 +474,9 @@ OS_INCLUDES += $(MOZ_JPEG_CFLAGS) $(MOZ_PNG_CFLAGS) $(MOZ_ZLIB_CFLAGS)
 # NSPR_CFLAGS and NSS_CFLAGS must appear ahead of OS_INCLUDES to avoid Linux
 # builds wrongly picking up system NSPR/NSS header files.
 INCLUDES = \
-  $(LOCAL_INCLUDES) \
   -I$(srcdir) \
   -I. \
+  $(LOCAL_INCLUDES) \
   -I$(DIST)/include \
   $(if $(LIBXUL_SDK),-I$(LIBXUL_SDK)/include) \
   $(NSPR_CFLAGS) $(NSS_CFLAGS) \
@@ -618,8 +619,13 @@ endif
 endif
 
 # Default location of include files
+ifndef LIBXUL_SDK
 IDL_PARSER_DIR = $(topsrcdir)/xpcom/idl-parser
 IDL_PARSER_CACHE_DIR = $(DEPTH)/xpcom/idl-parser
+else
+IDL_PARSER_DIR = $(LIBXUL_SDK)/sdk/bin
+IDL_PARSER_CACHE_DIR = $(LIBXUL_SDK)/sdk/bin
+endif
 
 SDK_LIB_DIR = $(DIST)/sdk/lib
 SDK_BIN_DIR = $(DIST)/sdk/bin

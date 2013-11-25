@@ -320,7 +320,9 @@ class IDLUnresolvedIdentifier(IDLObject):
                               [location])
         if name[0] == '_' and not allowDoubleUnderscore:
             name = name[1:]
-        if (name in ["constructor", "toString", "toJSON"] and
+        # TODO: Bug 872377, Restore "toJSON" to below list.
+        # We sometimes need custom serialization, so allow toJSON for now.
+        if (name in ["constructor", "toString"] and
             not allowForbidden):
             raise WebIDLError("Cannot use reserved identifier '%s'" % (name),
                               [location])
@@ -360,7 +362,6 @@ class IDLObjectWithIdentifier(IDLObject):
             self.resolve(parentScope)
 
         self.treatNullAs = "Default"
-        self.treatUndefinedAs = "Default"
 
     def resolve(self, parentScope):
         assert isinstance(parentScope, IDLScope)
@@ -371,7 +372,7 @@ class IDLObjectWithIdentifier(IDLObject):
                                                  isDictionaryMember=False,
                                                  isOptional=False):
         """
-        A helper function to deal with TreatNullAs and TreatUndefinedAs.  Returns the list
+        A helper function to deal with TreatNullAs.  Returns the list
         of attrs it didn't handle itself.
         """
         assert isinstance(self, IDLArgument) or isinstance(self, IDLAttribute)
@@ -397,38 +398,6 @@ class IDLObjectWithIdentifier(IDLObject):
                                       "'EmptyString', not '%s'" % value,
                                       [self.location])
                 self.treatNullAs = value
-            elif identifier == "TreatUndefinedAs":
-                if isDictionaryMember:
-                    raise WebIDLError("[TreatUndefinedAs] is not allowed for "
-                                      "dictionary members", [self.location])
-                if value == 'Missing':
-                    if not isOptional:
-                        raise WebIDLError("[TreatUndefinedAs=Missing] is only "
-                                          "allowed on optional arguments",
-                                          [self.location])
-                elif value == 'Null':
-                    if not self.type.isDOMString():
-                        raise WebIDLError("[TreatUndefinedAs=Null] is only "
-                                          "allowed on arguments or "
-                                          "attributes whose type is "
-                                          "DOMString or DOMString?",
-                                          [self.location])
-                    if not self.type.nullable():
-                        raise WebIDLError("[TreatUndefinedAs=Null] is only "
-                                          "allowed on arguments whose type "
-                                          "is DOMString?", [self.location])
-                elif value == 'EmptyString':
-                    if not self.type.isDOMString():
-                        raise WebIDLError("[TreatUndefinedAs=EmptyString] "
-                                          "is only allowed on arguments or "
-                                          "attributes whose type is "
-                                          "DOMString or DOMString?",
-                                          [self.location])
-                else:
-                    raise WebIDLError("[TreatUndefinedAs] must take the "
-                                      "identifiers EmptyString or Null or "
-                                      "Missing", [self.location])
-                self.treatUndefinedAs = value
             else:
                 unhandledAttrs.append(attr)
 
@@ -899,7 +868,7 @@ class IDLInterface(IDLObjectWithScope):
                                       [self.location])
 
                 self._noInterfaceObject = True
-            elif identifier == "Constructor" or identifier == "NamedConstructor":
+            elif identifier == "Constructor" or identifier == "NamedConstructor" or identifier == "ChromeConstructor":
                 if identifier == "Constructor" and not self.hasInterfaceObject():
                     raise WebIDLError(str(identifier) + " and NoInterfaceObject are incompatible",
                                       [self.location])
@@ -908,11 +877,15 @@ class IDLInterface(IDLObjectWithScope):
                     raise WebIDLError("NamedConstructor must either take an identifier or take a named argument list",
                                       [attr.location])
 
+                if identifier == "ChromeConstructor" and not self.hasInterfaceObject():
+                    raise WebIDLError(str(identifier) + " and NoInterfaceObject are incompatible",
+                                      [self.location])
+
                 args = attr.args() if attr.hasArgs() else []
 
                 retType = IDLWrapperType(self.location, self)
                 
-                if identifier == "Constructor":
+                if identifier == "Constructor" or identifier == "ChromeConstructor":
                     name = "constructor"
                     allowForbidden = True
                 else:
@@ -931,9 +904,11 @@ class IDLInterface(IDLObjectWithScope):
                 method.addExtendedAttributes(
                     [IDLExtendedAttribute(self.location, ("NewObject",)),
                      IDLExtendedAttribute(self.location, ("Throws",))])
+                if identifier == "ChromeConstructor":
+                    method.addExtendedAttributes(
+                        [IDLExtendedAttribute(self.location, ("ChromeOnly",))])
 
-
-                if identifier == "Constructor":
+                if identifier == "Constructor" or identifier == "ChromeConstructor":
                     method.resolve(self)
                 else:
                     # We need to detect conflicts for NamedConstructors across
@@ -3153,15 +3128,12 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
 
     def finish(self, scope):
         for overload in self._overloads:
-            inOptionalArguments = False
             variadicArgument = None
 
             arguments = overload.arguments
             for (idx, argument) in enumerate(arguments):
-                if argument.isComplete():
-                    continue
-
-                argument.complete(scope)
+                if not argument.isComplete():
+                    argument.complete(scope)
                 assert argument.type.isComplete()
 
                 if (argument.type.isDictionary() or
@@ -3171,7 +3143,7 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
                     # end of the list or followed by optional arguments must be
                     # optional.
                     if (not argument.optional and
-                        (idx == len(arguments) - 1 or arguments[idx+1].optional)):
+                        all(arg.optional for arg in arguments[idx+1:])):
                         raise WebIDLError("Dictionary argument or union "
                                           "argument containing a dictionary "
                                           "not followed by a required argument "
@@ -3189,13 +3161,6 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
                 if variadicArgument:
                     raise WebIDLError("Variadic argument is not last argument",
                                       [variadicArgument.location])
-                # Once we see an optional argument, there can't be any non-optional
-                # arguments.
-                if inOptionalArguments and not argument.optional:
-                    raise WebIDLError("Non-optional argument after optional "
-                                      "arguments",
-                                      [argument.location])
-                inOptionalArguments = argument.optional
                 if argument.variadic:
                     variadicArgument = argument
 
@@ -3240,7 +3205,7 @@ class IDLMethod(IDLInterfaceMember, IDLScope):
         return [overload for overload in self._overloads if
                 len(overload.arguments) == argc or
                 (len(overload.arguments) > argc and
-                 overload.arguments[argc].optional) or
+                 all(arg.optional for arg in overload.arguments[argc:])) or
                 (len(overload.arguments) < argc and
                  len(overload.arguments) > 0 and
                  overload.arguments[-1].variadic)]
@@ -4069,21 +4034,6 @@ class Parser(Tokenizer):
             if not returnType.isDOMString():
                 raise WebIDLError("stringifier must have DOMString return type",
                                   [self.getLocation(p, 2)])
-
-        inOptionalArguments = False
-        variadicArgument = False
-        for argument in arguments:
-            # Only the last argument can be variadic
-            if variadicArgument:
-                raise WebIDLError("Only the last argument can be variadic",
-                                  [variadicArgument.location])
-            # Once we see an optional argument, there can't be any non-optional
-            # arguments.
-            if inOptionalArguments and not argument.optional:
-                raise WebIDLError("Cannot have a non-optional argument following an optional argument",
-                                  [argument.location])
-            inOptionalArguments = argument.optional
-            variadicArgument = argument if argument.variadic else None
 
         # identifier might be None.  This is only permitted for special methods.
         if not identifier:

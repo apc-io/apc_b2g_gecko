@@ -90,8 +90,12 @@ endif
 
 mochitest-remote: DM_TRANS?=adb
 mochitest-remote:
-	@if [ ! -f ${MOZ_HOST_BIN}/xpcshell ]; then \
-        echo "please prepare your host with the environment variable MOZ_HOST_BIN"; \
+	@if [ "${MOZ_HOST_BIN}" = "" ]; then \
+        echo "environment variable MOZ_HOST_BIN must be set to a directory containing host xpcshell"; \
+    elif [ ! -d ${MOZ_HOST_BIN} ]; then \
+        echo "MOZ_HOST_BIN does not specify a directory"; \
+    elif [ ! -f ${MOZ_HOST_BIN}/xpcshell ]; then \
+        echo "xpcshell not found in MOZ_HOST_BIN"; \
     elif [ "${TEST_DEVICE}" = "" -a "$(DM_TRANS)" != "adb" ]; then \
         echo "please prepare your host with the environment variable TEST_DEVICE"; \
     else \
@@ -103,8 +107,12 @@ mochitest-robotium: mochitest-robocop
 
 mochitest-robocop: DM_TRANS?=adb
 mochitest-robocop:
-	@if [ ! -f ${MOZ_HOST_BIN}/xpcshell ]; then \
-        echo "please prepare your host with the environment variable MOZ_HOST_BIN"; \
+	@if [ "${MOZ_HOST_BIN}" = "" ]; then \
+        echo "environment variable MOZ_HOST_BIN must be set to a directory containing host xpcshell"; \
+    elif [ ! -d ${MOZ_HOST_BIN} ]; then \
+        echo "MOZ_HOST_BIN does not specify a directory"; \
+    elif [ ! -f ${MOZ_HOST_BIN}/xpcshell ]; then \
+        echo "xpcshell not found in MOZ_HOST_BIN"; \
     elif [ "${TEST_DEVICE}" = "" -a "$(DM_TRANS)" != "adb" ]; then \
         echo "please prepare your host with the environment variable TEST_DEVICE"; \
     else \
@@ -212,8 +220,12 @@ reftest:
 reftest-remote: TEST_PATH?=layout/reftests/reftest.list
 reftest-remote: DM_TRANS?=adb
 reftest-remote:
-	@if [ ! -f ${MOZ_HOST_BIN}/xpcshell ]; then \
-        echo "please prepare your host with the environment variable MOZ_HOST_BIN"; \
+	@if [ "${MOZ_HOST_BIN}" = "" ]; then \
+        echo "environment variable MOZ_HOST_BIN must be set to a directory containing host xpcshell"; \
+    elif [ ! -d ${MOZ_HOST_BIN} ]; then \
+        echo "MOZ_HOST_BIN does not specify a directory"; \
+    elif [ ! -f ${MOZ_HOST_BIN}/xpcshell ]; then \
+        echo "xpcshell not found in MOZ_HOST_BIN"; \
     elif [ "${TEST_DEVICE}" = "" -a "$(DM_TRANS)" != "adb" ]; then \
         echo "please prepare your host with the environment variable TEST_DEVICE"; \
     else \
@@ -224,8 +236,12 @@ reftest-remote:
 
 reftest-b2g: TEST_PATH?=layout/reftests/reftest.list
 reftest-b2g:
-	@if [ ! -f ${MOZ_HOST_BIN}/xpcshell ]; then \
-        echo "please set the MOZ_HOST_BIN environment variable"; \
+	@if [ "${MOZ_HOST_BIN}" = "" ]; then \
+		echo "environment variable MOZ_HOST_BIN must be set to a directory containing host xpcshell"; \
+	elif [ ! -d ${MOZ_HOST_BIN} ]; then \
+		echo "MOZ_HOST_BIN does not specify a directory"; \
+	elif [ ! -f ${MOZ_HOST_BIN}/xpcshell ]; then \
+		echo "xpcshell not found in MOZ_HOST_BIN"; \
 	elif [ "${B2G_PATH}" = "" -o "${ADB_PATH}" = "" ]; then \
 		echo "please set the B2G_PATH and ADB_PATH environment variables"; \
 	else \
@@ -417,9 +433,6 @@ package-tests:
 	@rm -f "$(DIST)/$(PKG_PATH)$(TEST_PACKAGE)"
 ifndef UNIVERSAL_BINARY
 	$(NSINSTALL) -D $(DIST)/$(PKG_PATH)
-else
-	#building tests.jar (bug 543800) fails on unify, so we build tests.jar after unify is run
-	$(MAKE) -C $(DEPTH)/testing/mochitest stage-chromejar PKG_STAGE=$(DIST)/universal
 endif
 	find $(PKG_STAGE) -name "*.pyc" -exec rm {} \;
 	cd $(PKG_STAGE) && \
@@ -522,6 +535,7 @@ stage-jittest:
 	cp -RL $(topsrcdir)/js/src/jsapi.h $(PKG_STAGE)/jit-test
 	cp -RL $(topsrcdir)/js/src/jit-test $(PKG_STAGE)/jit-test/jit-test
 	cp -RL $(topsrcdir)/js/src/tests/ecma_6 $(PKG_STAGE)/jit-test/tests/ecma_6
+	cp -RL $(topsrcdir)/js/src/tests/js1_8_5 $(PKG_STAGE)/jit-test/tests/js1_8_5
 	cp -RL $(topsrcdir)/js/src/tests/lib $(PKG_STAGE)/jit-test/tests/lib
 
 stage-steeplechase:

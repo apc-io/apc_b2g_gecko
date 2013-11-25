@@ -397,7 +397,11 @@ LIRGenerator::visitComputeThis(MComputeThis *ins)
     JS_ASSERT(ins->input()->type() == MIRType_Value);
 
     LComputeThis *lir = new LComputeThis();
-    if (!useBoxAtStart(lir, LComputeThis::ValueIndex, ins->input()))
+
+    // Don't use useBoxAtStart because ComputeThis has a safepoint and needs to
+    // have its inputs in different registers than its return value so that
+    // they aren't clobbered.
+    if (!useBox(lir, LComputeThis::ValueIndex, ins->input()))
         return false;
 
     return define(lir, ins) && assignSafepoint(lir, ins);
@@ -657,13 +661,13 @@ LIRGenerator::visitTest(MTest *test)
 
     // Constant Double operand.
     if (opd->type() == MIRType_Double && opd->isConstant()) {
-        bool result = ToBoolean(opd->toConstant()->value());
+        bool result = opd->toConstant()->valueToBoolean();
         return add(new LGoto(result ? ifTrue : ifFalse));
     }
 
     // Constant Float32 operand.
     if (opd->type() == MIRType_Float32 && opd->isConstant()) {
-        bool result = ToBoolean(opd->toConstant()->value());
+        bool result = opd->toConstant()->valueToBoolean();
         return add(new LGoto(result ? ifTrue : ifFalse));
     }
 
@@ -1218,6 +1222,19 @@ LIRGenerator::visitAtan2(MAtan2 *ins)
     JS_ASSERT(x->type() == MIRType_Double);
 
     LAtan2D *lir = new LAtan2D(useRegisterAtStart(y), useRegisterAtStart(x), tempFixed(CallTempReg0));
+    return defineReturn(lir, ins);
+}
+
+bool
+LIRGenerator::visitHypot(MHypot *ins)
+{
+    MDefinition *x = ins->x();
+    JS_ASSERT(x->type() == MIRType_Double);
+
+    MDefinition *y = ins->y();
+    JS_ASSERT(y->type() == MIRType_Double);
+
+    LHypot *lir = new LHypot(useRegisterAtStart(x), useRegisterAtStart(y), tempFixed(CallTempReg0));
     return defineReturn(lir, ins);
 }
 
@@ -2261,7 +2278,7 @@ LIRGenerator::visitNot(MNot *ins)
     // - object: false if it never emulates undefined, else LNotO(x)
     switch (op->type()) {
       case MIRType_Boolean: {
-        MConstant *cons = MConstant::New(Int32Value(1));
+        MConstant *cons = MConstant::New(alloc(), Int32Value(1));
         ins->block()->insertBefore(ins, cons);
         return lowerForALU(new LBitOpI(JSOP_BITXOR), ins, op, cons);
       }
@@ -2521,6 +2538,18 @@ LIRGenerator::visitArrayConcat(MArrayConcat *ins)
                                          useFixed(ins->rhs(), CallTempReg2),
                                          tempFixed(CallTempReg3),
                                          tempFixed(CallTempReg4));
+    return defineReturn(lir, ins) && assignSafepoint(lir, ins);
+}
+
+bool
+LIRGenerator::visitStringSplit(MStringSplit *ins)
+{
+    JS_ASSERT(ins->type() == MIRType_Object);
+    JS_ASSERT(ins->string()->type() == MIRType_String);
+    JS_ASSERT(ins->separator()->type() == MIRType_String);
+
+    LStringSplit *lir = new LStringSplit(useRegisterAtStart(ins->string()),
+                                         useRegisterAtStart(ins->separator()));
     return defineReturn(lir, ins) && assignSafepoint(lir, ins);
 }
 
@@ -2803,6 +2832,13 @@ LIRGenerator::visitBindNameCache(MBindNameCache *ins)
 
     LBindNameCache *lir = new LBindNameCache(useRegister(ins->scopeChain()));
     return define(lir, ins) && assignSafepoint(lir, ins);
+}
+
+bool
+LIRGenerator::visitGuardObjectIdentity(MGuardObjectIdentity *ins)
+{
+    LGuardObjectIdentity *guard = new LGuardObjectIdentity(useRegister(ins->obj()));
+    return assignSnapshot(guard) && add(guard, ins) && redefine(ins, ins->obj());
 }
 
 bool
@@ -3177,7 +3213,7 @@ LIRGenerator::visitFunctionBoundary(MFunctionBoundary *ins)
         return false;
     // If slow assertions are enabled, then this node will result in a callVM
     // out to a C++ function for the assertions, so we will need a safepoint.
-    return !GetIonContext()->runtime->spsProfiler.slowAssertionsEnabled() ||
+    return !GetIonContext()->runtime->spsProfiler().slowAssertionsEnabled() ||
            assignSafepoint(lir, ins);
 }
 
@@ -3456,8 +3492,10 @@ LIRGenerator::visitBlock(MBasicBlock *block)
     if (!definePhis())
         return false;
 
-    if (!add(new LLabel()))
-        return false;
+    if (js_IonOptions.registerAllocator == RegisterAllocator_LSRA) {
+        if (!add(new LLabel()))
+            return false;
+    }
 
     for (MInstructionIterator iter = block->begin(); *iter != block->lastIns(); iter++) {
         if (!visitInstruction(*iter))
@@ -3513,7 +3551,7 @@ LIRGenerator::generate()
         if (gen->shouldCancel("Lowering (preparation loop)"))
             return false;
 
-        current = LBlock::New(*block);
+        current = LBlock::New(alloc(), *block);
         if (!current)
             return false;
         if (!lirGraph_.addBlock(current))

@@ -302,7 +302,7 @@ nsHtml5StreamParser::SetupDecodingAndWriteSniffingBufferAndCurrentSegment(const 
   rv = convManager->GetUnicodeDecoder(mCharset.get(), getter_AddRefs(mUnicodeDecoder));
   if (rv == NS_ERROR_UCONV_NOCONV) {
     mCharset.AssignLiteral("windows-1252"); // lower case is the raw form
-    mCharsetSource = kCharsetFromWeakDocTypeDefault;
+    mCharsetSource = kCharsetFromFallback;
     rv = convManager->GetUnicodeDecoderRaw(mCharset.get(), getter_AddRefs(mUnicodeDecoder));
     mTreeBuilder->SetDocumentCharset(mCharset, mCharsetSource);
   }
@@ -331,7 +331,7 @@ nsHtml5StreamParser::WriteSniffingBufferAndCurrentSegment(const uint8_t* aFromSe
 }
 
 nsresult
-nsHtml5StreamParser::SetupDecodingFromBom(const char* aCharsetName, const char* aDecoderCharsetName)
+nsHtml5StreamParser::SetupDecodingFromBom(const char* aDecoderCharsetName)
 {
   NS_ASSERTION(IsParserThread(), "Wrong thread!");
   nsresult rv = NS_OK;
@@ -339,7 +339,7 @@ nsHtml5StreamParser::SetupDecodingFromBom(const char* aCharsetName, const char* 
   NS_ENSURE_SUCCESS(rv, rv);
   rv = convManager->GetUnicodeDecoderRaw(aDecoderCharsetName, getter_AddRefs(mUnicodeDecoder));
   NS_ENSURE_SUCCESS(rv, rv);
-  mCharset.Assign(aCharsetName);
+  mCharset.Assign(aDecoderCharsetName);
   mCharsetSource = kCharsetFromByteOrderMark;
   mFeedChardet = false;
   mTreeBuilder->SetDocumentCharset(mCharset, mCharsetSource);
@@ -612,10 +612,10 @@ nsHtml5StreamParser::FinalizeSniffing(const uint8_t* aFromSegment, // can be nul
   if (mCharsetSource == kCharsetUninitialized) {
     // Hopefully this case is never needed, but dealing with it anyway
     mCharset.AssignLiteral("windows-1252");
-    mCharsetSource = kCharsetFromWeakDocTypeDefault;
+    mCharsetSource = kCharsetFromFallback;
     mTreeBuilder->SetDocumentCharset(mCharset, mCharsetSource);
   } else if (mMode == LOAD_AS_DATA &&
-             mCharsetSource == kCharsetFromWeakDocTypeDefault) {
+             mCharsetSource == kCharsetFromFallback) {
     NS_ASSERTION(mReparseForbidden, "Reparse should be forbidden for XHR");
     NS_ASSERTION(!mFeedChardet, "Should not feed chardet for XHR");
     NS_ASSERTION(mCharset.EqualsLiteral("UTF-8"),
@@ -661,7 +661,7 @@ nsHtml5StreamParser::SniffStreamBytes(const uint8_t* aFromSegment,
         break;
       case SEEN_UTF_16_LE_FIRST_BYTE:
         if (aFromSegment[i] == 0xFE) {
-          rv = SetupDecodingFromBom("UTF-16", "UTF-16LE"); // upper case is the raw form
+          rv = SetupDecodingFromBom("UTF-16LE"); // upper case is the raw form
           NS_ENSURE_SUCCESS(rv, rv);
           uint32_t count = aCount - (i + 1);
           rv = WriteStreamBytes(aFromSegment + (i + 1), count, &writeCount);
@@ -673,7 +673,7 @@ nsHtml5StreamParser::SniffStreamBytes(const uint8_t* aFromSegment,
         break;
       case SEEN_UTF_16_BE_FIRST_BYTE:
         if (aFromSegment[i] == 0xFF) {
-          rv = SetupDecodingFromBom("UTF-16", "UTF-16BE"); // upper case is the raw form
+          rv = SetupDecodingFromBom("UTF-16BE"); // upper case is the raw form
           NS_ENSURE_SUCCESS(rv, rv);
           uint32_t count = aCount - (i + 1);
           rv = WriteStreamBytes(aFromSegment + (i + 1), count, &writeCount);
@@ -692,7 +692,7 @@ nsHtml5StreamParser::SniffStreamBytes(const uint8_t* aFromSegment,
         break;
       case SEEN_UTF_8_SECOND_BYTE:
         if (aFromSegment[i] == 0xBF) {
-          rv = SetupDecodingFromBom("UTF-8", "UTF-8"); // upper case is the raw form
+          rv = SetupDecodingFromBom("UTF-8"); // upper case is the raw form
           NS_ENSURE_SUCCESS(rv, rv);
           uint32_t count = aCount - (i + 1);
           rv = WriteStreamBytes(aFromSegment + (i + 1), count, &writeCount);
@@ -731,7 +731,7 @@ nsHtml5StreamParser::SniffStreamBytes(const uint8_t* aFromSegment,
       // nsHTMLDocument is supposed to make sure this does not happen. Let's
       // deal with this anyway, since who knows how kCharsetFromOtherComponent
       // is used.
-      mCharsetSource = kCharsetFromWeakDocTypeDefault;
+      mCharsetSource = kCharsetFromFallback;
     }
   }
 
@@ -981,7 +981,7 @@ nsHtml5StreamParser::OnStartRequest(nsIRequest* aRequest, nsISupports* aContext)
   // if we failed to get a decoder, there will be fallback, so don't propagate
   //  the error.
   if (NS_FAILED(rv)) {
-    mCharsetSource = kCharsetFromWeakDocTypeDefault;
+    mCharsetSource = kCharsetFromFallback;
   }
   return NS_OK;
 }

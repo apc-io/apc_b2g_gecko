@@ -27,6 +27,7 @@ const EXAMPLE_URL = "http://example.com/browser/browser/devtools/shadereditor/te
 const SIMPLE_CANVAS_URL = EXAMPLE_URL + "doc_simple-canvas.html";
 const SHADER_ORDER_URL = EXAMPLE_URL + "doc_shader-order.html";
 const MULTIPLE_CONTEXTS_URL = EXAMPLE_URL + "doc_multiple-contexts.html";
+const OVERLAPPING_GEOMETRY_CANVAS_URL = EXAMPLE_URL + "doc_overlapping-geometry.html";
 
 // All tests are asynchronous.
 waitForExplicitFinish();
@@ -37,6 +38,11 @@ registerCleanupFunction(() => {
   info("finish() was called, cleaning up...");
   Services.prefs.setBoolPref("devtools.debugger.log", gEnableLogging);
   Services.prefs.setBoolPref("devtools.shadereditor.enabled", gToolEnabled);
+
+  // These tests use a lot of memory due to GL contexts, so force a GC to help
+  // fragmentation.
+  info("Forcing GC after shadereditor test.");
+  Cu.forceGC();
 });
 
 function addTab(aUrl, aWindow) {
@@ -133,6 +139,19 @@ function once(aTarget, aEventName, aUseCapture = false) {
   return deferred.promise;
 }
 
+function observe(aNotificationName, aOwnsWeak = false) {
+  info("Waiting for observer notification: '" + aNotificationName + ".");
+
+  let deferred = promise.defer();
+
+  Services.obs.addObserver(function onNotification(...aArgs) {
+    Services.obs.removeObserver(onNotification, aNotificationName);
+    deferred.resolve.apply(deferred, aArgs);
+  }, aNotificationName, aOwnsWeak);
+
+  return deferred.promise;
+}
+
 function waitForFrame(aDebuggee) {
   let deferred = promise.defer();
   aDebuggee.requestAnimationFrame(deferred.resolve);
@@ -193,16 +212,19 @@ function ensurePixelIs(aDebuggee, aPosition, aColor, aWaitFlag = false, aSelecto
   return promise.reject(null);
 }
 
-function navigate(aTarget, aUrl) {
-  let navigated = once(aTarget, "navigate");
-  aTarget.client.activeTab.navigateTo(aUrl);
-  return navigated;
+function navigateInHistory(aTarget, aDirection, aWaitForTargetEvent = "navigate") {
+  executeSoon(() => content.history[aDirection]());
+  return once(aTarget, aWaitForTargetEvent);
 }
 
-function reload(aTarget) {
-  let navigated = once(aTarget, "navigate");
+function navigate(aTarget, aUrl, aWaitForTargetEvent = "navigate") {
+  executeSoon(() => aTarget.client.activeTab.navigateTo(aUrl));
+  return once(aTarget, aWaitForTargetEvent);
+}
+
+function reload(aTarget, aWaitForTargetEvent = "navigate") {
   executeSoon(() => aTarget.client.activeTab.reload());
-  return navigated;
+  return once(aTarget, aWaitForTargetEvent);
 }
 
 function initBackend(aUrl) {

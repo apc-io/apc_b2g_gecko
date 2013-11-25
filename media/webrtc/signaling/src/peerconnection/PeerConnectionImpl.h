@@ -301,9 +301,10 @@ public:
   }
 
   NS_IMETHODIMP_TO_ERRORRESULT(GetStats, ErrorResult &rv,
-                               mozilla::dom::MediaStreamTrack *aSelector)
+                               mozilla::dom::MediaStreamTrack *aSelector,
+                               bool internalStats)
   {
-    rv = GetStats(aSelector);
+    rv = GetStats(aSelector, internalStats);
   }
 
   NS_IMETHODIMP AddIceCandidate(const char* aCandidate, const char* aMid,
@@ -486,6 +487,7 @@ private:
 #ifdef MOZILLA_INTERNAL_API
   // Fills in an RTCStatsReportInternal. Must be run on STS.
   void GetStats_s(uint32_t trackId,
+                  bool internalStats,
                   DOMHighResTimeStamp now);
 
   // Sends an RTCStatsReport to JS. Must run on main thread.
@@ -508,20 +510,9 @@ private:
   mozilla::dom::PCImplIceState mIceState;
 
   nsCOMPtr<nsIThread> mThread;
-  // WeakConcretePtr to PeerConnectionObserver. TODO: Remove after bug 928535
-  //
-  // This is only safe to use on the main thread
   // TODO: Remove if we ever properly wire PeerConnection for cycle-collection.
-  class WeakConcretePtr
-  {
-  public:
-    WeakConcretePtr() : mObserver(nullptr) {}
-    void Set(PeerConnectionObserver *aObserver);
-    PeerConnectionObserver *MayGet();
-  private:
-    PeerConnectionObserver *mObserver;
-    nsWeakPtr mWeakPtr;
-  } mPCObserver;
+  nsWeakPtr mPCObserver;
+
   nsCOMPtr<nsPIDOMWindow> mWindow;
 
   // The SDP sent in from JS - here for debugging.

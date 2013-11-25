@@ -9,10 +9,6 @@
 #include <stdint.h>                     // for uint32_t
 #include "nsPoint.h"                    // for nsIntPoint
 
-// Debugging define.
-// To dump a layer tree call LayerManager::Dump()
-// #define MOZ_LAYERS_HAVE_LOG
-
 #ifdef MOZ_WIDGET_GONK
 #include <ui/GraphicBuffer.h>
 #endif
@@ -56,6 +52,12 @@ enum LayersBackend {
 enum BufferMode {
   BUFFER_NONE,
   BUFFER_BUFFERED
+};
+
+enum DrawRegionClip {
+  CLIP_DRAW,
+  CLIP_DRAW_SNAPPED,
+  CLIP_NONE,
 };
 
 // LayerRenderState for Composer2D

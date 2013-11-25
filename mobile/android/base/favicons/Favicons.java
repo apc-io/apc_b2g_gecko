@@ -5,8 +5,7 @@
 
 package org.mozilla.gecko.favicons;
 
-import android.graphics.BitmapFactory;
-import android.text.TextUtils;
+import org.mozilla.gecko.AboutPages;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.Tabs;
@@ -14,10 +13,12 @@ import org.mozilla.gecko.db.BrowserDB;
 import org.mozilla.gecko.favicons.cache.FaviconCache;
 import org.mozilla.gecko.gfx.BitmapUtils;
 import org.mozilla.gecko.util.ThreadUtils;
+import org.mozilla.gecko.util.NonEvictingLruCache;
 
 import android.content.Context;
 import android.graphics.Bitmap;
-import android.support.v4.util.LruCache;
+import android.graphics.BitmapFactory;
+import android.text.TextUtils;
 import android.util.Log;
 
 import java.net.URI;
@@ -35,11 +36,12 @@ public class Favicons {
     public static final int FAVICON_CACHE_SIZE_BYTES = 512 * 1024;
 
     // Number of URL mappings from page URL to Favicon URL to cache in memory.
-    public static final int PAGE_URL_MAPPINGS_TO_STORE = 128;
+    public static final int NUM_PAGE_URL_MAPPINGS_TO_STORE = 128;
 
-    public static final int NOT_LOADING = 0;
-    public static final int FLAG_PERSIST = 1;
-    public static final int FLAG_SCALE = 2;
+    public static final int NOT_LOADING  = 0;
+    public static final int LOADED       = 1;
+    public static final int FLAG_PERSIST = 2;
+    public static final int FLAG_SCALE   = 4;
 
     protected static Context sContext;
 
@@ -53,7 +55,7 @@ public class Favicons {
 
     // Cache to hold mappings between page URLs and Favicon URLs. Used to avoid going to the DB when
     // doing so is not necessary.
-    private static final LruCache<String, String> sPageURLMappings = new LruCache<String, String>(PAGE_URL_MAPPINGS_TO_STORE);
+    private static final NonEvictingLruCache<String, String> sPageURLMappings = new NonEvictingLruCache<String, String>(NUM_PAGE_URL_MAPPINGS_TO_STORE);
 
     public static String getFaviconURLForPageURLFromCache(String pageURL) {
         return sPageURLMappings.get(pageURL);
@@ -68,17 +70,31 @@ public class Favicons {
     }
 
     private static FaviconCache sFaviconsCache;
-    static void dispatchResult(final String pageUrl, final String faviconURL, final Bitmap image,
+
+    /**
+     * Returns either NOT_LOADING, or LOADED if the onFaviconLoaded call could
+     * be made on the main thread.
+     * If no listener is provided, NOT_LOADING is returned.
+     */
+    static int dispatchResult(final String pageUrl, final String faviconURL, final Bitmap image,
             final OnFaviconLoadedListener listener) {
-        // We want to always run the listener on UI thread
+        if (listener == null) {
+            return NOT_LOADING;
+        }
+
+        if (ThreadUtils.isOnUiThread()) {
+            listener.onFaviconLoaded(pageUrl, faviconURL, image);
+            return LOADED;
+        }
+
+        // We want to always run the listener on UI thread.
         ThreadUtils.postToUiThread(new Runnable() {
             @Override
             public void run() {
-                if (listener != null) {
-                    listener.onFaviconLoaded(pageUrl, faviconURL, image);
-                }
+                listener.onFaviconLoaded(pageUrl, faviconURL, image);
             }
         });
+        return NOT_LOADING;
     }
 
     /**
@@ -93,7 +109,8 @@ public class Favicons {
      * @param targetSize Target size of the returned Favicon
      * @param listener Listener to call with the result of the load operation, if the result is not
      *                  immediately available.
-     * @return The id of the asynchronous task created, NOT_LOADING if none is created.
+     * @return The id of the asynchronous task created, NOT_LOADING if none is created, or
+     *         LOADED if the value could be dispatched on the current thread.
      */
     public static int getFaviconForSize(String pageURL, String faviconURL, int targetSize, int flags, OnFaviconLoadedListener listener) {
         // If there's no favicon URL given, try and hit the cache with the default one.
@@ -104,20 +121,17 @@ public class Favicons {
 
         // If it's something we can't even figure out a default URL for, just give up.
         if (cacheURL == null) {
-            dispatchResult(pageURL, null, sDefaultFavicon, listener);
-            return NOT_LOADING;
+            return dispatchResult(pageURL, null, sDefaultFavicon, listener);
         }
 
         Bitmap cachedIcon = getSizedFaviconFromCache(cacheURL, targetSize);
         if (cachedIcon != null) {
-            dispatchResult(pageURL, cacheURL, cachedIcon, listener);
-            return NOT_LOADING;
+            return dispatchResult(pageURL, cacheURL, cachedIcon, listener);
         }
 
         // Check if favicon has failed.
         if (sFaviconsCache.isFailedFavicon(cacheURL)) {
-            dispatchResult(pageURL, cacheURL, sDefaultFavicon, listener);
-            return NOT_LOADING;
+            return dispatchResult(pageURL, cacheURL, sDefaultFavicon, listener);
         }
 
         // Failing that, try and get one from the database or internet.
@@ -159,16 +173,14 @@ public class Favicons {
         if (targetURL != null) {
             // Check if favicon has failed.
             if (sFaviconsCache.isFailedFavicon(targetURL)) {
-                dispatchResult(pageURL, targetURL, null, callback);
-                return NOT_LOADING;
+                return dispatchResult(pageURL, targetURL, null, callback);
             }
 
             // Do we have a Favicon in the cache for this favicon URL?
             Bitmap result = getSizedFaviconFromCache(targetURL, targetSize);
             if (result != null) {
                 // Victory - immediate response!
-                dispatchResult(pageURL, targetURL, result, callback);
-                return NOT_LOADING;
+                return dispatchResult(pageURL, targetURL, result, callback);
             }
         }
 
@@ -339,7 +351,7 @@ public class Favicons {
         // is bundled in the database, keyed only by page URL, hence the need to return the page URL
         // here. If the database ever migrates to stop being silly in this way, this can plausibly
         // be removed.
-        if (pageURL.startsWith("about:") || pageURL.startsWith("jar:")) {
+        if (AboutPages.isAboutPage(pageURL) || pageURL.startsWith("jar:")) {
             return pageURL;
         }
 
@@ -356,7 +368,7 @@ public class Favicons {
         }
     }
 
-    public static void removeLoadTask(long taskId) {
+    public static void removeLoadTask(int taskId) {
         sLoadTasks.remove(taskId);
     }
 

@@ -538,6 +538,8 @@ protected:
   }
 
 public:
+  bool HasAttrs() const { return mAttrsAndChildren.HasAttrs(); }
+
   inline bool GetAttr(const nsAString& aName, DOMString& aResult) const
   {
     MOZ_ASSERT(aResult.HasStringBuffer() && aResult.StringBufferLength() == 0,
@@ -646,6 +648,10 @@ public:
 
   already_AddRefed<DOMRectList> GetClientRects();
   already_AddRefed<DOMRect> GetBoundingClientRect();
+  void ScrollIntoView()
+  {
+    ScrollIntoView(true);
+  }
   void ScrollIntoView(bool aTop);
   int32_t ScrollTop()
   {
@@ -1186,7 +1192,7 @@ inline const mozilla::dom::Element* nsINode::AsElement() const
 
 inline bool nsINode::HasAttributes() const
 {
-  return IsElement() && AsElement()->GetAttrCount() > 0;
+  return IsElement() && AsElement()->HasAttrs();
 }
 
 /**
@@ -1464,28 +1470,6 @@ NS_IMETHOD MozRemove() MOZ_FINAL                                              \
 {                                                                             \
   nsINode::Remove();                                                          \
   return NS_OK;                                                               \
-}                                                                             \
-using nsINode::GetOnmouseenter;                                               \
-using nsINode::SetOnmouseenter;                                               \
-NS_IMETHOD GetOnmouseenter(JSContext* cx, JS::Value* aOnmouseenter) MOZ_FINAL \
-{                                                                             \
-  return Element::GetOnmouseenter(cx, aOnmouseenter);                         \
-}                                                                             \
-NS_IMETHOD SetOnmouseenter(JSContext* cx,                                     \
-                           const JS::Value& aOnmouseenter) MOZ_FINAL          \
-{                                                                             \
-  return Element::SetOnmouseenter(cx, aOnmouseenter);                         \
-}                                                                             \
-using nsINode::GetOnmouseleave;                                               \
-using nsINode::SetOnmouseleave;                                               \
-NS_IMETHOD GetOnmouseleave(JSContext* cx, JS::Value* aOnmouseleave) MOZ_FINAL \
-{                                                                             \
-  return Element::GetOnmouseleave(cx, aOnmouseleave);                         \
-}                                                                             \
-NS_IMETHOD SetOnmouseleave(JSContext* cx,                                     \
-                           const JS::Value& aOnmouseleave) MOZ_FINAL          \
-{                                                                             \
-  return Element::SetOnmouseleave(cx, aOnmouseleave);                         \
 }                                                                             \
 NS_IMETHOD GetClientRects(nsIDOMClientRectList** _retval) MOZ_FINAL           \
 {                                                                             \

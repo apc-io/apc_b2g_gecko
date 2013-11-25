@@ -170,13 +170,16 @@ js::DebugExceptionUnwind(JSContext *cx, AbstractFramePtr frame, jsbytecode *pc)
 JS_FRIEND_API(bool)
 JS_SetDebugModeForAllCompartments(JSContext *cx, bool debug)
 {
-    AutoDebugModeGC dmgc(cx->runtime());
-
-    for (CompartmentsIter c(cx->runtime()); !c.done(); c.next()) {
-        // Ignore special compartments (atoms, JSD compartments)
-        if (c->principals) {
-            if (!c->setDebugModeFromC(cx, !!debug, dmgc))
-                return false;
+    for (ZonesIter zone(cx->runtime(), SkipAtoms); !zone.done(); zone.next()) {
+        // Invalidate a zone at a time to avoid doing a zone-wide CellIter
+        // per compartment.
+        AutoDebugModeInvalidation invalidate(zone);
+        for (CompartmentsInZoneIter c(zone); !c.done(); c.next()) {
+            // Ignore special compartments (atoms, JSD compartments)
+            if (c->principals) {
+                if (!c->setDebugModeFromC(cx, !!debug, invalidate))
+                    return false;
+            }
         }
     }
     return true;
@@ -185,8 +188,8 @@ JS_SetDebugModeForAllCompartments(JSContext *cx, bool debug)
 JS_FRIEND_API(bool)
 JS_SetDebugModeForCompartment(JSContext *cx, JSCompartment *comp, bool debug)
 {
-    AutoDebugModeGC dmgc(cx->runtime());
-    return comp->setDebugModeFromC(cx, !!debug, dmgc);
+    AutoDebugModeInvalidation invalidate(comp);
+    return comp->setDebugModeFromC(cx, !!debug, invalidate);
 }
 
 static bool
@@ -754,10 +757,10 @@ JS_PutPropertyDescArray(JSContext *cx, JSPropertyDescArray *pda)
 
     pd = pda->array;
     for (i = 0; i < pda->length; i++) {
-        js_RemoveRoot(cx->runtime(), &pd[i].id);
-        js_RemoveRoot(cx->runtime(), &pd[i].value);
+        RemoveRoot(cx->runtime(), &pd[i].id);
+        RemoveRoot(cx->runtime(), &pd[i].value);
         if (pd[i].flags & JSPD_ALIAS)
-            js_RemoveRoot(cx->runtime(), &pd[i].alias);
+            RemoveRoot(cx->runtime(), &pd[i].alias);
     }
     js_free(pd);
     pda->array = nullptr;
@@ -1124,7 +1127,7 @@ FormatFrame(JSContext *cx, const NonBuiltinScriptFrameIter &iter, char *buf, int
             if (i < bindings.length()) {
                 name = nameBytes.encodeLatin1(cx, bindings[i].name());
                 if (!buf)
-                    return NULL;
+                    return nullptr;
             }
 
             if (value) {

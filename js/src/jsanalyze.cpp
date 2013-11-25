@@ -227,7 +227,7 @@ ScriptAnalysis::analyzeBytecode(JSContext *cx)
         switch (op) {
 
           case JSOP_RETURN:
-          case JSOP_STOP:
+          case JSOP_RETRVAL:
             numReturnSites_++;
             break;
 
@@ -520,7 +520,8 @@ ScriptAnalysis::analyzeLifetimes(JSContext *cx)
             /* Restore all saved variables. :FIXME: maybe do this precisely. */
             for (unsigned i = 0; i < savedCount; i++) {
                 LifetimeVariable &var = *saved[i];
-                var.lifetime = alloc.new_<Lifetime>(offset, var.savedEnd, var.saved);
+                uint32_t savedEnd = var.savedEnd;
+                var.lifetime = alloc.new_<Lifetime>(offset, savedEnd, var.saved);
                 if (!var.lifetime) {
                     js_free(saved);
                     setOOM(cx);
@@ -612,7 +613,8 @@ ScriptAnalysis::analyzeLifetimes(JSContext *cx)
                          * Jumping to a place where this variable is live. Make a new
                          * lifetime segment for the variable.
                          */
-                        var.lifetime = alloc.new_<Lifetime>(offset, var.savedEnd, var.saved);
+                        uint32_t savedEnd = var.savedEnd;
+                        var.lifetime = alloc.new_<Lifetime>(offset, savedEnd, var.saved);
                         if (!var.lifetime) {
                             js_free(saved);
                             setOOM(cx);
@@ -676,7 +678,8 @@ ScriptAnalysis::addVariable(JSContext *cx, LifetimeVariable &var, unsigned offse
                 }
             }
         }
-        var.lifetime = cx->typeLifoAlloc().new_<Lifetime>(offset, var.savedEnd, var.saved);
+        uint32_t savedEnd = var.savedEnd;
+        var.lifetime = cx->typeLifoAlloc().new_<Lifetime>(offset, savedEnd, var.saved);
         if (!var.lifetime) {
             setOOM(cx);
             return;
@@ -691,7 +694,8 @@ ScriptAnalysis::killVariable(JSContext *cx, LifetimeVariable &var, unsigned offs
 {
     if (!var.lifetime) {
         /* Make a point lifetime indicating the write. */
-        Lifetime *lifetime = cx->typeLifoAlloc().new_<Lifetime>(offset, var.savedEnd, var.saved);
+        uint32_t savedEnd = var.savedEnd;
+        Lifetime *lifetime = cx->typeLifoAlloc().new_<Lifetime>(offset, savedEnd, var.saved);
         if (!lifetime) {
             setOOM(cx);
             return;
@@ -1221,7 +1225,6 @@ ScriptAnalysis::analyzeSSA(JSContext *cx)
 
           case JSOP_THROW:
           case JSOP_RETURN:
-          case JSOP_STOP:
           case JSOP_RETRVAL:
             mergeAllExceptionTargets(cx, values, exceptionTargets);
             break;

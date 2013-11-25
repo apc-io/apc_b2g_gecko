@@ -48,6 +48,9 @@ JS_SetGrayGCRootsTracer(JSRuntime *rt, JSTraceDataOp traceOp, void *data);
 extern JS_FRIEND_API(JSString *)
 JS_GetAnonymousString(JSRuntime *rt);
 
+extern JS_FRIEND_API(void)
+JS_SetIsWorkerRuntime(JSRuntime *rt);
+
 extern JS_FRIEND_API(JSObject *)
 JS_FindCompilationScope(JSContext *cx, JSObject *obj);
 
@@ -173,8 +176,22 @@ extern JS_FRIEND_API(void)
 js_DumpChars(const jschar *s, size_t n);
 #endif
 
+/*
+ * Copies all own properties from |obj| to |target|. |obj| must be a "native"
+ * object (that is to say, normal-ish - not an Array or a Proxy).
+ *
+ * On entry, |cx| must be in the compartment of |target|.
+ */
 extern JS_FRIEND_API(bool)
 JS_CopyPropertiesFrom(JSContext *cx, JSObject *target, JSObject *obj);
+
+/*
+ * Single-property version of the above. This function asserts that an |own|
+ * property of the given name exists on |obj|.
+ */
+extern JS_FRIEND_API(bool)
+JS_CopyPropertyFrom(JSContext *cx, JS::HandleId id, JS::HandleObject target,
+                    JS::HandleObject obj);
 
 extern JS_FRIEND_API(bool)
 JS_WrapPropertyDescriptor(JSContext *cx, JS::MutableHandle<JSPropertyDescriptor> desc);
@@ -465,6 +482,16 @@ GetObjectParentMaybeScope(JSObject *obj);
 JS_FRIEND_API(JSObject *)
 GetGlobalForObjectCrossCompartment(JSObject *obj);
 
+JS_FRIEND_API(void)
+AssertSameCompartment(JSContext *cx, JSObject *obj);
+
+#ifdef DEBUG
+JS_FRIEND_API(void)
+AssertSameCompartment(JSObject *objA, JSObject *objB);
+#else
+inline void AssertSameCompartment(JSObject *objA, JSObject *objB) {}
+#endif
+
 // For legacy consumers only. This whole concept is going away soon.
 JS_FRIEND_API(JSObject *)
 DefaultObjectForContextOrNull(JSContext *cx);
@@ -516,6 +543,10 @@ SetFunctionNativeReserved(JSObject *fun, size_t which, const JS::Value &val);
 
 JS_FRIEND_API(bool)
 GetObjectProto(JSContext *cx, JS::Handle<JSObject*> obj, JS::MutableHandle<JSObject*> proto);
+
+JS_FRIEND_API(bool)
+GetOriginalEval(JSContext *cx, JS::HandleObject scope,
+                JS::MutableHandleObject eval);
 
 inline void *
 GetObjectPrivate(JSObject *obj)
@@ -641,11 +672,19 @@ GetNativeStackLimit(JSContext *cx)
  * extra space so that we can ensure that crucial code is able to run.
  */
 
-#define JS_CHECK_RECURSION(cx, onerror)                              \
+#define JS_CHECK_RECURSION(cx, onerror)                                         \
     JS_BEGIN_MACRO                                                              \
         int stackDummy_;                                                        \
         if (!JS_CHECK_STACK_SIZE(js::GetNativeStackLimit(cx), &stackDummy_)) {  \
             js_ReportOverRecursed(cx);                                          \
+            onerror;                                                            \
+        }                                                                       \
+    JS_END_MACRO
+
+#define JS_CHECK_RECURSION_DONT_REPORT(cx, onerror)                             \
+    JS_BEGIN_MACRO                                                              \
+        int stackDummy_;                                                        \
+        if (!JS_CHECK_STACK_SIZE(js::GetNativeStackLimit(cx), &stackDummy_)) {  \
             onerror;                                                            \
         }                                                                       \
     JS_END_MACRO
@@ -718,8 +757,7 @@ extern JS_FRIEND_API(bool)
 IsContextRunningJS(JSContext *cx);
 
 typedef bool
-(* DOMInstanceClassMatchesProto)(JS::HandleObject protoObject, uint32_t protoID,
-                                 uint32_t depth);
+(* DOMInstanceClassMatchesProto)(JSObject *protoObject, uint32_t protoID, uint32_t depth);
 struct JSDOMCallbacks {
     DOMInstanceClassMatchesProto instanceClassMatchesProto;
 };
@@ -1225,8 +1263,8 @@ JS_GetArrayBufferViewBuffer(JSObject *obj);
 /*
  * Set an ArrayBuffer's length to 0 and neuter all of its views.
  */
-extern JS_FRIEND_API(void)
-JS_NeuterArrayBuffer(JSObject *obj, JSContext *cx);
+extern JS_FRIEND_API(bool)
+JS_NeuterArrayBuffer(JSContext *cx, JS::HandleObject obj);
 
 /*
  * Check whether obj supports JS_GetDataView* APIs.
@@ -1266,6 +1304,33 @@ JS_GetDataViewByteLength(JSObject *obj);
  */
 JS_FRIEND_API(void *)
 JS_GetDataViewData(JSObject *obj);
+
+namespace js {
+
+/*
+ * Add a watchpoint -- in the Object.prototype.watch sense -- to |obj| for the
+ * property |id|, using the callable object |callable| as the function to be
+ * called for notifications.
+ *
+ * This is an internal function exposed -- temporarily -- only so that DOM
+ * proxies can be watchable.  Don't use it!  We'll soon kill off the
+ * Object.prototype.{,un}watch functions, at which point this will go too.
+ */
+extern JS_FRIEND_API(bool)
+WatchGuts(JSContext *cx, JS::HandleObject obj, JS::HandleId id, JS::HandleObject callable);
+
+/*
+ * Remove a watchpoint -- in the Object.prototype.watch sense -- from |obj| for
+ * the property |id|.
+ *
+ * This is an internal function exposed -- temporarily -- only so that DOM
+ * proxies can be watchable.  Don't use it!  We'll soon kill off the
+ * Object.prototype.{,un}watch functions, at which point this will go too.
+ */
+extern JS_FRIEND_API(bool)
+UnwatchGuts(JSContext *cx, JS::HandleObject obj, JS::HandleId id);
+
+} // namespace js
 
 /*
  * A class, expected to be passed by value, which represents the CallArgs for a

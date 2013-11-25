@@ -43,7 +43,9 @@
 //
 // (Wow, our logging story is a huge mess.)
 
-// #define ENABLE_LOGGING 1
+#ifndef HAVE_64BIT_OS
+#define ENABLE_LOGGING 1
+#endif
 
 #if defined(ANDROID) && defined(ENABLE_LOGGING)
 #  include <android/log.h>
@@ -1021,13 +1023,6 @@ ParticularProcessPriorityManager::SetPriorityNow(ProcessPriority aPriority,
   } else {
     unused << mContentParent->SendMinimizeMemoryUsage();
   }
-
-  nsPrintfCString ProcessPriorityWithBackgroundLRU("%s:%d",
-    ProcessPriorityToString(mPriority, mCPUPriority),
-    aBackgroundLRU);
-
-  FireTestOnlyObserverNotification("process-priority-with-background-LRU-set",
-    ProcessPriorityWithBackgroundLRU.get());
 
   FireTestOnlyObserverNotification("process-priority-set",
     ProcessPriorityToString(mPriority, mCPUPriority));

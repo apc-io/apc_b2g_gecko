@@ -200,21 +200,6 @@ public:
   void* GetThebesLayerCallbackData() const
   { return mThebesLayerCallbackData; }
 
-  /*
-   * Helper functions for our layers
-   */
-  void CallThebesLayerDrawCallback(ThebesLayer* aLayer,
-                                   gfxContext* aContext,
-                                   const nsIntRegion& aRegionToDraw)
-  {
-    NS_ASSERTION(mThebesLayerCallback,
-                 "CallThebesLayerDrawCallback without callback!");
-    mThebesLayerCallback(aLayer, aContext,
-                         aRegionToDraw, nsIntRegion(),
-                         mThebesLayerCallbackData);
-  }
-
-
   GLenum FBOTextureTarget() { return mFBOTextureTarget; }
 
   /**
@@ -279,9 +264,7 @@ public:
                                       GLenum aWrapMode = LOCAL_GL_REPEAT,
                                       bool aFlipped = false);
 
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char* Name() const { return "OGL"; }
-#endif // MOZ_LAYERS_HAVE_LOG
 
   const nsIntSize& GetWidgetSize() {
     return mWidgetSize;

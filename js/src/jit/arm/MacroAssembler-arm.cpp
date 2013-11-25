@@ -2689,11 +2689,59 @@ MacroAssemblerARMCompat::testInt32(Assembler::Condition cond, const Address &add
 }
 
 Assembler::Condition
-MacroAssemblerARMCompat::testDouble(Assembler::Condition cond, const Address &address)
+MacroAssemblerARMCompat::testDouble(Condition cond, const Address &address)
 {
     JS_ASSERT(cond == Equal || cond == NotEqual);
     extractTag(address, ScratchRegister);
     return testDouble(cond, ScratchRegister);
+}
+
+Assembler::Condition
+MacroAssemblerARMCompat::testBoolean(Condition cond, const Address &address)
+{
+    JS_ASSERT(cond == Equal || cond == NotEqual);
+    extractTag(address, ScratchRegister);
+    return testBoolean(cond, ScratchRegister);
+}
+
+Assembler::Condition
+MacroAssemblerARMCompat::testNull(Condition cond, const Address &address)
+{
+    JS_ASSERT(cond == Equal || cond == NotEqual);
+    extractTag(address, ScratchRegister);
+    return testNull(cond, ScratchRegister);
+}
+
+Assembler::Condition
+MacroAssemblerARMCompat::testUndefined(Condition cond, const Address &address)
+{
+    JS_ASSERT(cond == Equal || cond == NotEqual);
+    extractTag(address, ScratchRegister);
+    return testUndefined(cond, ScratchRegister);
+}
+
+Assembler::Condition
+MacroAssemblerARMCompat::testString(Condition cond, const Address &address)
+{
+    JS_ASSERT(cond == Equal || cond == NotEqual);
+    extractTag(address, ScratchRegister);
+    return testString(cond, ScratchRegister);
+}
+
+Assembler::Condition
+MacroAssemblerARMCompat::testObject(Condition cond, const Address &address)
+{
+    JS_ASSERT(cond == Equal || cond == NotEqual);
+    extractTag(address, ScratchRegister);
+    return testObject(cond, ScratchRegister);
+}
+
+Assembler::Condition
+MacroAssemblerARMCompat::testNumber(Condition cond, const Address &address)
+{
+    JS_ASSERT(cond == Equal || cond == NotEqual);
+    extractTag(address, ScratchRegister);
+    return testNumber(cond, ScratchRegister);
 }
 
 Assembler::Condition
@@ -3319,7 +3367,7 @@ MacroAssemblerARMCompat::storeTypeTag(ImmTag tag, Register base, Register index,
 
 void
 MacroAssemblerARMCompat::linkExitFrame() {
-    uint8_t *dest = (uint8_t*)&GetIonContext()->runtime->mainThread.ionTop;
+    uint8_t *dest = (uint8_t*)GetIonContext()->runtime->addressOfIonTop();
     movePtr(ImmPtr(dest), ScratchRegister);
     ma_str(StackPointer, Operand(ScratchRegister, 0));
 }

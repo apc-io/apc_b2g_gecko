@@ -213,7 +213,7 @@ struct nsBackgroundLayerState {
    * @param aFlags some combination of nsCSSRendering::PAINTBG_* flags
    */
   nsBackgroundLayerState(nsIFrame* aForFrame, const nsStyleImage* aImage, uint32_t aFlags)
-    : mImageRenderer(aForFrame, aImage, aFlags) {}
+    : mImageRenderer(aForFrame, aImage, aFlags), mCompositingOp(gfxContext::OPERATOR_OVER) {}
 
   /**
    * The nsImageRenderer that will be used to draw the background.
@@ -237,6 +237,10 @@ struct nsBackgroundLayerState {
    * PrepareBackgroundLayer.
    */
   nsPoint mAnchor;
+  /**
+   * The compositing operation that the image should use
+   */
+  gfxContext::GraphicsOperator mCompositingOp;
 };
 
 struct nsCSSRendering {
@@ -260,7 +264,8 @@ struct nsCSSRendering {
                                   nsRenderingContext& aRenderingContext,
                                   nsIFrame* aForFrame,
                                   const nsRect& aFrameArea,
-                                  const nsRect& aDirtyRect);
+                                  const nsRect& aDirtyRect,
+                                  float aOpacity = 1.0);
 
   static void ComputePixelRadii(const nscoord *aAppUnitsRadii,
                                 nscoord aAppUnitsPerPixel,
@@ -646,6 +651,30 @@ struct nsCSSRendering {
                                       const uint8_t aDecoration,
                                       const uint8_t aStyle,
                                       const gfxFloat aDescentLimit = -1.0);
+
+  static gfxContext::GraphicsOperator GetGFXBlendMode(uint8_t mBlendMode) {
+    switch (mBlendMode) {
+      case NS_STYLE_BLEND_NORMAL:      return gfxContext::OPERATOR_OVER;
+      case NS_STYLE_BLEND_MULTIPLY:    return gfxContext::OPERATOR_MULTIPLY;
+      case NS_STYLE_BLEND_SCREEN:      return gfxContext::OPERATOR_SCREEN;
+      case NS_STYLE_BLEND_OVERLAY:     return gfxContext::OPERATOR_OVERLAY;
+      case NS_STYLE_BLEND_DARKEN:      return gfxContext::OPERATOR_DARKEN;
+      case NS_STYLE_BLEND_LIGHTEN:     return gfxContext::OPERATOR_LIGHTEN;
+      case NS_STYLE_BLEND_COLOR_DODGE: return gfxContext::OPERATOR_COLOR_DODGE;
+      case NS_STYLE_BLEND_COLOR_BURN:  return gfxContext::OPERATOR_COLOR_BURN;
+      case NS_STYLE_BLEND_HARD_LIGHT:  return gfxContext::OPERATOR_HARD_LIGHT;
+      case NS_STYLE_BLEND_SOFT_LIGHT:  return gfxContext::OPERATOR_SOFT_LIGHT;
+      case NS_STYLE_BLEND_DIFFERENCE:  return gfxContext::OPERATOR_DIFFERENCE;
+      case NS_STYLE_BLEND_EXCLUSION:   return gfxContext::OPERATOR_EXCLUSION;
+      case NS_STYLE_BLEND_HUE:         return gfxContext::OPERATOR_HUE;
+      case NS_STYLE_BLEND_SATURATION:  return gfxContext::OPERATOR_SATURATION;
+      case NS_STYLE_BLEND_COLOR:       return gfxContext::OPERATOR_COLOR;
+      case NS_STYLE_BLEND_LUMINOSITY:  return gfxContext::OPERATOR_LUMINOSITY;
+      default:                         MOZ_ASSERT(false); return gfxContext::OPERATOR_OVER;
+    }
+
+    return gfxContext::OPERATOR_OVER;
+  }
 
 protected:
   static gfxRect GetTextDecorationRectInternal(const gfxPoint& aPt,

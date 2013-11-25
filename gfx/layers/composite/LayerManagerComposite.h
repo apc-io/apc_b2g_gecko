@@ -28,6 +28,7 @@
 #include "nsRect.h"                     // for nsIntRect
 #include "nsRegion.h"                   // for nsIntRegion
 #include "nscore.h"                     // for nsAString, etc
+#include "LayerTreeInvalidation.h"
 
 class gfxASurface;
 class gfxContext;
@@ -158,23 +159,7 @@ public:
   void* GetThebesLayerCallbackData() const
   { return mThebesLayerCallbackData; }
 
-  /*
-   * Helper functions for our layers
-   */
-  void CallThebesLayerDrawCallback(ThebesLayer* aLayer,
-                                   gfxContext* aContext,
-                                   const nsIntRegion& aRegionToDraw)
-  {
-    NS_ASSERTION(mThebesLayerCallback,
-                 "CallThebesLayerDrawCallback without callback!");
-    mThebesLayerCallback(aLayer, aContext,
-                         aRegionToDraw, nsIntRegion(),
-                         mThebesLayerCallbackData);
-  }
-
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char* Name() const MOZ_OVERRIDE { return ""; }
-#endif // MOZ_LAYERS_HAVE_LOG
 
   enum WorldTransforPolicy {
     ApplyWorldTransform,
@@ -244,13 +229,17 @@ public:
 
   void SetCompositorID(uint32_t aID);
 
+  void AddInvalidRegion(const nsIntRegion& aRegion)
+  {
+    mInvalidRegion.Or(mInvalidRegion, aRegion);
+  }
+
   Compositor* GetCompositor() const
   {
     return mCompositor;
   }
 
   bool PlatformDestroySharedSurface(SurfaceDescriptor* aSurface);
-  RefPtr<Compositor> mCompositor;
 
 private:
   /** Region we're clipping our current drawing to. */
@@ -283,6 +272,8 @@ private:
 
   void WorldTransformRect(nsIntRect& aRect);
 
+  RefPtr<Compositor> mCompositor;
+
   /** Our more efficient but less powerful alter ego, if one is available. */
   nsRefPtr<Composer2D> mComposer2D;
 
@@ -291,7 +282,11 @@ private:
   DrawThebesLayerCallback mThebesLayerCallback;
   void *mThebesLayerCallbackData;
   gfxMatrix mWorldMatrix;
+
   bool mInTransaction;
+  bool mIsCompositorReady;
+  nsIntRegion mInvalidRegion;
+  nsAutoPtr<LayerProperties> mClonedLayerTreeProperties;
 };
 
 /**
@@ -331,8 +326,7 @@ public:
 
   virtual Layer* GetLayer() = 0;
 
-  virtual void RenderLayer(const nsIntPoint& aOffset,
-                           const nsIntRect& aClipRect) = 0;
+  virtual void RenderLayer(const nsIntRect& aClipRect) = 0;
 
   virtual void SetCompositableHost(CompositableHost* aHost)
   {

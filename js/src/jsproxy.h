@@ -166,6 +166,12 @@ class JS_FRIEND_API(BaseProxyHandler)
                                      uint32_t index, MutableHandleValue vp, bool *present);
     virtual bool getPrototypeOf(JSContext *cx, HandleObject proxy, MutableHandleObject protop);
 
+    // These two hooks must be overridden, or not overridden, in tandem -- no
+    // overriding just one!
+    virtual bool watch(JSContext *cx, JS::HandleObject proxy, JS::HandleId id,
+                       JS::HandleObject callable);
+    virtual bool unwatch(JSContext *cx, JS::HandleObject proxy, JS::HandleId id);
+
     /* See comment for weakmapKeyDelegateOp in js/Class.h. */
     virtual JSObject *weakmapKeyDelegate(JSObject *proxy);
 };
@@ -275,6 +281,10 @@ class Proxy
     static bool defaultValue(JSContext *cx, HandleObject obj, JSType hint, MutableHandleValue vp);
     static bool getPrototypeOf(JSContext *cx, HandleObject proxy, MutableHandleObject protop);
 
+    static bool watch(JSContext *cx, JS::HandleObject proxy, JS::HandleId id,
+                      JS::HandleObject callable);
+    static bool unwatch(JSContext *cx, JS::HandleObject proxy, JS::HandleId id);
+
     /* IC entry path for handling __noSuchMethod__ on access. */
     static bool callProp(JSContext *cx, HandleObject proxy, HandleObject reveiver, HandleId id,
                          MutableHandleValue vp);
@@ -357,8 +367,7 @@ SetProxyExtra(JSObject *obj, size_t n, const Value &extra)
 class MOZ_STACK_CLASS ProxyOptions {
   public:
     ProxyOptions() : callable_(false),
-                     singleton_(false),
-                     forceForegroundFinalization_(false)
+                     singleton_(false)
     {}
 
     bool callable() const { return callable_; }
@@ -373,18 +382,9 @@ class MOZ_STACK_CLASS ProxyOptions {
         return *this;
     }
 
-    bool forceForegroundFinalization() const {
-        return forceForegroundFinalization_;
-    }
-    ProxyOptions &setForceForegroundFinalization(bool flag) {
-        forceForegroundFinalization_ = true;
-        return *this;
-    }
-
   private:
     bool callable_;
     bool singleton_;
-    bool forceForegroundFinalization_;
 };
 
 JS_FRIEND_API(JSObject *)

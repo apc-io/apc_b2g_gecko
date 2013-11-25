@@ -1,10 +1,11 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+
 /* vim: set sw=2 ts=8 et tw=80 : */
 
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "necko-config.h"
 #include "nsHttp.h"
 #include "mozilla/net/NeckoChild.h"
 #include "mozilla/dom/ContentChild.h"
@@ -16,12 +17,15 @@
 #include "mozilla/net/RemoteOpenFileChild.h"
 #include "mozilla/dom/network/TCPSocketChild.h"
 #include "mozilla/dom/network/TCPServerSocketChild.h"
-#ifdef MOZ_RTSP
+#include "mozilla/dom/network/UDPSocketChild.h"
+#ifdef NECKO_PROTOCOL_rtsp
 #include "mozilla/net/RtspControllerChild.h"
 #endif
+#include "SerializedLoadContext.h"
 
 using mozilla::dom::TCPSocketChild;
 using mozilla::dom::TCPServerSocketChild;
+using mozilla::dom::UDPSocketChild;
 
 namespace mozilla {
 namespace net {
@@ -168,7 +172,7 @@ NeckoChild::AllocPRtspControllerChild()
 bool
 NeckoChild::DeallocPRtspControllerChild(PRtspControllerChild* child)
 {
-#ifdef MOZ_RTSP
+#ifdef NECKO_PROTOCOL_rtsp
   RtspControllerChild* p = static_cast<RtspControllerChild*>(child);
   p->ReleaseIPDLReference();
 #endif
@@ -204,6 +208,23 @@ bool
 NeckoChild::DeallocPTCPServerSocketChild(PTCPServerSocketChild* child)
 {
   TCPServerSocketChild* p = static_cast<TCPServerSocketChild*>(child);
+  p->ReleaseIPDLReference();
+  return true;
+}
+
+PUDPSocketChild*
+NeckoChild::AllocPUDPSocketChild(const nsCString& aHost,
+                                 const uint16_t& aPort)
+{
+  NS_NOTREACHED("AllocPUDPSocket should not be called");
+  return nullptr;
+}
+
+bool
+NeckoChild::DeallocPUDPSocketChild(PUDPSocketChild* child)
+{
+
+  UDPSocketChild* p = static_cast<UDPSocketChild*>(child);
   p->ReleaseIPDLReference();
   return true;
 }

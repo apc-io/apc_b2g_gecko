@@ -363,6 +363,11 @@ HandleExceptionIon(JSContext *cx, const InlineFrameIterator &frame, ResumeFromEx
 
           case JSTRY_CATCH:
             if (cx->isExceptionPending()) {
+                // Ion can compile try-catch, but bailing out to catch
+                // exceptions is slow. Reset the use count so that if we
+                // catch many exceptions we won't Ion-compile the script.
+                script->resetUseCount();
+
                 // Bailout at the start of the catch block.
                 jsbytecode *catchPC = script->main() + tn->start + tn->length;
 
@@ -477,6 +482,11 @@ HandleExceptionBaseline(JSContext *cx, const IonFrameIterator &frame, ResumeFrom
         switch (tn->kind) {
           case JSTRY_CATCH:
             if (cx->isExceptionPending()) {
+                // Ion can compile try-catch, but bailing out to catch
+                // exceptions is slow. Reset the use count so that if we
+                // catch many exceptions we won't Ion-compile the script.
+                script->resetUseCount();
+
                 // Resume at the start of the catch block.
                 rfe->kind = ResumeFromException::RESUME_CATCH;
                 jsbytecode *catchPC = script->main() + tn->start + tn->length;
@@ -539,30 +549,41 @@ HandleException(ResumeFromException *rfe)
             // Search each inlined frame for live iterator objects, and close
             // them.
             InlineFrameIterator frames(cx, &iter);
+
+            // Invalidation state will be the same for all inlined scripts in the frame.
+            IonScript *ionScript = nullptr;
+            bool invalidated = iter.checkInvalidation(&ionScript);
+
             for (;;) {
                 HandleExceptionIon(cx, frames, rfe, &overrecursed);
 
                 if (rfe->kind == ResumeFromException::RESUME_BAILOUT) {
-                    IonScript *ionScript = nullptr;
-                    if (iter.checkInvalidation(&ionScript))
+                    if (invalidated)
                         ionScript->decref(cx->runtime()->defaultFreeOp());
                     return;
                 }
 
                 JS_ASSERT(rfe->kind == ResumeFromException::RESUME_ENTRY_FRAME);
 
+                // Figure out whether SPS frame was pushed for this frame or not.
+                // Even if profiler is enabled, the frame being popped might have
+                // been entered prior to SPS being enabled, and thus not have
+                // a pushed SPS frame.
+                bool popSPSFrame = cx->runtime()->spsProfiler.enabled();
+                if (invalidated)
+                    popSPSFrame = ionScript->hasSPSInstrumentation();
+
                 // When profiling, each frame popped needs a notification that
                 // the function has exited, so invoke the probe that a function
                 // is exiting.
                 JSScript *script = frames.script();
-                probes::ExitScript(cx, script, script->function(), nullptr);
+                probes::ExitScript(cx, script, script->function(), popSPSFrame);
                 if (!frames.more())
                     break;
                 ++frames;
             }
 
-            IonScript *ionScript = nullptr;
-            if (iter.checkInvalidation(&ionScript))
+            if (invalidated)
                 ionScript->decref(cx->runtime()->defaultFreeOp());
 
         } else if (iter.isBaselineJS()) {
@@ -575,7 +596,8 @@ HandleException(ResumeFromException *rfe)
 
             // Unwind profiler pseudo-stack
             JSScript *script = iter.script();
-            probes::ExitScript(cx, script, script->function(), iter.baselineFrame());
+            probes::ExitScript(cx, script, script->function(),
+                               iter.baselineFrame()->hasPushedSPSFrame());
             // After this point, any pushed SPS frame would have been popped if it needed
             // to be.  Unset the flag here so that if we call DebugEpilogue below,
             // it doesn't try to pop the SPS frame again.

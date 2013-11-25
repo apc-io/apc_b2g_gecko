@@ -124,6 +124,7 @@ MOZ_ARG_DISABLE_BOOL(compile-environment,
 [  --disable-compile-environment
                           Disable compiler/library checks.],
     COMPILE_ENVIRONMENT= )
+AC_SUBST(COMPILE_ENVIRONMENT)
 
 dnl Check for Perl first -- needed for win32 SDK checks
 MOZ_PATH_PROGS(PERL, $PERL perl5 perl )
@@ -235,10 +236,12 @@ dnl Get mozilla version from central milestone file
 dnl ==============================================================
 MOZILLA_VERSION=`$PERL $srcdir/config/milestone.pl -topsrcdir $srcdir`
 MOZILLA_UAVERSION=`$PERL $srcdir/config/milestone.pl -topsrcdir $srcdir -uaversion`
+MOZILLA_SYMBOLVERSION=`$PERL $srcdir/config/milestone.pl -topsrcdir $srcdir -symbolversion`
 
 AC_DEFINE_UNQUOTED(MOZILLA_VERSION,"$MOZILLA_VERSION")
 AC_DEFINE_UNQUOTED(MOZILLA_VERSION_U,$MOZILLA_VERSION)
 AC_DEFINE_UNQUOTED(MOZILLA_UAVERSION,"$MOZILLA_UAVERSION")
+AC_SUBST(MOZILLA_SYMBOLVERSION)
 
 # Separate version into components for use in shared object naming etc
 changequote(,)
@@ -281,7 +284,7 @@ dnl to use the cross-compile setup for now
 dnl ========================================================
 
 dnl AR_FLAGS set here so HOST_AR_FLAGS can be set correctly (see bug 538269)
-AR_FLAGS='cr $@'
+AR_FLAGS='crs $@'
 
 if test "$COMPILE_ENVIRONMENT"; then
 
@@ -669,15 +672,12 @@ dnl ========================================================
 dnl = Mac OS X SDK support
 dnl ========================================================
 MACOS_SDK_DIR=
-NEXT_ROOT=
 MOZ_ARG_WITH_STRING(macos-sdk,
 [  --with-macos-sdk=dir    Location of platform SDK to use (Mac OS X only)],
     MACOS_SDK_DIR=$withval)
 
 dnl MACOS_SDK_DIR will be set to the SDK location whenever one is in use.
-dnl NEXT_ROOT will be set and exported only if it's needed.
 AC_SUBST(MACOS_SDK_DIR)
-AC_SUBST(NEXT_ROOT)
 
 if test "$MACOS_SDK_DIR"; then
   dnl Sync this section with the ones in NSPR and NSS.
@@ -1645,8 +1645,11 @@ ia64*-hpux*)
         if test "$_CC_SUITE" -ge "12"; then
             dnl VS2013+ requires -FS when parallel building by make -jN.
             dnl If nothing, compiler sometimes causes C1041 error.
-            CFLAGS="$CFLAGS -FS"
-            CXXFLAGS="$CXXFLAGS -FS"
+            dnl
+            dnl Visual Studio 2013 supports -Gw flags
+            dnl http://blogs.msdn.com/b/vcblog/archive/2013/09/11/introducing-gw-compiler-switch.aspx
+            CFLAGS="$CFLAGS -FS -Gw"
+            CXXFLAGS="$CXXFLAGS -FS -Gw"
         fi
         # khuey says we can safely ignore MSVC warning C4251
         # MSVC warning C4244 (implicit type conversion may lose data) warns
@@ -2084,7 +2087,10 @@ if test "$ENABLE_YARR_JIT"; then
     AC_DEFINE(ENABLE_YARR_JIT)
 fi
 
-MOZ_COMPILER_OPTS
+if test -n "$COMPILE_ENVIRONMENT"; then
+    MOZ_COMPILER_OPTS
+fi
+
 if test -z "$SKIP_COMPILER_CHECKS"; then
 dnl Checks for typedefs, structures, and compiler characteristics.
 dnl ========================================================
@@ -2537,15 +2543,23 @@ fi
 AC_CACHE_CHECK(
     [for res_ninit()],
     ac_cv_func_res_ninit,
-    [AC_TRY_LINK([
-        #ifdef linux
-        #define _BSD_SOURCE 1
-        #endif
-        #include <resolv.h>
-        ],
-        [int foo = res_ninit(&_res);],
-        [ac_cv_func_res_ninit=yes],
-        [ac_cv_func_res_ninit=no])
+    [if test "$OS_TARGET" = NetBSD -o "$OS_TARGET" = OpenBSD; then
+        dnl no need for res_ninit() on NetBSD and OpenBSD
+        ac_cv_func_res_ninit=no
+     else
+       AC_TRY_LINK([
+            #ifdef linux
+            #define _BSD_SOURCE 1
+            #endif
+            #include <sys/types.h>
+            #include <netinet/in.h>
+            #include <arpa/nameser.h>
+            #include <resolv.h>
+            ],
+            [int foo = res_ninit(&_res);],
+            [ac_cv_func_res_ninit=yes],
+            [ac_cv_func_res_ninit=no])
+     fi
     ])
 
 if test "$ac_cv_func_res_ninit" = "yes"; then
@@ -2561,12 +2575,10 @@ AC_LANG_C
 dnl **********************
 dnl *** va_copy checks ***
 dnl **********************
-dnl we currently check for all three va_copy possibilities, so we get
-dnl all results in config.log for bug reports.
-AC_MSG_CHECKING(for an implementation of va_copy())
-AC_CACHE_VAL(ac_cv_va_copy,[
-    AC_TRY_RUN([
-        #include <stdarg.h>
+AC_CACHE_CHECK([for an implementation of va_copy()],
+               ac_cv_va_copy,
+    [AC_TRY_COMPILE([#include <stdarg.h>
+                     #include <stdlib.h>
         void f (int i, ...) {
             va_list args1, args2;
             va_start (args1, i);
@@ -2574,37 +2586,16 @@ AC_CACHE_VAL(ac_cv_va_copy,[
             if (va_arg (args2, int) != 42 || va_arg (args1, int) != 42)
                 exit (1);
             va_end (args1); va_end (args2);
-        }
-        int main() { f (0, 42); return 0; }],
-        ac_cv_va_copy=yes,
-        ac_cv_va_copy=no,
-        ac_cv_va_copy=no
-    )
-])
-AC_MSG_RESULT($ac_cv_va_copy)
-AC_MSG_CHECKING(for an implementation of __va_copy())
-AC_CACHE_VAL(ac_cv___va_copy,[
-    AC_TRY_RUN([
-        #include <stdarg.h>
-        void f (int i, ...) {
-            va_list args1, args2;
-            va_start (args1, i);
-            __va_copy (args2, args1);
-            if (va_arg (args2, int) != 42 || va_arg (args1, int) != 42)
-                exit (1);
-            va_end (args1); va_end (args2);
-        }
-        int main() { f (0, 42); return 0; }],
-        ac_cv___va_copy=yes,
-        ac_cv___va_copy=no,
-        ac_cv___va_copy=no
-    )
-])
-AC_MSG_RESULT($ac_cv___va_copy)
-AC_MSG_CHECKING(whether va_lists can be copied by value)
-AC_CACHE_VAL(ac_cv_va_val_copy,[
-    AC_TRY_RUN([
-        #include <stdarg.h>
+        }],
+        [f(0, 42); return 0],
+        [ac_cv_va_copy=yes],
+        [ac_cv_va_copy=no]
+    )]
+)
+AC_CACHE_CHECK([whether va_list can be copied by value],
+               ac_cv_va_val_copy,
+    [AC_TRY_COMPILE([#include <stdarg.h>
+                     #include <stdlib.h>
         void f (int i, ...) {
             va_list args1, args2;
             va_start (args1, i);
@@ -2612,25 +2603,20 @@ AC_CACHE_VAL(ac_cv_va_val_copy,[
             if (va_arg (args2, int) != 42 || va_arg (args1, int) != 42)
                 exit (1);
             va_end (args1); va_end (args2);
-        }
-        int main() { f (0, 42); return 0; }],
-        ac_cv_va_val_copy=yes,
-        ac_cv_va_val_copy=no,
-        ac_cv_va_val_copy=yes
-    )
-])
+        }],
+        [f(0, 42); return 0],
+        [ac_cv_va_val_copy=yes],
+        [ac_cv_va_val_copy=no],
+    )]
+)
 if test "x$ac_cv_va_copy" = "xyes"; then
     AC_DEFINE(VA_COPY, va_copy)
-    AC_DEFINE(HAVE_VA_COPY)
-elif test "x$ac_cv___va_copy" = "xyes"; then
-    AC_DEFINE(VA_COPY, __va_copy)
     AC_DEFINE(HAVE_VA_COPY)
 fi
 
 if test "x$ac_cv_va_val_copy" = "xno"; then
    AC_DEFINE(HAVE_VA_LIST_AS_ARRAY)
 fi
-AC_MSG_RESULT($ac_cv_va_val_copy)
 
 dnl ===================================================================
 dnl ========================================================
@@ -2930,11 +2916,37 @@ MOZ_ARG_WITH_STRING(nspr-libs,
 AC_SUBST(NSPR_CFLAGS)
 AC_SUBST(NSPR_LIBS)
 
+if test "$_USE_SYSTEM_NSPR" || (test "$NSPR_CFLAGS" -o "$NSPR_LIBS"); then
+  _HAS_NSPR=1
+fi
+
+case "$target" in
+  *linux*|*darwin*|*dragonfly*|*freebsd*|*netbsd*|*openbsd*)
+    if test -z "$_HAS_NSPR"; then JS_POSIX_NSPR_DEFAULT=1; fi
+    ;;
+esac
+
+MOZ_ARG_ENABLE_BOOL(posix-nspr-emulation,
+[  --enable-posix-nspr-emulation
+                          Enable emulation of NSPR for POSIX systems],
+    JS_POSIX_NSPR=1,
+    JS_POSIX_NSPR=,
+    JS_POSIX_NSPR="$JS_POSIX_NSPR_DEFAULT" )
+if test -n "$JS_POSIX_NSPR"; then
+    AC_DEFINE(JS_POSIX_NSPR)
+fi
+
 dnl Pass either --with-system-nspr or (--with-nspr-cflags and
 dnl --with-nspr-libs), but not both.
 if test "$_USE_SYSTEM_NSPR" && (test "$NSPR_CFLAGS" -o "$NSPR_LIBS"); then
     AC_MSG_ERROR([--with-system-nspr and --with-nspr-libs/cflags are mutually exclusive.
 See 'configure --help'.])
+fi
+
+dnl Can't use --enable-posix-nspr-emulation if compiling with NSPR.
+if test "$_HAS_NSPR" && test "$JS_POSIX_NSPR"; then
+    AC_MSG_ERROR([--enable-posix-nspr-emulation is mututally exclusive with --with-system-nspr
+and --with-nspr-libs/cflags. See 'configure --help'.])
 fi
 
 if test -n "$_USE_SYSTEM_NSPR"; then
@@ -2995,6 +3007,19 @@ dnl ========================================================
 MOZ_ARG_HEADER(Application)
 
 ENABLE_TESTS=1
+
+dnl ========================================================
+dnl Tell the build system that ../../mfbt exists outside
+dnl the source tree, but files from there are included from
+dnl inside the tree.
+dnl
+dnl This should probably be a --with-external-source-dir
+dnl option, like the root mozilla-central configure, but
+dnl then anyone building the standalone js shell would need
+dnl to remember to pass it, and it is only used in one file.
+dnl ========================================================
+EXTERNAL_SOURCE_DIR=../../mfbt
+AC_SUBST(EXTERNAL_SOURCE_DIR)
 
 USE_ARM_KUSER=
 
@@ -4284,16 +4309,9 @@ if test "$JS_HAS_CTYPES" -a -z "$MOZ_NATIVE_FFI"; then
     ac_configure_args="$ac_configure_args --with-pic"
   fi
   if test "$CROSS_COMPILE"; then
-    case "$target" in
-    *-android*|*-linuxandroid*)
-      export AS CC CXX CPP LD AR RANLIB STRIP CPPFLAGS CFLAGS LDFLAGS
+    export AS CC CXX CPP LD AR RANLIB STRIP CPPFLAGS CFLAGS LDFLAGS
 
-      ac_configure_args="$ac_configure_args --build=$build --host=$target HOST_CC=\"$HOST_CC\""
-      ;;
-    *)
-      ac_configure_args="$ac_configure_args --build=$build --host=$target HOST_CC=\"$HOST_CC\" CC=\"$CC\""
-      ;;
-    esac
+    ac_configure_args="$ac_configure_args --build=$build --host=$target HOST_CC=\"$HOST_CC\""
   fi
   if test "$_MSC_VER"; then
     # Use a wrapper script for cl and ml that looks more like gcc.

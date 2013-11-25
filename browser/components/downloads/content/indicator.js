@@ -56,16 +56,11 @@ const DownloadsButton = {
    * This function is called asynchronously just after window initialization.
    *
    * NOTE: This function should limit the input/output it performs to improve
-   *       startup time, and in particular should not cause the Download Manager
-   *       service to start.
+   *       startup time.
    */
   initializeIndicator: function DB_initializeIndicator()
   {
-    if (!DownloadsCommon.useToolkitUI) {
-      DownloadsIndicatorView.ensureInitialized();
-    } else {
-      DownloadsIndicatorView.ensureTerminated();
-    }
+    DownloadsIndicatorView.ensureInitialized();
   },
 
   /**
@@ -95,11 +90,7 @@ const DownloadsButton = {
   customizeDone: function DB_customizeDone()
   {
     this._customizing = false;
-    if (!DownloadsCommon.useToolkitUI) {
-      DownloadsIndicatorView.afterCustomize();
-    } else {
-      DownloadsIndicatorView.ensureTerminated();
-    }
+    DownloadsIndicatorView.afterCustomize();
   },
 
   /**
@@ -119,10 +110,12 @@ const DownloadsButton = {
 
     indicator.open = this._anchorRequested;
 
-    // Determine if we're located on an invisible toolbar.
-    if (!isElementVisible(indicator.parentNode)) {
-      return null;
-    }
+    let widget = CustomizableUI.getWidget("downloads-button")
+                               .forWindow(window);
+     // Determine if the indicator is located on an invisible toolbar.
+     if (!isElementVisible(indicator.parentNode) && !widget.overflowed) {
+       return null;
+     }
 
     return DownloadsIndicatorView.indicatorAnchor;
   },
@@ -326,10 +319,20 @@ const DownloadsIndicatorView = {
       return;
     }
 
-    // If the anchor is not there or its container is hidden, don't show
-    // a notification
     let anchor = DownloadsButton._placeholder;
+    let widgetGroup = CustomizableUI.getWidget("downloads-button");
+    let widgetInWindow = widgetGroup.forWindow(window);
+    if (widgetInWindow.overflowed || widgetGroup.areaType == CustomizableUI.TYPE_MENU_PANEL) {
+      if (anchor && isElementVisible(anchor.parentNode)) {
+        // If the panel is open, don't do anything:
+        return;
+      }
+
+      // Otherwise, try to use the anchor of the panel:
+      anchor = widgetInWindow.anchor;
+    }
     if (!anchor || !isElementVisible(anchor.parentNode)) {
+      // Our container isn't visible, so can't show the animation:
       return;
     }
 
@@ -370,7 +373,7 @@ const DownloadsIndicatorView = {
    */
   set hasDownloads(aValue)
   {
-    if (this._hasDownloads != aValue) {
+    if (this._hasDownloads != aValue || (!this._operational && aValue)) {
       this._hasDownloads = aValue;
 
       // If there is at least one download, ensure that the view elements are
@@ -490,10 +493,10 @@ const DownloadsIndicatorView = {
 
   onCommand: function DIV_onCommand(aEvent)
   {
-    if (DownloadsCommon.useToolkitUI) {
-      // The panel won't suppress attention for us, we need to clear now.
-      DownloadsCommon.getIndicatorData(window).attention = false;
-      BrowserDownloadsUI();
+    // If the downloads button is in the menu panel, open the Library
+    let widgetGroup = CustomizableUI.getWidget("downloads-button");
+    if (widgetGroup.areaType == CustomizableUI.TYPE_MENU_PANEL) {
+      DownloadsPanel.showDownloadsHistory();
     } else {
       DownloadsPanel.showPanel();
     }
@@ -528,7 +531,6 @@ const DownloadsIndicatorView = {
   },
 
   _indicator: null,
-  _indicatorAnchor: null,
   __indicatorCounter: null,
   __indicatorProgress: null,
 
@@ -552,8 +554,12 @@ const DownloadsIndicatorView = {
 
   get indicatorAnchor()
   {
-    return this._indicatorAnchor ||
-      (this._indicatorAnchor = document.getElementById("downloads-indicator-anchor"));
+    let widget = CustomizableUI.getWidget("downloads-button")
+                               .forWindow(window);
+    if (widget.overflowed) {
+      return widget.anchor;
+    }
+    return document.getElementById("downloads-indicator-anchor");
   },
 
   get _indicatorCounter()
@@ -576,7 +582,6 @@ const DownloadsIndicatorView = {
 
   _onCustomizedAway: function() {
     this._indicator = null;
-    this._indicatorAnchor = null;
     this.__indicatorCounter = null;
     this.__indicatorProgress = null;
   },

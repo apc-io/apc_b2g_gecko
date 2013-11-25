@@ -842,6 +842,9 @@ typedef void
 (* JSDestroyCompartmentCallback)(JSFreeOp *fop, JSCompartment *compartment);
 
 typedef void
+(* JSZoneCallback)(JS::Zone *zone);
+
+typedef void
 (* JSCompartmentNameCallback)(JSRuntime *rt, JSCompartment *compartment,
                               char *buf, size_t bufsize);
 
@@ -992,8 +995,8 @@ JS_GetEmptyString(JSRuntime *rt);
  *   b      bool            Boolean
  *   c      uint16_t/jschar ECMA uint16_t, Unicode char
  *   i      int32_t         ECMA int32_t
+ *   j      int32_t         ECMA int32_t (used to be different)
  *   u      uint32_t        ECMA uint32_t
- *   j      int32_t         Rounded int32_t (coordinate)
  *   d      double          IEEE double
  *   I      double          Integral IEEE double
  *   S      JSString *      Unicode string, accessed by a JSString pointer
@@ -1040,9 +1043,6 @@ extern JS_PUBLIC_API(JSFunction *)
 JS_ValueToConstructor(JSContext *cx, JS::HandleValue v);
 
 extern JS_PUBLIC_API(JSString *)
-JS_ValueToString(JSContext *cx, jsval v);
-
-extern JS_PUBLIC_API(JSString *)
 JS_ValueToSource(JSContext *cx, jsval v);
 
 namespace js {
@@ -1056,7 +1056,13 @@ ToNumberSlow(JSContext *cx, JS::Value v, double *dp);
  * DO NOT CALL THIS. Use JS::ToBoolean
  */
 extern JS_PUBLIC_API(bool)
-ToBooleanSlow(const JS::Value &v);
+ToBooleanSlow(JS::HandleValue v);
+
+/*
+ * DO NOT CALL THIS. Use JS::ToString
+ */
+extern JS_PUBLIC_API(JSString*)
+ToStringSlow(JSContext *cx, JS::HandleValue v);
 } /* namespace js */
 
 namespace JS {
@@ -1079,7 +1085,7 @@ ToNumber(JSContext *cx, Handle<Value> v, double *out)
 }
 
 JS_ALWAYS_INLINE bool
-ToBoolean(const Value &v)
+ToBoolean(HandleValue v)
 {
     if (v.isBoolean())
         return v.toBoolean();
@@ -1096,6 +1102,14 @@ ToBoolean(const Value &v)
     return js::ToBooleanSlow(v);
 }
 
+JS_ALWAYS_INLINE JSString*
+ToString(JSContext *cx, HandleValue v)
+{
+    if (v.isString())
+        return v.toString();
+    return js::ToStringSlow(cx, v);
+}
+
 } /* namespace JS */
 
 extern JS_PUBLIC_API(bool)
@@ -1107,37 +1121,17 @@ JS_DoubleToInt32(double d);
 extern JS_PUBLIC_API(uint32_t)
 JS_DoubleToUint32(double d);
 
-/*
- * Convert a value to a number, then to an int32_t, according to the ECMA rules
- * for ToInt32.
- */
-extern JS_PUBLIC_API(bool)
-JS_ValueToECMAInt32(JSContext *cx, jsval v, int32_t *ip);
-
-/*
- * Convert a value to a number, then to an int64_t, according to the WebIDL
- * rules for ToInt64: http://dev.w3.org/2006/webapi/WebIDL/#es-long-long
- */
-extern JS_PUBLIC_API(bool)
-JS_ValueToInt64(JSContext *cx, jsval v, int64_t *ip);
-
-/*
- * Convert a value to a number, then to an uint64_t, according to the WebIDL
- * rules for ToUint64: http://dev.w3.org/2006/webapi/WebIDL/#es-unsigned-long-long
- */
-extern JS_PUBLIC_API(bool)
-JS_ValueToUint64(JSContext *cx, jsval v, uint64_t *ip);
 
 namespace js {
-/* DO NOT CALL THIS.  Use JS::ToInt16. */
+/* DO NOT CALL THIS. Use JS::ToUint16. */
 extern JS_PUBLIC_API(bool)
 ToUint16Slow(JSContext *cx, JS::Handle<JS::Value> v, uint16_t *out);
 
-/* DO NOT CALL THIS.  Use JS::ToInt32. */
+/* DO NOT CALL THIS. Use JS::ToInt32. */
 extern JS_PUBLIC_API(bool)
 ToInt32Slow(JSContext *cx, JS::Handle<JS::Value> v, int32_t *out);
 
-/* DO NOT CALL THIS.  Use JS::ToUint32. */
+/* DO NOT CALL THIS. Use JS::ToUint32. */
 extern JS_PUBLIC_API(bool)
 ToUint32Slow(JSContext *cx, JS::Handle<JS::Value> v, uint32_t *out);
 
@@ -1222,30 +1216,6 @@ ToUint64(JSContext *cx, JS::Handle<JS::Value> v, uint64_t *out)
 
 
 } /* namespace JS */
-
-/*
- * Convert a value to a number, then to a uint32_t, according to the ECMA rules
- * for ToUint32.
- */
-extern JS_PUBLIC_API(bool)
-JS_ValueToECMAUint32(JSContext *cx, jsval v, uint32_t *ip);
-
-/*
- * Convert a value to a number, then to an int32_t if it fits by rounding to
- * nearest; but failing with an error report if the double is out of range
- * or unordered.
- */
-extern JS_PUBLIC_API(bool)
-JS_ValueToInt32(JSContext *cx, jsval v, int32_t *ip);
-
-/*
- * ECMA ToUint16, for mapping a jsval to a Unicode point.
- */
-extern JS_PUBLIC_API(bool)
-JS_ValueToUint16(JSContext *cx, jsval v, uint16_t *ip);
-
-extern JS_PUBLIC_API(bool)
-JS_ValueToBoolean(JSContext *cx, jsval v, bool *bp);
 
 extern JS_PUBLIC_API(JSType)
 JS_TypeOfValue(JSContext *cx, jsval v);
@@ -1477,13 +1447,12 @@ class JS_PUBLIC_API(ContextOptions) {
         werror_(false),
         varObjFix_(false),
         privateIsNSISupports_(false),
-        compileAndGo_(false),
         dontReportUncaught_(false),
         noDefaultCompartmentObject_(false),
         noScriptRval_(false),
+        strictMode_(false),
         baseline_(false),
         typeInference_(false),
-        strictMode_(false),
         ion_(false),
         asmJS_(false)
     {
@@ -1529,16 +1498,6 @@ class JS_PUBLIC_API(ContextOptions) {
         return *this;
     }
 
-    bool compileAndGo() const { return compileAndGo_; }
-    ContextOptions &setCompileAndGo(bool flag) {
-        compileAndGo_ = flag;
-        return *this;
-    }
-    ContextOptions &toggleCompileAndGo() {
-        compileAndGo_ = !compileAndGo_;
-        return *this;
-    }
-
     bool dontReportUncaught() const { return dontReportUncaught_; }
     ContextOptions &setDontReportUncaught(bool flag) {
         dontReportUncaught_ = flag;
@@ -1569,6 +1528,16 @@ class JS_PUBLIC_API(ContextOptions) {
         return *this;
     }
 
+    bool strictMode() const { return strictMode_; }
+    ContextOptions &setStrictMode(bool flag) {
+        strictMode_ = flag;
+        return *this;
+    }
+    ContextOptions &toggleStrictMode() {
+        strictMode_ = !strictMode_;
+        return *this;
+    }
+
     bool baseline() const { return baseline_; }
     ContextOptions &setBaseline(bool flag) {
         baseline_ = flag;
@@ -1586,16 +1555,6 @@ class JS_PUBLIC_API(ContextOptions) {
     }
     ContextOptions &toggleTypeInference() {
         typeInference_ = !typeInference_;
-        return *this;
-    }
-
-    bool strictMode() const { return strictMode_; }
-    ContextOptions &setStrictMode(bool flag) {
-        strictMode_ = flag;
-        return *this;
-    }
-    ContextOptions &toggleStrictMode() {
-        strictMode_ = !strictMode_;
         return *this;
     }
 
@@ -1624,13 +1583,12 @@ class JS_PUBLIC_API(ContextOptions) {
     bool werror_ : 1;
     bool varObjFix_ : 1;
     bool privateIsNSISupports_ : 1;
-    bool compileAndGo_ : 1;
     bool dontReportUncaught_ : 1;
     bool noDefaultCompartmentObject_ : 1;
     bool noScriptRval_ : 1;
+    bool strictMode_ : 1;
     bool baseline_ : 1;
     bool typeInference_ : 1;
-    bool strictMode_ : 1;
     bool ion_ : 1;
     bool asmJS_ : 1;
 };
@@ -1668,6 +1626,12 @@ extern JS_PUBLIC_API(void)
 JS_SetDestroyCompartmentCallback(JSRuntime *rt, JSDestroyCompartmentCallback callback);
 
 extern JS_PUBLIC_API(void)
+JS_SetDestroyZoneCallback(JSRuntime *rt, JSZoneCallback callback);
+
+extern JS_PUBLIC_API(void)
+JS_SetSweepZoneCallback(JSRuntime *rt, JSZoneCallback callback);
+
+extern JS_PUBLIC_API(void)
 JS_SetCompartmentNameCallback(JSRuntime *rt, JSCompartmentNameCallback callback);
 
 extern JS_PUBLIC_API(JSWrapObjectCallback)
@@ -1681,6 +1645,12 @@ JS_SetCompartmentPrivate(JSCompartment *compartment, void *data);
 
 extern JS_PUBLIC_API(void *)
 JS_GetCompartmentPrivate(JSCompartment *compartment);
+
+extern JS_PUBLIC_API(void)
+JS_SetZoneUserData(JS::Zone *zone, void *data);
+
+extern JS_PUBLIC_API(void *)
+JS_GetZoneUserData(JS::Zone *zone);
 
 extern JS_PUBLIC_API(bool)
 JS_WrapObject(JSContext *cx, JS::MutableHandleObject objp);
@@ -1798,6 +1768,9 @@ JS_GetClassPrototype(JSContext *cx, JSProtoKey key, JSObject **objp);
 
 extern JS_PUBLIC_API(JSProtoKey)
 JS_IdentifyClassPrototype(JSContext *cx, JSObject *obj);
+
+extern JS_PUBLIC_API(JSProtoKey)
+JS_IdToProtoKey(JSContext *cx, JS::HandleId id);
 
 /*
  * Returns the original value of |Function.prototype| from the global object in
@@ -2020,11 +1993,6 @@ JS_RemoveObjectRootRT(JSRuntime *rt, JSObject **rp);
 
 extern JS_PUBLIC_API(void)
 JS_RemoveScriptRootRT(JSRuntime *rt, JSScript **rp);
-
-/* TODO: remove these APIs */
-
-extern JS_FRIEND_API(void)
-js_RemoveRoot(JSRuntime *rt, void *rp);
 
 /*
  * C-compatible version of the Anchor class. It should be called after the last
@@ -2441,6 +2409,8 @@ struct JSPropertySpec {
     uint8_t                     flags;
     JSPropertyOpWrapper         getter;
     JSStrictPropertyOpWrapper   setter;
+    const char                 *selfHostedGetter;
+    const char                 *selfHostedSetter;
 };
 
 namespace JS {
@@ -2471,13 +2441,23 @@ inline int CheckIsNative(JSNative native);
     {name, 0, \
      uint8_t(JS_CHECK_ACCESSOR_FLAGS(flags) | JSPROP_SHARED | JSPROP_NATIVE_ACCESSORS), \
      JSOP_WRAPPER(JS_CAST_NATIVE_TO(getter, JSPropertyOp)), \
-     JSOP_NULLWRAPPER}
+     JSOP_NULLWRAPPER, nullptr, nullptr}
 #define JS_PSGS(name, getter, setter, flags) \
     {name, 0, \
      uint8_t(JS_CHECK_ACCESSOR_FLAGS(flags) | JSPROP_SHARED | JSPROP_NATIVE_ACCESSORS), \
      JSOP_WRAPPER(JS_CAST_NATIVE_TO(getter, JSPropertyOp)), \
-     JSOP_WRAPPER(JS_CAST_NATIVE_TO(setter, JSStrictPropertyOp))}
-#define JS_PS_END {0, 0, 0, JSOP_NULLWRAPPER, JSOP_NULLWRAPPER}
+     JSOP_WRAPPER(JS_CAST_NATIVE_TO(setter, JSStrictPropertyOp)), \
+     nullptr, nullptr}
+#define JS_SELF_HOSTED_GET(name, getterName, flags) \
+    {name, 0, \
+     uint8_t(JS_CHECK_ACCESSOR_FLAGS(flags) | JSPROP_SHARED | JSPROP_GETTER), \
+     JSOP_NULLWRAPPER, JSOP_NULLWRAPPER, getterName, nullptr}
+#define JS_SELF_HOSTED_GETSET(name, getterName, setterName, flags) \
+    {name, 0, \
+     uint8_t(JS_CHECK_ACCESSOR_FLAGS(flags) | JSPROP_SHARED | JSPROP_GETTER | JSPROP_SETTER), \
+     JSOP_NULLWRAPPER, JSOP_NULLWRAPPER, getterName, setterName}
+#define JS_PS_END {0, 0, 0, JSOP_NULLWRAPPER, JSOP_NULLWRAPPER, \
+                   nullptr, nullptr}
 
 /*
  * To define a native function, set call to a JSNativeWrapper. To define a
@@ -2580,26 +2560,43 @@ enum ZoneSpecifier {
 
 class JS_PUBLIC_API(CompartmentOptions)
 {
-    union {
-        ZoneSpecifier spec;
-        void *pointer; // js::Zone* is not exposed in the API.
-    } zone_;
-    JSVersion version_;
-
   public:
-    bool invisibleToDebugger;
+    class Override {
+      public:
+        Override() : mode_(Default) {}
+
+        bool get(bool defaultValue) const {
+            if (mode_ == Default)
+                return defaultValue;
+            return mode_ == ForceTrue;
+        };
+
+        void set(bool overrideValue) {
+            mode_ = overrideValue ? ForceTrue : ForceFalse;
+        };
+
+        void reset() {
+            mode_ = Default;
+        }
+
+      private:
+        enum Mode {
+            Default,
+            ForceTrue,
+            ForceFalse
+        };
+
+        Mode mode_;
+    };
 
     explicit CompartmentOptions()
       : version_(JSVERSION_UNKNOWN)
-      , invisibleToDebugger(false)
+      , invisibleToDebugger_(false)
     {
         zone_.spec = JS::FreshZone;
     }
 
-    CompartmentOptions &setZone(ZoneSpecifier spec);
-
-    CompartmentOptions &setSameZoneAs(JSObject *obj);
-
+    JSVersion version() const { return version_; }
     CompartmentOptions &setVersion(JSVersion aVersion) {
         MOZ_ASSERT(aVersion != JSVERSION_UNKNOWN);
         version_ = aVersion;
@@ -2610,20 +2607,50 @@ class JS_PUBLIC_API(CompartmentOptions)
     // of the embedding, and references to them should never leak out to script.
     // This flag causes the this compartment to skip firing onNewGlobalObject
     // and makes addDebuggee a no-op for this global.
-    CompartmentOptions &setInvisibleToDebugger(bool invisible) {
-        invisibleToDebugger = invisible;
+    bool invisibleToDebugger() { return invisibleToDebugger_; }
+    CompartmentOptions &setInvisibleToDebugger(bool flag) {
+        invisibleToDebugger_ = flag;
         return *this;
     }
 
-    ZoneSpecifier zoneSpecifier() const { return zone_.spec; }
+    bool baseline(JSContext *cx) const;
+    Override &baselineOverride() { return baselineOverride_; }
 
-    JSVersion version() const { return version_; }
+    bool typeInference(const js::ExclusiveContext *cx) const;
+    Override &typeInferenceOverride() { return typeInferenceOverride_; }
+
+    bool ion(JSContext *cx) const;
+    Override &ionOverride() { return ionOverride_; }
+
+    bool asmJS(JSContext *cx) const;
+    Override &asmJSOverride() { return asmJSOverride_; }
 
     void *zonePointer() const {
         JS_ASSERT(uintptr_t(zone_.pointer) > uintptr_t(JS::SystemZone));
         return zone_.pointer;
     }
+    ZoneSpecifier zoneSpecifier() const { return zone_.spec; }
+    CompartmentOptions &setZone(ZoneSpecifier spec);
+    CompartmentOptions &setSameZoneAs(JSObject *obj);
+
+  private:
+    JSVersion version_;
+    bool invisibleToDebugger_;
+    Override baselineOverride_;
+    Override typeInferenceOverride_;
+    Override ionOverride_;
+    Override asmJSOverride_;
+    union {
+        ZoneSpecifier spec;
+        void *pointer; // js::Zone* is not exposed in the API.
+    } zone_;
 };
+
+JS_PUBLIC_API(CompartmentOptions &)
+CompartmentOptionsRef(JSCompartment *compartment);
+
+JS_PUBLIC_API(CompartmentOptions &)
+CompartmentOptionsRef(JSContext *cx);
 
 // During global creation, we fire notifications to callbacks registered
 // via the Debugger API. These callbacks are arbitrary script, and can touch
@@ -3309,69 +3336,130 @@ extern JS_PUBLIC_API(bool)
 JS_BufferIsCompilableUnit(JSContext *cx, JSObject *obj, const char *utf8, size_t length);
 
 extern JS_PUBLIC_API(JSScript *)
-JS_CompileScript(JSContext *cx, JSObject *obj,
+JS_CompileScript(JSContext *cx, JS::HandleObject obj,
                  const char *ascii, size_t length,
-                 const char *filename, unsigned lineno);
+                 const JS::CompileOptions &options);
 
 extern JS_PUBLIC_API(JSScript *)
-JS_CompileScriptForPrincipals(JSContext *cx, JSObject *obj,
-                              JSPrincipals *principals,
-                              const char *ascii, size_t length,
-                              const char *filename, unsigned lineno);
-
-extern JS_PUBLIC_API(JSScript *)
-JS_CompileUCScript(JSContext *cx, JSObject *obj,
+JS_CompileUCScript(JSContext *cx, JS::HandleObject obj,
                    const jschar *chars, size_t length,
-                   const char *filename, unsigned lineno);
-
-extern JS_PUBLIC_API(JSScript *)
-JS_CompileUCScriptForPrincipals(JSContext *cx, JSObject *obj,
-                                JSPrincipals *principals,
-                                const jschar *chars, size_t length,
-                                const char *filename, unsigned lineno);
+                   const JS::CompileOptions &options);
 
 extern JS_PUBLIC_API(JSObject *)
 JS_GetGlobalFromScript(JSScript *script);
 
 extern JS_PUBLIC_API(JSFunction *)
-JS_CompileFunction(JSContext *cx, JSObject *obj, const char *name,
+JS_CompileFunction(JSContext *cx, JS::HandleObject obj, const char *name,
                    unsigned nargs, const char *const *argnames,
                    const char *bytes, size_t length,
-                   const char *filename, unsigned lineno);
+                   const JS::CompileOptions &options);
 
 extern JS_PUBLIC_API(JSFunction *)
-JS_CompileFunctionForPrincipals(JSContext *cx, JSObject *obj,
-                                JSPrincipals *principals, const char *name,
-                                unsigned nargs, const char *const *argnames,
-                                const char *bytes, size_t length,
-                                const char *filename, unsigned lineno);
-
-extern JS_PUBLIC_API(JSFunction *)
-JS_CompileUCFunction(JSContext *cx, JSObject *obj, const char *name,
+JS_CompileUCFunction(JSContext *cx, JS::HandleObject obj, const char *name,
                      unsigned nargs, const char *const *argnames,
                      const jschar *chars, size_t length,
-                     const char *filename, unsigned lineno);
+                     const JS::CompileOptions &options);
 
 namespace JS {
 
 /* Options for JavaScript compilation. */
-class JS_PUBLIC_API(CompileOptions)
+
+/*
+ * In the most common use case, a CompileOptions instance is allocated on the
+ * stack, and holds non-owning references to non-POD option values: strings;
+ * principals; objects; and so on. The code declaring the instance guarantees
+ * that such option values will outlive the CompileOptions itself: objects are
+ * otherwise rooted; principals have had their reference counts bumped; strings
+ * will not be freed until the CompileOptions goes out of scope. In this
+ * situation, CompileOptions only refers to things others own, so it can be
+ * lightweight.
+ *
+ * In some cases, however, we need to hold compilation options with a
+ * non-stack-like lifetime. For example, JS::CompileOffThread needs to save
+ * compilation options where a worker thread can find them, and then return
+ * immediately. The worker thread will come along at some later point, and use
+ * the options.
+ *
+ * The compiler itself just needs to be able to access a collection of options;
+ * it doesn't care who owns them, or what's keeping them alive. It does its own
+ * addrefs/copies/tracing/etc.
+ *
+ * So, we have a class hierarchy that reflects these three use cases:
+ *
+ * - ReadOnlyCompileOptions is the common base class. It can be used by code
+ *   that simply needs to access options set elsewhere, like the compiler.
+ *
+ * - The usual CompileOptions class must be stack-allocated, and holds
+ *   non-owning references to the filename, element, and so on. It's derived
+ *   from ReadOnlyCompileOptions, so the compiler can use it.
+ *
+ * - OwningCompileOptions roots / copies / reference counts of all its values,
+ *   and unroots / frees / releases them when it is destructed. It too is
+ *   derived from ReadOnlyCompileOptions, so the compiler accepts it.
+ */
+
+/*
+ * The common base class for the CompileOptions hierarchy.
+ *
+ * Use this in code that only needs to access compilation options created
+ * elsewhere, like the compiler. Don't instantiate this class (the constructor
+ * is protected anyway); instead, create instances only of the derived classes:
+ * CompileOptions and OwningCompileOptions.
+ */
+class JS_PUBLIC_API(ReadOnlyCompileOptions)
 {
+  protected:
     JSPrincipals *principals_;
     JSPrincipals *originPrincipals_;
+    const char *filename_;
+    const jschar *sourceMapURL_;
+
+    // This constructor leaves 'version' set to JSVERSION_UNKNOWN. The structure
+    // is unusable until that's set to something more specific; the derived
+    // classes' constructors take care of that, in ways appropriate to their
+    // purpose.
+    ReadOnlyCompileOptions()
+      : principals_(nullptr),
+        originPrincipals_(nullptr),
+        filename_(nullptr),
+        sourceMapURL_(nullptr),
+        version(JSVERSION_UNKNOWN),
+        versionSet(false),
+        utf8(false),
+        lineno(1),
+        column(0),
+        compileAndGo(false),
+        forEval(false),
+        noScriptRval(false),
+        selfHostingMode(false),
+        canLazilyParse(true),
+        strictOption(false),
+        extraWarningsOption(false),
+        werrorOption(false),
+        asmJSOption(false),
+        sourcePolicy(SAVE_SOURCE)
+    { }
+
+    // Set all POD options (those not requiring reference counts, copies,
+    // rooting, or other hand-holding) to their values in |rhs|.
+    void copyPODOptions(const ReadOnlyCompileOptions &rhs);
 
   public:
+    // Read-only accessors for non-POD options. The proper way to set these
+    // depends on the derived type.
     JSPrincipals *principals() const { return principals_; }
     JSPrincipals *originPrincipals() const;
+    const char *filename() const { return filename_; }
+    const jschar *sourceMapURL() const { return sourceMapURL_; }
+    virtual JSObject *element() const = 0;
+    virtual JSString *elementProperty() const = 0;
 
+    // POD options.
     JSVersion version;
     bool versionSet;
     bool utf8;
-    const char *filename;
-    const jschar *sourceMapURL;
     unsigned lineno;
     unsigned column;
-    Handle<JSObject*> element;
     bool compileAndGo;
     bool forEval;
     bool noScriptRval;
@@ -3387,17 +3475,126 @@ class JS_PUBLIC_API(CompileOptions)
         SAVE_SOURCE
     } sourcePolicy;
 
-    explicit CompileOptions(JSContext *cx, JSVersion version = JSVERSION_UNKNOWN);
-    CompileOptions &setPrincipals(JSPrincipals *p) { principals_ = p; return *this; }
-    CompileOptions &setOriginPrincipals(JSPrincipals *p) { originPrincipals_ = p; return *this; }
-    CompileOptions &setVersion(JSVersion v) { version = v; versionSet = true; return *this; }
-    CompileOptions &setUTF8(bool u) { utf8 = u; return *this; }
-    CompileOptions &setFileAndLine(const char *f, unsigned l) {
-        filename = f; lineno = l; return *this;
+  private:
+    static JSObject * const nullObjectPtr;
+    void operator=(const ReadOnlyCompileOptions &) MOZ_DELETE;
+};
+
+/*
+ * Compilation options, with dynamic lifetime. An instance of this type
+ * makes a copy of / holds / roots all dynamically allocated resources
+ * (principals; elements; strings) that it refers to. Its destructor frees
+ * / drops / unroots them. This is heavier than CompileOptions, below, but
+ * unlike CompileOptions, it can outlive any given stack frame.
+ *
+ * Note that this *roots* any JS values it refers to - they're live
+ * unconditionally. Thus, instances of this type can't be owned, directly
+ * or indirectly, by a JavaScript object: if any value that this roots ever
+ * comes to refer to the object that owns this, then the whole cycle, and
+ * anything else it entrains, will never be freed.
+ */
+class JS_PUBLIC_API(OwningCompileOptions) : public ReadOnlyCompileOptions
+{
+    JSRuntime *runtime;
+    PersistentRootedObject elementRoot;
+    PersistentRootedString elementPropertyRoot;
+
+  public:
+    // A minimal constructor, for use with OwningCompileOptions::copy. This
+    // leaves |this.version| set to JSVERSION_UNKNOWN; the instance
+    // shouldn't be used until we've set that to something real (as |copy|
+    // will).
+    explicit OwningCompileOptions(JSContext *cx);
+    ~OwningCompileOptions();
+
+    JSObject *element() const MOZ_OVERRIDE { return elementRoot; }
+    JSString *elementProperty() const MOZ_OVERRIDE { return elementPropertyRoot; }
+
+    // Set this to a copy of |rhs|. Return false on OOM.
+    bool copy(JSContext *cx, const ReadOnlyCompileOptions &rhs);
+
+    /* These setters make copies of their string arguments, and are fallible. */
+    bool setFileAndLine(JSContext *cx, const char *f, unsigned l);
+    bool setSourceMapURL(JSContext *cx, const jschar *s);
+
+    /* These setters are infallible, and can be chained. */
+    OwningCompileOptions &setElement(JSObject *e)         { elementRoot = e;         return *this; }
+    OwningCompileOptions &setElementProperty(JSString *p) { elementPropertyRoot = p; return *this; }
+    OwningCompileOptions &setPrincipals(JSPrincipals *p) {
+        if (p) JS_HoldPrincipals(p);
+        if (principals_) JS_DropPrincipals(runtime, principals_);
+        principals_ = p;
+        return *this;
     }
-    CompileOptions &setSourceMapURL(const jschar *s) { sourceMapURL = s; return *this; }
+    OwningCompileOptions &setOriginPrincipals(JSPrincipals *p) {
+        if (p) JS_HoldPrincipals(p);
+        if (originPrincipals_) JS_DropPrincipals(runtime, originPrincipals_);
+        originPrincipals_ = p;
+        return *this;
+    }
+    OwningCompileOptions &setVersion(JSVersion v) {
+        version = v;
+        versionSet = true;
+        return *this;
+    }
+    OwningCompileOptions &setUTF8(bool u) { utf8 = u; return *this; }
+    OwningCompileOptions &setColumn(unsigned c) { column = c; return *this; }
+    OwningCompileOptions &setCompileAndGo(bool cng) { compileAndGo = cng; return *this; }
+    OwningCompileOptions &setForEval(bool eval) { forEval = eval; return *this; }
+    OwningCompileOptions &setNoScriptRval(bool nsr) { noScriptRval = nsr; return *this; }
+    OwningCompileOptions &setSelfHostingMode(bool shm) { selfHostingMode = shm; return *this; }
+    OwningCompileOptions &setCanLazilyParse(bool clp) { canLazilyParse = clp; return *this; }
+    OwningCompileOptions &setSourcePolicy(SourcePolicy sp) { sourcePolicy = sp; return *this; }
+};
+
+/*
+ * Compilation options stored on the stack. An instance of this type
+ * simply holds references to dynamically allocated resources (element;
+ * filename; source map URL) that are owned by something else. If you
+ * create an instance of this type, it's up to you to guarantee that
+ * everything you store in it will outlive it.
+ */
+class MOZ_STACK_CLASS JS_PUBLIC_API(CompileOptions) : public ReadOnlyCompileOptions
+{
+    RootedObject elementRoot;
+    RootedString elementPropertyRoot;
+
+  public:
+    explicit CompileOptions(JSContext *cx, JSVersion version = JSVERSION_UNKNOWN);
+    CompileOptions(js::ContextFriendFields *cx, const ReadOnlyCompileOptions &rhs)
+      : ReadOnlyCompileOptions(), elementRoot(cx), elementPropertyRoot(cx)
+    {
+        copyPODOptions(rhs);
+
+        principals_ = rhs.principals();
+        originPrincipals_ = rhs.originPrincipals();
+        filename_ = rhs.filename();
+        sourceMapURL_ = rhs.sourceMapURL();
+        elementRoot = rhs.element();
+        elementPropertyRoot = rhs.elementProperty();
+    }
+
+    JSObject *element() const MOZ_OVERRIDE { return elementRoot; }
+    JSString *elementProperty() const MOZ_OVERRIDE { return elementPropertyRoot; }
+
+    CompileOptions &setFileAndLine(const char *f, unsigned l) {
+        filename_ = f; lineno = l; return *this;
+    }
+    CompileOptions &setSourceMapURL(const jschar *s) { sourceMapURL_ = s;       return *this; }
+    CompileOptions &setElement(JSObject *e)          { elementRoot = e;         return *this; }
+    CompileOptions &setElementProperty(JSString *p)  { elementPropertyRoot = p; return *this; }
+    CompileOptions &setPrincipals(JSPrincipals *p)   { principals_ = p;         return *this; }
+    CompileOptions &setOriginPrincipals(JSPrincipals *p) {
+        originPrincipals_ = p;
+        return *this;
+    }
+    CompileOptions &setVersion(JSVersion v) {
+        version = v;
+        versionSet = true;
+        return *this;
+    }
+    CompileOptions &setUTF8(bool u) { utf8 = u; return *this; }
     CompileOptions &setColumn(unsigned c) { column = c; return *this; }
-    CompileOptions &setElement(Handle<JSObject*> e) { element.repoint(e); return *this; }
     CompileOptions &setCompileAndGo(bool cng) { compileAndGo = cng; return *this; }
     CompileOptions &setForEval(bool eval) { forEval = eval; return *this; }
     CompileOptions &setNoScriptRval(bool nsr) { noScriptRval = nsr; return *this; }
@@ -3407,21 +3604,21 @@ class JS_PUBLIC_API(CompileOptions)
 };
 
 extern JS_PUBLIC_API(JSScript *)
-Compile(JSContext *cx, JS::Handle<JSObject*> obj, CompileOptions options,
+Compile(JSContext *cx, JS::Handle<JSObject*> obj, const ReadOnlyCompileOptions &options,
         const char *bytes, size_t length);
 
 extern JS_PUBLIC_API(JSScript *)
-Compile(JSContext *cx, JS::Handle<JSObject*> obj, CompileOptions options,
+Compile(JSContext *cx, JS::Handle<JSObject*> obj, const ReadOnlyCompileOptions &options,
         const jschar *chars, size_t length);
 
 extern JS_PUBLIC_API(JSScript *)
-Compile(JSContext *cx, JS::Handle<JSObject*> obj, CompileOptions options, FILE *file);
+Compile(JSContext *cx, JS::Handle<JSObject*> obj, const ReadOnlyCompileOptions &options, FILE *file);
 
 extern JS_PUBLIC_API(JSScript *)
-Compile(JSContext *cx, JS::Handle<JSObject*> obj, CompileOptions options, const char *filename);
+Compile(JSContext *cx, JS::Handle<JSObject*> obj, const ReadOnlyCompileOptions &options, const char *filename);
 
 extern JS_PUBLIC_API(bool)
-CanCompileOffThread(JSContext *cx, const CompileOptions &options);
+CanCompileOffThread(JSContext *cx, const ReadOnlyCompileOptions &options);
 
 /*
  * Off thread compilation control flow.
@@ -3440,7 +3637,7 @@ CanCompileOffThread(JSContext *cx, const CompileOptions &options);
  */
 
 extern JS_PUBLIC_API(bool)
-CompileOffThread(JSContext *cx, Handle<JSObject*> obj, CompileOptions options,
+CompileOffThread(JSContext *cx, Handle<JSObject*> obj, const ReadOnlyCompileOptions &options,
                  const jschar *chars, size_t length,
                  OffThreadCompileCallback callback, void *callbackData);
 
@@ -3448,12 +3645,12 @@ extern JS_PUBLIC_API(JSScript *)
 FinishOffThreadScript(JSContext *maybecx, JSRuntime *rt, void *token);
 
 extern JS_PUBLIC_API(JSFunction *)
-CompileFunction(JSContext *cx, JS::Handle<JSObject*> obj, CompileOptions options,
+CompileFunction(JSContext *cx, JS::Handle<JSObject*> obj, const ReadOnlyCompileOptions &options,
                 const char *name, unsigned nargs, const char *const *argnames,
                 const char *bytes, size_t length);
 
 extern JS_PUBLIC_API(JSFunction *)
-CompileFunction(JSContext *cx, JS::Handle<JSObject*> obj, CompileOptions options,
+CompileFunction(JSContext *cx, JS::Handle<JSObject*> obj, const ReadOnlyCompileOptions &options,
                 const char *name, unsigned nargs, const char *const *argnames,
                 const jschar *chars, size_t length);
 
@@ -3579,15 +3776,15 @@ JS_EvaluateUCScriptForPrincipalsVersionOrigin(JSContext *cx, JSObject *obj,
 namespace JS {
 
 extern JS_PUBLIC_API(bool)
-Evaluate(JSContext *cx, JS::Handle<JSObject*> obj, CompileOptions options,
+Evaluate(JSContext *cx, JS::Handle<JSObject*> obj, const ReadOnlyCompileOptions &options,
          const jschar *chars, size_t length, jsval *rval);
 
 extern JS_PUBLIC_API(bool)
-Evaluate(JSContext *cx, JS::Handle<JSObject*> obj, CompileOptions options,
+Evaluate(JSContext *cx, JS::Handle<JSObject*> obj, const ReadOnlyCompileOptions &options,
          const char *bytes, size_t length, jsval *rval);
 
 extern JS_PUBLIC_API(bool)
-Evaluate(JSContext *cx, JS::Handle<JSObject*> obj, CompileOptions options,
+Evaluate(JSContext *cx, JS::Handle<JSObject*> obj, const ReadOnlyCompileOptions &options,
          const char *filename, jsval *rval);
 
 } /* namespace JS */
@@ -4450,7 +4647,7 @@ typedef void
 // engine, it is critical that the buildId shall change for each new build of
 // the JS engine.
 typedef bool
-(* BuildIdOp)(mozilla::Vector<char> *buildId);
+(* BuildIdOp)(js::Vector<char> *buildId);
 
 struct AsmJSCacheOps
 {

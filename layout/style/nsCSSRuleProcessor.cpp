@@ -194,7 +194,7 @@ typedef nsIAtom*
 (* RuleHashGetKey) (PLDHashTable *table, const PLDHashEntryHdr *entry);
 
 struct RuleHashTableOps {
-  PLDHashTableOps ops;
+  const PLDHashTableOps ops;
   // Extra callback to avoid duplicating the matchEntry callback for
   // each table.  (There used to be a getKey callback in
   // PLDHashTableOps.)
@@ -1168,6 +1168,11 @@ InitSystemMetrics()
     sSystemMetrics->AppendElement(nsGkAtoms::windows_glass);
   }
 
+  rv = LookAndFeel::GetInt(LookAndFeel::eIntID_ColorPickerAvailable, &metricResult);
+  if (NS_SUCCEEDED(rv) && metricResult) {
+    sSystemMetrics->AppendElement(nsGkAtoms::color_picker_available);
+  }
+
   rv = LookAndFeel::GetInt(LookAndFeel::eIntID_WindowsClassic, &metricResult);
   if (NS_SUCCEEDED(rv) && metricResult) {
     sSystemMetrics->AppendElement(nsGkAtoms::windows_classic);
@@ -2138,8 +2143,7 @@ static bool SelectorMatches(Element* aElement,
   bool result = true;
   if (aSelector->mAttrList) {
     // test for attribute match
-    uint32_t attrCount = aElement->GetAttrCount();
-    if (attrCount == 0) {
+    if (!aElement->HasAttrs()) {
       // if no attributes on the content, no match
       return false;
     } else {
@@ -2160,9 +2164,8 @@ static bool SelectorMatches(Element* aElement,
           // have a chance at matching, of course, are ones that the element
           // actually has attributes in), short-circuiting if we ever match.
           result = false;
-          for (uint32_t i = 0; i < attrCount; ++i) {
-            const nsAttrName* attrName = aElement->GetAttrNameAt(i);
-            NS_ASSERTION(attrName, "GetAttrCount lied or GetAttrNameAt failed");
+          const nsAttrName* attrName;
+          for (uint32_t i = 0; (attrName = aElement->GetAttrNameAt(i)); ++i) {
             if (attrName->LocalName() != matchAttribute) {
               continue;
             }
@@ -3094,7 +3097,7 @@ InitWeightEntry(PLDHashTable *table, PLDHashEntryHdr *hdr,
   return true;
 }
 
-static PLDHashTableOps gRulesByWeightOps = {
+static const PLDHashTableOps gRulesByWeightOps = {
     PL_DHashAllocTable,
     PL_DHashFreeTable,
     HashIntKey,
@@ -3410,6 +3413,7 @@ TreeMatchContext::InitAncestors(Element *aElement)
 {
   MOZ_ASSERT(!mAncestorFilter.mFilter);
   MOZ_ASSERT(mAncestorFilter.mHashes.IsEmpty());
+  MOZ_ASSERT(mStyleScopes.IsEmpty());
 
   mAncestorFilter.mFilter = new AncestorFilter::Filter();
 
@@ -3434,6 +3438,32 @@ TreeMatchContext::InitAncestors(Element *aElement)
     // Now push them in reverse order.
     for (uint32_t i = ancestors.Length(); i-- != 0; ) {
       mAncestorFilter.PushAncestor(ancestors[i]);
+      PushStyleScope(ancestors[i]);
+    }
+  }
+}
+
+void
+TreeMatchContext::InitStyleScopes(Element* aElement)
+{
+  MOZ_ASSERT(mStyleScopes.IsEmpty());
+
+  if (MOZ_LIKELY(aElement)) {
+    // Collect up the ancestors
+    nsAutoTArray<Element*, 50> ancestors;
+    Element* cur = aElement;
+    do {
+      ancestors.AppendElement(cur);
+      nsINode* parent = cur->GetParentNode();
+      if (!parent || !parent->IsElement()) {
+        break;
+      }
+
+      cur = parent->AsElement();
+    } while (true);
+
+    // Now push them in reverse order.
+    for (uint32_t i = ancestors.Length(); i-- != 0; ) {
       PushStyleScope(ancestors[i]);
     }
   }

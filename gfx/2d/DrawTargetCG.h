@@ -3,6 +3,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#ifndef mozilla_gfx_DrawTargetCG_h
+#define mozilla_gfx_DrawTargetCG_h
+
 #include <ApplicationServices/ApplicationServices.h>
 
 #include "2D.h"
@@ -35,6 +38,12 @@ CGRectToRect(CGRect rect)
               rect.origin.y,
               rect.size.width,
               rect.size.height);
+}
+
+static inline Point
+CGPointToPoint(CGPoint point)
+{
+  return Point(point.x, point.y);
 }
 
 static inline void
@@ -170,3 +179,6 @@ private:
 
 }
 }
+
+#endif
+

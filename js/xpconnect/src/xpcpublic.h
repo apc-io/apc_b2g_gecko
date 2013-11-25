@@ -34,6 +34,39 @@ class nsIMemoryReporterCallback;
 #endif
 
 namespace xpc {
+
+class Scriptability {
+public:
+    Scriptability(JSCompartment *c);
+    bool Allowed();
+    bool IsImmuneToScriptPolicy();
+
+    void Block();
+    void Unblock();
+    void SetDocShellAllowsScript(bool aAllowed);
+
+    static Scriptability& Get(JSObject *aScope);
+
+private:
+    // Whenever a consumer wishes to prevent script from running on a global,
+    // it increments this value with a call to Block(). When it wishes to
+    // re-enable it (if ever), it decrements this value with a call to Unblock().
+    // Script may not run if this value is non-zero.
+    uint32_t mScriptBlocks;
+
+    // Whether the docshell allows javascript in this scope. If this scope
+    // doesn't have a docshell, this value is always true.
+    bool mDocShellAllowsScript;
+
+    // Whether this scope is immune to user-defined or addon-defined script
+    // policy.
+    bool mImmuneToScriptPolicy;
+
+    // Whether the new-style domain policy when this compartment was created
+    // forbids script execution.
+    bool mScriptBlockedByPolicy;
+};
+
 JSObject *
 TransplantObject(JSContext *cx, JS::HandleObject origobj, JS::HandleObject target);
 
@@ -54,11 +87,21 @@ GetXBLScope(JSContext *cx, JSObject *contentScope);
 bool
 AllowXBLScope(JSCompartment *c);
 
+// Returns whether we will use an XBL scope for this compartment. This is
+// semantically equivalent to comparing global != GetXBLScope(global), but it
+// does not have the side-effect of eagerly creating the XBL scope if it does
+// not already exist.
+bool
+UseXBLScope(JSCompartment *c);
+
 bool
 IsSandboxPrototypeProxy(JSObject *obj);
 
 bool
 IsReflector(JSObject *obj);
+
+bool
+IsXrayWrapper(JSObject *obj);
 } /* namespace xpc */
 
 namespace JS {
@@ -139,23 +182,37 @@ xpc_ActivateDebugMode();
 // readable string conversions, static methods and members only
 class XPCStringConvert
 {
+    // One-slot cache, because it turns out it's common for web pages to
+    // get the same string a few times in a row.  We get about a 40% cache
+    // hit rate on this cache last it was measured.  We'd get about 70%
+    // hit rate with a hashtable with removal on finalization, but that
+    // would take a lot more machinery.
+    struct ZoneStringCache
+    {
+        nsStringBuffer* mBuffer;
+        JSString* mString;
+    };
+
 public:
 
     // If the string shares the readable's buffer, that buffer will
     // get assigned to *sharedBuffer.  Otherwise null will be
     // assigned.
-    static jsval ReadableToJSVal(JSContext *cx, const nsAString &readable,
-                                 nsStringBuffer** sharedBuffer);
+    static bool ReadableToJSVal(JSContext *cx, const nsAString &readable,
+                                nsStringBuffer** sharedBuffer,
+                                JS::MutableHandleValue vp);
 
     // Convert the given stringbuffer/length pair to a jsval
     static MOZ_ALWAYS_INLINE bool
     StringBufferToJSVal(JSContext* cx, nsStringBuffer* buf, uint32_t length,
                         JS::MutableHandleValue rval, bool* sharedBuffer)
     {
-        if (buf == sCachedBuffer &&
-            JS::GetGCThingZone(sCachedString) == js::GetContextZone(cx))
-        {
-            rval.set(JS::StringValue(sCachedString));
+        JS::Zone *zone = js::GetContextZone(cx);
+        ZoneStringCache *cache = static_cast<ZoneStringCache*>(JS_GetZoneUserData(zone));
+        if (cache && buf == cache->mBuffer) {
+            MOZ_ASSERT(JS::GetGCThingZone(cache->mString) == zone);
+            JS::MarkStringAsLive(zone, cache->mString);
+            rval.setString(cache->mString);
             *sharedBuffer = false;
             return true;
         }
@@ -167,17 +224,20 @@ public:
             return false;
         }
         rval.setString(str);
-        sCachedString = str;
-        sCachedBuffer = buf;
+        if (!cache) {
+            cache = new ZoneStringCache();
+            JS_SetZoneUserData(zone, cache);
+        }
+        cache->mBuffer = buf;
+        cache->mString = str;
         *sharedBuffer = true;
         return true;
     }
 
-    static void ClearCache();
+    static void FreeZoneCache(JS::Zone *zone);
+    static void ClearZoneCache(JS::Zone *zone);
 
 private:
-    static nsStringBuffer* sCachedBuffer;
-    static JSString* sCachedString;
     static const JSStringFinalizer sDOMStringFinalizer;
 
     static void FinalizeDOMString(const JSStringFinalizer *fin, jschar *chars);
@@ -266,6 +326,7 @@ bool StringToJsval(JSContext* cx, mozilla::dom::DOMString& str,
 nsIPrincipal *GetCompartmentPrincipal(JSCompartment *compartment);
 
 bool IsXBLScope(JSCompartment *compartment);
+bool IsInXBLScope(JSObject *obj);
 
 void SetLocationForGlobal(JSObject *global, const nsACString& location);
 void SetLocationForGlobal(JSObject *global, nsIURI *locationURI);
@@ -342,6 +403,13 @@ GetJunkScope();
  */
 nsIGlobalObject *
 GetJunkScopeGlobal();
+
+/**
+ * If |aObj| has a window for a global, returns the associated nsGlobalWindow.
+ * Otherwise, returns null.
+ */
+nsGlobalWindow*
+WindowGlobalOrNull(JSObject *aObj);
 
 // Error reporter used when there is no associated DOM window on to which to
 // report errors and warnings.

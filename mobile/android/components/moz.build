@@ -8,7 +8,7 @@ XPIDL_SOURCES += [
     'SessionStore.idl',
 ]
 
-MODULE = 'MobileComponents'
+XPIDL_MODULE = 'MobileComponents'
 
 EXTRA_COMPONENTS += [
     'AddonUpdateService.js',
@@ -22,6 +22,7 @@ EXTRA_COMPONENTS += [
     'PaymentsUI.js',
     'PromptService.js',
     'SiteSpecificUserAgent.js',
+    'Snippets.js',
     'XPIDialogService.js',
 ]
 

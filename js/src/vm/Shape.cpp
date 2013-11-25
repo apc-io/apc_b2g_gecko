@@ -330,15 +330,12 @@ Shape::replaceLastProperty(ExclusiveContext *cx, const StackBaseShape &base,
                                            base.flags & BaseShape::OBJECT_FLAG_MASK);
     }
 
-    StackShape child(shape);
-    StackShape::AutoRooter childRoot(cx, &child);
-    {
-        UnownedBaseShape *nbase = BaseShape::getUnowned(cx, base);
-        if (!nbase)
-            return nullptr;
+    UnownedBaseShape *nbase = BaseShape::getUnowned(cx, base);
+    if (!nbase)
+        return nullptr;
 
-        child.base = nbase;
-    }
+    StackShape child(shape);
+    child.base = nbase;
 
     return cx->compartment()->propertyTree.getChild(cx, shape->parent,
                                                     shape->numFixedSlots(), child);
@@ -396,6 +393,7 @@ JSObject::getChildPropertyOnDictionary(ThreadSafeContext *cx, JS::HandleObject o
 JSObject::getChildProperty(ExclusiveContext *cx,
                            HandleObject obj, HandleShape parent, StackShape &child)
 {
+    StackShape::AutoRooter childRoot(cx, &child);
     RootedShape shape(cx, getChildPropertyOnDictionary(cx, obj, parent, child));
 
     if (!shape) {
@@ -415,6 +413,7 @@ JSObject::getChildProperty(ExclusiveContext *cx,
 JSObject::lookupChildProperty(ThreadSafeContext *cx,
                               HandleObject obj, HandleShape parent, StackShape &child)
 {
+    StackShape::AutoRooter childRoot(cx, &child);
     JS_ASSERT(cx->isThreadLocal(obj));
 
     RootedShape shape(cx, getChildPropertyOnDictionary(cx, obj, parent, child));
@@ -673,6 +672,61 @@ JSObject::addPropertyInternal<ParallelExecution>(ForkJoinSlice *cx,
                                                  unsigned flags, int shortid, Shape **spp,
                                                  bool allowDictionary);
 
+JSObject *
+js::NewReshapedObject(JSContext *cx, HandleTypeObject type, JSObject *parent,
+                      gc::AllocKind allocKind, HandleShape shape, NewObjectKind newKind)
+{
+    RootedObject res(cx, NewObjectWithType(cx, type, parent, allocKind, newKind));
+    if (!res)
+        return nullptr;
+
+    if (shape->isEmptyShape())
+        return res;
+
+    /* Get all the ids in the object, in order. */
+    js::AutoIdVector ids(cx);
+    {
+        for (unsigned i = 0; i <= shape->slot(); i++) {
+            if (!ids.append(JSID_VOID))
+                return nullptr;
+        }
+        Shape *nshape = shape;
+        while (!nshape->isEmptyShape()) {
+            ids[nshape->slot()] = nshape->propid();
+            nshape = nshape->previous();
+        }
+    }
+
+    /* Construct the new shape, without updating type information. */
+    RootedId id(cx);
+    RootedShape newShape(cx, res->lastProperty());
+    for (unsigned i = 0; i < ids.length(); i++) {
+        id = ids[i];
+        JS_ASSERT(!res->nativeContains(cx, id));
+
+        uint32_t index;
+        bool indexed = js_IdIsIndex(id, &index);
+
+        Rooted<UnownedBaseShape*> nbase(cx, newShape->base()->unowned());
+        if (indexed) {
+            StackBaseShape base(nbase);
+            base.flags |= BaseShape::INDEXED;
+            nbase = GetOrLookupUnownedBaseShape<SequentialExecution>(cx, base);
+            if (!nbase)
+                return nullptr;
+        }
+
+        StackShape child(nbase, id, i, res->numFixedSlots(), JSPROP_ENUMERATE, 0, 0);
+        newShape = cx->compartment()->propertyTree.getChild(cx, newShape, res->numFixedSlots(), child);
+        if (!newShape)
+            return nullptr;
+        if (!JSObject::setLastProperty(cx, res, newShape))
+            return nullptr;
+    }
+
+    return res;
+}
+
 /*
  * Check and adjust the new attributes for the shape to make sure that our
  * slot access optimizations are sound. It is responsibility of the callers to
@@ -923,16 +977,6 @@ JSObject::changeProperty(typename ExecutionModeTraits<mode>::ExclusiveContextTyp
             return nullptr;
     } else {
         types::MarkTypePropertyConfigured(cx->asExclusiveContext(), obj, shape->propid());
-    }
-
-    if (attrs & (JSPROP_GETTER | JSPROP_SETTER)) {
-        if (mode == ParallelExecution) {
-            if (!types::HasTypePropertyId(obj, shape->propid(), types::Type::UnknownType()))
-                return nullptr;
-        } else {
-            types::AddTypePropertyId(cx->asExclusiveContext(), obj, shape->propid(),
-                                     types::Type::UnknownType());
-        }
     }
 
     if (getter == JS_PropertyStub)

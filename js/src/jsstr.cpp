@@ -382,9 +382,9 @@ str_enumerate(JSContext *cx, HandleObject obj)
     return true;
 }
 
-static bool
-str_resolve(JSContext *cx, HandleObject obj, HandleId id, unsigned flags,
-            MutableHandleObject objp)
+bool
+js::str_resolve(JSContext *cx, HandleObject obj, HandleId id, unsigned flags,
+                MutableHandleObject objp)
 {
     if (!JSID_IS_INT(id))
         return true;
@@ -1704,7 +1704,7 @@ class MOZ_STACK_CLASS StringRegExpGuard
             if (!arg)
                 return false;
 
-            fm.patstr = AtomizeString<CanGC>(cx, arg);
+            fm.patstr = AtomizeString(cx, arg);
             if (!fm.patstr)
                 return false;
         }
@@ -1788,8 +1788,14 @@ class MOZ_STACK_CLASS StringRegExpGuard
         if (!regExpIsObject())
             return true;
 
-        // Don't use RegExpObject::setLastIndex, because that ignores the
-        // writability of "lastIndex" on this user-controlled RegExp object.
+        // Use a fast path for same-global RegExp objects with writable
+        // lastIndex.
+        if (obj_->is<RegExpObject>() && obj_->nativeLookup(cx, cx->names().lastIndex)->writable()) {
+            obj_->as<RegExpObject>().zeroLastIndex();
+            return true;
+        }
+
+        // Handle everything else generically (including throwing if .lastIndex is non-writable).
         RootedValue zero(cx, Int32Value(0));
         return JSObject::setProperty(cx, obj_, obj_, cx->names().lastIndex, &zero, true);
     }
@@ -2999,7 +3005,7 @@ class SplitMatchResult {
 } /* anonymous namespace */
 
 template<class Matcher>
-static JSObject *
+static ArrayObject *
 SplitHelper(JSContext *cx, Handle<JSLinearString*> str, uint32_t limit, const Matcher &splitMatch,
             Handle<TypeObject*> type)
 {
@@ -3281,6 +3287,28 @@ js::str_split(JSContext *cx, unsigned argc, Value *vp)
     aobj->setType(type);
     args.rval().setObject(*aobj);
     return true;
+}
+
+JSObject *
+js::str_split_string(JSContext *cx, HandleTypeObject type, HandleString str, HandleString sep)
+{
+    Rooted<JSLinearString*> linearStr(cx, str->ensureLinear(cx));
+    if (!linearStr)
+        return nullptr;
+
+    Rooted<JSLinearString*> linearSep(cx, sep->ensureLinear(cx));
+    if (!linearSep)
+        return nullptr;
+
+    uint32_t limit = UINT32_MAX;
+
+    SplitStringMatcher matcher(cx, linearSep);
+    ArrayObject *aobj = SplitHelper(cx, linearStr, limit, matcher, type);
+    if (!aobj)
+        return nullptr;
+
+    aobj->setType(type);
+    return aobj;
 }
 
 static bool
@@ -3961,6 +3989,12 @@ js::ToStringSlow<CanGC>(ExclusiveContext *cx, HandleValue arg);
 template JSString *
 js::ToStringSlow<NoGC>(ExclusiveContext *cx, Value arg);
 
+JS_PUBLIC_API(JSString *)
+js::ToStringSlow(JSContext *cx, HandleValue v)
+{
+    return ToStringSlow<CanGC>(cx, v);
+}
+
 JSString *
 js::ValueToSource(JSContext *cx, HandleValue v)
 {
@@ -4059,13 +4093,20 @@ CompareStringsImpl(JSContext *cx, JSString *str1, JSString *str2, int32_t *resul
     if (!s2)
         return false;
 
-    return CompareChars(s1, str1->length(), s2, str2->length(), result);
+    *result = CompareChars(s1, str1->length(), s2, str2->length());
+    return true;
 }
 
 bool
 js::CompareStrings(JSContext *cx, JSString *str1, JSString *str2, int32_t *result)
 {
     return CompareStringsImpl(cx, str1, str2, result);
+}
+
+int32_t
+js::CompareAtoms(JSAtom *atom1, JSAtom *atom2)
+{
+    return CompareChars(atom1->chars(), atom1->length(), atom2->chars(), atom2->length());
 }
 
 bool

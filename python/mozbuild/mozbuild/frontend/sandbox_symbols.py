@@ -78,6 +78,18 @@ VARIABLES = {
         Accepts assembler, C, C++, Objective C/C++.
         """, 'compile'),
 
+    'GENERATED_SOURCES': (StrictOrderingOnAppendList, list, [],
+        """Generated source code files.
+
+        This variable contains a list of generated source code files to
+        compile. Accepts assembler, C, C++, Objective C/C++.
+        """, 'compile'),
+
+    'FILES_PER_UNIFIED_FILE': (int, int, None,
+        """The number of source files to compile into each unified source file.
+
+        """, 'None'),
+
     'UNIFIED_SOURCES': (StrictOrderingOnAppendList, list, [],
         """Source code files that can be compiled together.
 
@@ -86,6 +98,23 @@ VARIABLES = {
         file. This can help make the build faster and reduce the debug info
         size.
         """, 'compile'),
+
+    'GENERATED_UNIFIED_SOURCES': (StrictOrderingOnAppendList, list, [],
+        """Generated source code files that can be compiled together.
+
+        This variable contains a list of generated source code files to
+        compile, that can be concatenated all together, with UNIFIED_SOURCES,
+        and built as a single source file. This can help make the build faster
+        and reduce the debug info size.
+        """, 'compile'),
+
+    'GENERATED_FILES': (StrictOrderingOnAppendList, list, [],
+        """Generic generated files.
+
+        This variable contains a list of generate files for the build system
+        to generate at export time. The rules for those files still live in
+        Makefile.in.
+        """, 'export'),
 
     'DEFINES': (OrderedDict, dict, OrderedDict(),
         """Dictionary of compiler defines to declare.
@@ -162,6 +191,14 @@ VARIABLES = {
        This variable contains a list of files to preprocess.  Generated
        files will be installed in the ``/components`` directory of the distribution.
         """, 'libs'),
+
+    'FINAL_LIBRARY': (unicode, unicode, "",
+        """Library in which the objects of the current directory will be linked.
+
+        This variable contains the name of a library, defined elsewhere with
+        ``LIBRARY_NAME``, in which the objects of the current directory will be
+        linked.
+        """, 'binaries'),
 
     'CPP_UNIT_TESTS': (StrictOrderingOnAppendList, list, [],
         """C++ source files for unit tests.
@@ -283,18 +320,26 @@ VARIABLES = {
         (``$DIST/sdk/lib``).
         """, None),
 
-    'SHARED_LIBRARY_LIBS': (StrictOrderingOnAppendList, list, [],
-        """Libraries linked into a shared library.
-
-        A list of static library paths which should be linked into the
-        current shared library.
-        """, None),
-
     'SIMPLE_PROGRAMS': (StrictOrderingOnAppendList, list, [],
-        """Generate a list of binaries from source.
+        """Compile a list of executable names.
 
-        A list of sources, one per program, to compile & link with libs
-        into standalone programs.
+        Each name in this variable corresponds to an executable built from the
+        corresponding source file with the same base name.
+
+        If the configuration token ``BIN_SUFFIX`` is set, its value will be
+        automatically appended to each name. If a name already ends with
+        ``BIN_SUFFIX``, the name will remain unchanged.
+        """, 'binaries'),
+
+    'HOST_SIMPLE_PROGRAMS': (StrictOrderingOnAppendList, list, [],
+        """Compile a list of host executable names.
+
+        Each name in this variable corresponds to a hosst executable built
+        from the corresponding source file with the same base name.
+
+        If the configuration token ``HOST_BIN_SUFFIX`` is set, its value will
+        be automatically appended to each name. If a name already ends with
+        ``HOST_BIN_SUFFIX``, the name will remain unchanged.
         """, 'binaries'),
 
     'TOOL_DIRS': (list, list, [],
@@ -367,14 +412,6 @@ VARIABLES = {
         into account the values of ``AC_DEFINE`` instead of ``AC_SUBST``.
         """, None),
 
-    'MODULE': (unicode, unicode, "",
-        """Module name.
-
-        Historically, this variable was used to describe where to install header
-        files, but that feature is now handled by ``EXPORTS_NAMESPACES``.
-        ``MODULE`` will likely be removed in the future.
-        """, None),
-
     'EXPORTS': (HierarchicalStringList, list, HierarchicalStringList(),
         """List of files to be exported, and in which subdirectories.
 
@@ -396,6 +433,14 @@ VARIABLES = {
         If the configuration token ``BIN_SUFFIX`` is set, its value will be
         automatically appended to ``PROGRAM``. If ``PROGRAM`` already ends with
         ``BIN_SUFFIX``, ``PROGRAM`` will remain unchanged.
+        """, 'binaries'),
+
+    'HOST_PROGRAM' : (unicode, unicode, "",
+        """Compiled host executable name.
+
+        If the configuration token ``HOST_BIN_SUFFIX`` is set, its value will be
+        automatically appended to ``HOST_PROGRAM``. If ``HOST_PROGRAM`` already
+        ends with ``HOST_BIN_SUFFIX``, ``HOST_PROGRAM`` will remain unchanged.
         """, 'binaries'),
 
     'NO_DIST_INSTALL': (bool, bool, False,

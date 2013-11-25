@@ -55,12 +55,21 @@ class TypeRepresentationSetBuilder {
 
 class TypeRepresentationSet {
   private:
+    friend struct TypeRepresentationSetHasher;
     friend class TypeRepresentationSetBuilder;
 
     size_t length_;
     TypeRepresentation **entries_; // Allocated using temp policy
 
     TypeRepresentationSet(size_t length, TypeRepresentation **entries);
+
+    size_t length() const {
+        return length_;
+    }
+
+    TypeRepresentation *get(uint32_t i) const {
+        return entries_[i];
+    }
 
   public:
     //////////////////////////////////////////////////////////////////////
@@ -76,14 +85,32 @@ class TypeRepresentationSet {
     // Query the set
 
     bool empty();
-    size_t length();
-    TypeRepresentation *get(size_t i);
+    bool singleton();
     bool allOfKind(TypeRepresentation::Kind kind);
+
+    // Returns true only when non-empty and `kind()` is
+    // `TypeRepresentation::Array`
+    bool allOfArrayKind();
+
+    // Returns true only if (1) non-empty, (2) for all types t in this
+    // set, t is sized, and (3) there is some size S such that for all
+    // types t in this set, `t.size() == S`.  When the above holds,
+    // then also sets `*out` to S; otherwise leaves `*out` unchanged
+    // and returns false.
+    //
+    // At the moment condition (2) trivially holds.  When Bug 922115
+    // lands, some array types will be unsized.
+    bool allHaveSameSize(size_t *out);
 
     //////////////////////////////////////////////////////////////////////
     // The following operations are only valid on a non-empty set:
 
     TypeRepresentation::Kind kind();
+
+    //////////////////////////////////////////////////////////////////////
+    // The following operations are only valid on a singleton set:
+
+    TypeRepresentation *getTypeRepresentation();
 
     //////////////////////////////////////////////////////////////////////
     // Array operations

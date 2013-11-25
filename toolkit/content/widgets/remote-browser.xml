@@ -45,8 +45,8 @@
             if (!this._remoteWebProgress) {
               let jsm = "resource://gre/modules/RemoteWebProgress.jsm";
               let RemoteWebProgressManager = Cu.import(jsm, {}).RemoteWebProgressManager;
-              this._remoteWebProgress = new RemoteWebProgressManager(this)
-                                         .topLevelWebProgress;
+              this._remoteWebProgressManager = new RemoteWebProgressManager(this);
+              this._remoteWebProgress = this._remoteWebProgressManager.topLevelWebProgress;
             }
             return this._remoteWebProgress;
       	  ]]>
@@ -67,6 +67,19 @@
       </property>
 
       <field name="_documentURI">null</field>
+
+      <!--
+        Used by session restore to ensure that currentURI is set so
+        that switch-to-tab works before the tab is fully
+        restored. This function also invokes onLocationChanged
+        listeners in tabbrowser.xml.
+      -->
+      <method name="_setCurrentURI">
+        <parameter name="aURI"/>
+        <body><![CDATA[
+          this._remoteWebProgressManager.setCurrentURI(aURI);
+        ]]></body>
+      </method>
 
       <property name="documentURI"
                 onget="return this._documentURI;"
@@ -94,6 +107,12 @@
                 onget="return this.contentWindow ? this.contentWindow.document : null"
                 readonly="true"/>
 
+      <field name="_syncHandler">null</field>
+
+      <property name="syncHandler"
+                onget="return this._syncHandler"
+                readonly="true"/>
+
       <field name="_imageDocument">null</field>
 
       <property name="imageDocument"
@@ -108,6 +127,7 @@
 
           this.messageManager.addMessageListener("DOMTitleChanged", this);
           this.messageManager.addMessageListener("ImageDocumentLoaded", this);
+          this.messageManager.addMessageListener("SetSyncHandler", this);
           this.messageManager.loadFrameScript("chrome://global/content/browser-child.js", true);
 
           if (this.hasAttribute("selectpopup")) {
@@ -144,6 +164,10 @@
                 width: data.width,
                 height: data.height
               };
+              break;
+
+            case "SetSyncHandler":
+              this._syncHandler = aMessage.objects.handler;
               break;
 
             case "Forms:ShowDropDown": {

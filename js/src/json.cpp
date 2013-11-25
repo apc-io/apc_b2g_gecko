@@ -688,7 +688,7 @@ Walk(JSContext *cx, HandleObject holder, HandleId name, HandleValue reviver, Mut
             RootedId id(cx);
             RootedValue newElement(cx);
             for (uint32_t i = 0; i < length; i++) {
-                if (!IndexToId(cx, i, &id))
+                if (!IndexToId(cx, i, id.address()))
                     return false;
 
                 /* Step 2a(iii)(1). */
@@ -885,7 +885,7 @@ js_InitJSONClass(JSContext *cx, HandleObject obj)
     if (!JS_DefineFunctions(cx, JSON, json_static_methods))
         return nullptr;
 
-    global->markStandardClassInitializedNoProto(&JSONClass);
+    global->setConstructor(JSProto_JSON, ObjectValue(*JSON));
 
     return JSON;
 }

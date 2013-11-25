@@ -1360,16 +1360,7 @@ gfxFontFamily::AddSizeOfIncludingThis(MallocSizeOf aMallocSizeOf,
  * shaped-word caches to free up memory.
  */
 
-NS_IMPL_ISUPPORTS1(gfxFontCache::MemoryReporter, nsIMemoryReporter)
-
 NS_MEMORY_REPORTER_MALLOC_SIZEOF_FUN(FontCacheMallocSizeOf)
-
-NS_IMETHODIMP
-gfxFontCache::MemoryReporter::GetName(nsACString &aName)
-{
-    aName.AssignLiteral("font-cache");
-    return NS_OK;
-}
 
 NS_IMETHODIMP
 gfxFontCache::MemoryReporter::CollectReports
@@ -1455,6 +1446,9 @@ gfxFontCache::gfxFontCache()
         obs->AddObserver(new Observer, "memory-pressure", false);
     }
 
+#ifndef RELEASE_BUILD
+    // Currently disabled for release builds, due to unexplained crashes
+    // during expiration; see bug 717175 & 894798.
     mWordCacheExpirationTimer = do_CreateInstance("@mozilla.org/timer;1");
     if (mWordCacheExpirationTimer) {
         mWordCacheExpirationTimer->
@@ -1462,6 +1456,7 @@ gfxFontCache::gfxFontCache()
                                  SHAPED_WORD_TIMEOUT_SECONDS * 1000,
                                  nsITimer::TYPE_REPEATING_SLACK);
     }
+#endif
 }
 
 gfxFontCache::~gfxFontCache()
@@ -2643,7 +2638,10 @@ gfxFont::Draw(gfxTextRun *aTextRun, uint32_t aStart, uint32_t aEnd,
       DrawOptions drawOptions;
       drawOptions.mAntialiasMode = Get2DAAMode(mAntialiasOption);
 
-      if (mScaledFont) {
+      // The cairo DrawTarget backend uses the cairo_scaled_font directly
+      // and so has the font skew matrix applied already.
+      if (mScaledFont &&
+          dt->GetType() != BACKEND_CAIRO) {
         cairo_matrix_t matrix;
         cairo_scaled_font_get_font_matrix(mScaledFont, &matrix);
         if (matrix.xy != 0) {
@@ -3313,6 +3311,17 @@ gfxFont::ShapeFragmentWithoutWordCache(gfxContext *aContext,
     return ok;
 }
 
+// Check if aCh is an unhandled control character that should be displayed
+// as a hexbox rather than rendered by some random font on the system.
+// We exclude \r as stray &#13;s are rather common (bug 941940).
+// Note that \n and \t don't come through here, as they have specific
+// meanings that have already been handled.
+static bool
+IsInvalidControlChar(uint32_t aCh)
+{
+    return aCh != '\r' && ((aCh & 0x7f) < 0x20 || aCh == 0x7f);
+}
+
 template<typename T>
 bool
 gfxFont::ShapeTextWithoutWordCache(gfxContext *aContext,
@@ -3346,11 +3355,14 @@ gfxFont::ShapeTextWithoutWordCache(gfxContext *aContext,
         }
 
         // fragment was terminated by an invalid char: skip it,
+        // unless it's a control char that we want to show as a hexbox,
         // but record where TAB or NEWLINE occur
         if (ch == '\t') {
             aTextRun->SetIsTab(aOffset + i);
         } else if (ch == '\n') {
             aTextRun->SetIsNewline(aOffset + i);
+        } else if (IsInvalidControlChar(ch)) {
+            aTextRun->SetMissingGlyph(aOffset + i, ch, this);
         }
         fragStart = i + 1;
     }
@@ -3487,11 +3499,14 @@ gfxFont::SplitAndInitTextRun(gfxContext *aContext,
                      "how did we get here except via an invalid char?");
 
         // word was terminated by an invalid char: skip it,
+        // unless it's a control char that we want to show as a hexbox,
         // but record where TAB or NEWLINE occur
         if (ch == '\t') {
             aTextRun->SetIsTab(aRunStart + i);
         } else if (ch == '\n') {
             aTextRun->SetIsNewline(aRunStart + i);
+        } else if (IsInvalidControlChar(ch)) {
+            aTextRun->SetMissingGlyph(aRunStart + i, ch, this);
         }
 
         hash = 0;
@@ -3995,8 +4010,13 @@ gfxGlyphExtents::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
     return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
 }
 
-gfxFontGroup::gfxFontGroup(const nsAString& aFamilies, const gfxFontStyle *aStyle, gfxUserFontSet *aUserFontSet)
-    : mFamilies(aFamilies), mStyle(*aStyle), mUnderlineOffset(UNDERLINE_OFFSET_NOT_SET)
+gfxFontGroup::gfxFontGroup(const nsAString& aFamilies,
+                           const gfxFontStyle *aStyle,
+                           gfxUserFontSet *aUserFontSet)
+    : mFamilies(aFamilies)
+    , mStyle(*aStyle)
+    , mUnderlineOffset(UNDERLINE_OFFSET_NOT_SET)
+    , mHyphenWidth(-1)
 {
     mUserFontSet = nullptr;
     SetUserFontSet(aUserFontSet);
@@ -4163,14 +4183,14 @@ gfxFontGroup::Copy(const gfxFontStyle *aStyle)
 bool 
 gfxFontGroup::IsInvalidChar(uint8_t ch)
 {
-    return ((ch & 0x7f) < 0x20);
+    return ((ch & 0x7f) < 0x20 || ch == 0x7f);
 }
 
 bool 
 gfxFontGroup::IsInvalidChar(PRUnichar ch)
 {
     // All printable 7-bit ASCII values are OK
-    if (ch >= ' ' && ch < 0x80) {
+    if (ch >= ' ' && ch < 0x7f) {
         return false;
     }
     // No point in sending non-printing control chars through font shaping
@@ -4430,6 +4450,36 @@ gfxFontGroup::MakeBlankTextRun(uint32_t aLength,
 
     textRun->AddGlyphRun(GetFontAt(0), gfxTextRange::kFontGroup, 0, false);
     return textRun;
+}
+
+gfxTextRun *
+gfxFontGroup::MakeHyphenTextRun(gfxContext *aCtx, uint32_t aAppUnitsPerDevUnit)
+{
+    // only use U+2010 if it is supported by the first font in the group;
+    // it's better to use ASCII '-' from the primary font than to fall back to
+    // U+2010 from some other, possibly poorly-matching face
+    static const PRUnichar hyphen = 0x2010;
+    gfxFont *font = GetFontAt(0);
+    if (font && font->HasCharacter(hyphen)) {
+        return MakeTextRun(&hyphen, 1, aCtx, aAppUnitsPerDevUnit,
+                           gfxFontGroup::TEXT_IS_PERSISTENT);
+    }
+
+    static const uint8_t dash = '-';
+    return MakeTextRun(&dash, 1, aCtx, aAppUnitsPerDevUnit,
+                       gfxFontGroup::TEXT_IS_PERSISTENT);
+}
+
+gfxFloat
+gfxFontGroup::GetHyphenWidth(gfxContext *aCtx, uint32_t aAppUnitsPerDevUnit)
+{
+    if (mHyphenWidth < 0) {
+        nsAutoPtr<gfxTextRun> hyphRun(MakeHyphenTextRun(aCtx,
+                                                        aAppUnitsPerDevUnit));
+        mHyphenWidth = hyphRun.get() ?
+            hyphRun->GetAdvanceWidth(0, hyphRun->GetLength(), nullptr) : 0;
+    }
+    return mHyphenWidth;
 }
 
 gfxTextRun *

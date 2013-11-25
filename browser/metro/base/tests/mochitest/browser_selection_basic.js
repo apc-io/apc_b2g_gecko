@@ -8,7 +8,7 @@
 let gWindow = null;
 var gFrame = null;
 
-const kMarkerOffsetY = 12;
+const kMarkerOffsetY = 6;
 const kCommonWaitMs = 5000;
 const kCommonPollMs = 100;
 
@@ -53,21 +53,6 @@ gTests.push({
   tearDown: setUpAndTearDown,
   run: function test() {
     sendContextMenuClick(30, 20);
-
-    yield waitForCondition(function () {
-        return SelectionHelperUI.isSelectionUIVisible;
-      }, kCommonWaitMs, kCommonPollMs);
-
-    is(getTrimmedSelection(gWindow).toString(), "There", "selection test");
-  },
-});
-
-gTests.push({
-  desc: "double-tap to select",
-  setUp: setUpAndTearDown,
-  tearDown: setUpAndTearDown,
-  run: function test() {
-    sendDoubleTap(gWindow, 30, 20);
 
     yield waitForCondition(function () {
         return SelectionHelperUI.isSelectionUIVisible;

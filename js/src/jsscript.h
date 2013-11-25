@@ -81,19 +81,31 @@ struct JSTryNote {
 
 namespace js {
 
+struct BlockScopeNote {
+    uint32_t        index;      // Index of StaticScopeObject in the object array.
+    uint32_t        start;      // Bytecode offset at which this scope starts.
+    uint32_t        length;     // Bytecode length of scope.
+    uint32_t        padding;    // Pad to 64-bit boundary.
+};
+
 struct ConstArray {
     js::HeapValue   *vector;    /* array of indexed constant values */
     uint32_t        length;
 };
 
 struct ObjectArray {
-    js::HeapPtrObject *vector;  /* array of indexed objects */
-    uint32_t        length;     /* count of indexed objects */
+    js::HeapPtrObject *vector;  // Array of indexed objects.
+    uint32_t        length;     // Count of indexed objects.
 };
 
 struct TryNoteArray {
-    JSTryNote       *vector;    /* array of indexed try notes */
-    uint32_t        length;     /* count of indexed try notes */
+    JSTryNote       *vector;    // Array of indexed try notes.
+    uint32_t        length;     // Count of indexed try notes.
+};
+
+struct BlockScopeArray {
+    BlockScopeNote *vector;     // Array of indexed BlockScopeNote records.
+    uint32_t        length;     // Count of indexed try notes.
 };
 
 /*
@@ -285,6 +297,36 @@ typedef HashMap<JSScript *,
                 DefaultHasher<JSScript *>,
                 SystemAllocPolicy> DebugScriptMap;
 
+class ScriptSource;
+
+class SourceDataCache
+{
+    typedef HashMap<ScriptSource *,
+                    const jschar *,
+                    DefaultHasher<ScriptSource *>,
+                    SystemAllocPolicy> Map;
+    Map *map_;
+    size_t numSuppressPurges_;
+
+  public:
+    SourceDataCache() : map_(nullptr), numSuppressPurges_(0) {}
+
+    class AutoSuppressPurge
+    {
+        SourceDataCache &cache_;
+        mozilla::DebugOnly<size_t> oldValue_;
+      public:
+        explicit AutoSuppressPurge(JSContext *cx);
+        ~AutoSuppressPurge();
+        SourceDataCache &cache() const { return cache_; }
+    };
+
+    const jschar *lookup(ScriptSource *ss, const AutoSuppressPurge &asp);
+    bool put(ScriptSource *ss, const jschar *chars, const AutoSuppressPurge &asp);
+
+    void purge();
+};
+
 class ScriptSource
 {
     friend class SourceCompressionTask;
@@ -357,7 +399,7 @@ class ScriptSource
         JS_ASSERT(hasSourceData());
         return argumentsNotIncluded_;
     }
-    const jschar *chars(JSContext *cx);
+    const jschar *chars(JSContext *cx, const SourceDataCache::AutoSuppressPurge &asp);
     JSStableString *substring(JSContext *cx, uint32_t start, uint32_t stop);
     size_t sizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf);
 
@@ -413,7 +455,8 @@ class ScriptSourceObject : public JSObject
     static const Class class_;
 
     static void finalize(FreeOp *fop, JSObject *obj);
-    static ScriptSourceObject *create(ExclusiveContext *cx, ScriptSource *source);
+    static ScriptSourceObject *create(ExclusiveContext *cx, ScriptSource *source,
+                                      const ReadOnlyCompileOptions &options);
 
     ScriptSource *source() {
         return static_cast<ScriptSource *>(getReservedSlot(SOURCE_SLOT).toPrivate());
@@ -421,8 +464,14 @@ class ScriptSourceObject : public JSObject
 
     void setSource(ScriptSource *source);
 
+    JSObject *element() const;
+    const Value &elementProperty() const;
+
   private:
     static const uint32_t SOURCE_SLOT = 0;
+    static const uint32_t ELEMENT_SLOT = 1;
+    static const uint32_t ELEMENT_PROPERTY_SLOT = 2;
+    static const uint32_t RESERVED_SLOTS = 3;
 };
 
 enum GeneratorKind { NotGenerator, LegacyGenerator, StarGenerator };
@@ -472,7 +521,12 @@ class JSScript : public js::gc::BarrieredCell<JSScript>
     js::types::TypeScript *types;
 
   private:
-    js::HeapPtrObject sourceObject_; /* source code object */
+    // This script's ScriptSourceObject, or a CCW thereof.
+    //
+    // (When we clone a JSScript into a new compartment, we don't clone its
+    // source object. Instead, the clone refers to a wrapper.)
+    js::HeapPtrObject sourceObject_;
+
     js::HeapPtrFunction function_;
 
     // For callsite clones, which cannot have enclosing scopes, the original
@@ -552,6 +606,7 @@ class JSScript : public js::gc::BarrieredCell<JSScript>
         OBJECTS,
         REGEXPS,
         TRYNOTES,
+        BLOCK_SCOPES,
         ARRAY_KIND_BITS
     };
 
@@ -564,7 +619,7 @@ class JSScript : public js::gc::BarrieredCell<JSScript>
     uint8_t         generatorKindBits_:2;
 
     // Unused padding; feel free to steal these if you need them.
-    uint8_t         padToByte_:2;
+    uint8_t         padToByte_:1;
 
     // 1-bit fields.
 
@@ -639,8 +694,8 @@ class JSScript : public js::gc::BarrieredCell<JSScript>
   public:
     static JSScript *Create(js::ExclusiveContext *cx,
                             js::HandleObject enclosingScope, bool savedCallerFun,
-                            const JS::CompileOptions &options, unsigned staticLevel,
-                            js::HandleScriptSource sourceObject, uint32_t sourceStart,
+                            const JS::ReadOnlyCompileOptions &options, unsigned staticLevel,
+                            js::HandleObject sourceObject, uint32_t sourceStart,
                             uint32_t sourceEnd);
 
     void initCompartment(js::ExclusiveContext *cx);
@@ -650,8 +705,9 @@ class JSScript : public js::gc::BarrieredCell<JSScript>
     // successfully creating any kind (function or other) of new JSScript.
     // However, callers of fullyInitFromEmitter() do not need to do this.
     static bool partiallyInit(js::ExclusiveContext *cx, JS::Handle<JSScript*> script,
-                              uint32_t nobjects, uint32_t nregexps,
-                              uint32_t ntrynotes, uint32_t nconsts, uint32_t nTypeSets);
+                              uint32_t nconsts, uint32_t nobjects, uint32_t nregexps,
+                              uint32_t ntrynotes, uint32_t nblockscopes,
+                              uint32_t nTypeSets);
     static bool fullyInitFromEmitter(js::ExclusiveContext *cx, JS::Handle<JSScript*> script,
                                      js::frontend::BytecodeEmitter *bce);
     // Initialize a no-op script.
@@ -813,9 +869,9 @@ class JSScript : public js::gc::BarrieredCell<JSScript>
 
     static bool loadSource(JSContext *cx, js::ScriptSource *ss, bool *worked);
 
-    void setSourceObject(js::ScriptSourceObject *object);
-    js::ScriptSourceObject *sourceObject() const;
-    js::ScriptSource *scriptSource() const { return sourceObject()->source(); }
+    void setSourceObject(JSObject *object);
+    JSObject *sourceObject() const { return sourceObject_; }
+    js::ScriptSource *scriptSource() const;
     JSPrincipals *originPrincipals() const { return scriptSource()->originPrincipals(); }
     const char *filename() const { return scriptSource()->filename(); }
 
@@ -913,6 +969,7 @@ class JSScript : public js::gc::BarrieredCell<JSScript>
     bool hasObjects()       { return hasArray(OBJECTS);     }
     bool hasRegexps()       { return hasArray(REGEXPS);     }
     bool hasTrynotes()      { return hasArray(TRYNOTES);    }
+    bool hasBlockScopes()   { return hasArray(BLOCK_SCOPES); }
 
     #define OFF(fooOff, hasFoo, t)   (fooOff() + (hasFoo() ? sizeof(t) : 0))
 
@@ -920,6 +977,7 @@ class JSScript : public js::gc::BarrieredCell<JSScript>
     size_t objectsOffset()    { return OFF(constsOffset,     hasConsts,     js::ConstArray);      }
     size_t regexpsOffset()    { return OFF(objectsOffset,    hasObjects,    js::ObjectArray);     }
     size_t trynotesOffset()   { return OFF(regexpsOffset,    hasRegexps,    js::ObjectArray);     }
+    size_t blockScopesOffset(){ return OFF(trynotesOffset,   hasTrynotes,   js::TryNoteArray);    }
 
     js::ConstArray *consts() {
         JS_ASSERT(hasConsts());
@@ -939,6 +997,11 @@ class JSScript : public js::gc::BarrieredCell<JSScript>
     js::TryNoteArray *trynotes() {
         JS_ASSERT(hasTrynotes());
         return reinterpret_cast<js::TryNoteArray *>(data + trynotesOffset());
+    }
+
+    js::BlockScopeArray *blockScopes() {
+        JS_ASSERT(hasBlockScopes());
+        return reinterpret_cast<js::BlockScopeArray *>(data + blockScopesOffset());
     }
 
     bool hasLoops();
@@ -1006,7 +1069,7 @@ class JSScript : public js::gc::BarrieredCell<JSScript>
         jsbytecode *pc = code;
         if (noScriptRval && JSOp(*pc) == JSOP_FALSE)
             ++pc;
-        return JSOp(*pc) == JSOP_STOP;
+        return JSOp(*pc) == JSOP_RETRVAL;
     }
 
     bool varIsAliased(unsigned varSlot);
@@ -1165,8 +1228,9 @@ class LazyScript : public gc::BarrieredCell<LazyScript>
     // Function or block chain in which the script is nested, or nullptr.
     HeapPtrObject enclosingScope_;
 
-    // Source code object, or nullptr if the script in which this is nested
-    // has not been compiled yet.
+    // ScriptSourceObject, or nullptr if the script in which this is nested
+    // has not been compiled yet. This is never a CCW; we don't clone
+    // LazyScripts into other compartments.
     HeapPtrObject sourceObject_;
 
     // Heap allocated table with any free variables or inner functions.
@@ -1403,6 +1467,9 @@ struct ScriptBytecodeHasher
 typedef HashSet<SharedScriptData*,
                 ScriptBytecodeHasher,
                 SystemAllocPolicy> ScriptDataTable;
+
+extern void
+UnmarkScriptData(JSRuntime *rt);
 
 extern void
 SweepScriptData(JSRuntime *rt);

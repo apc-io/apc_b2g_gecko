@@ -3,10 +3,6 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-SHORT_LIBNAME    = mozsqlt3
-ifndef MOZ_FOLD_LIBS
-FORCE_SHARED_LIB = 1
-endif
 LIB_IS_C_ONLY    = 1
 
 ifeq ($(OS_ARCH),WINNT)
@@ -26,8 +22,8 @@ sqlite-version.h: sqlite-version.py sqlite3.h
 # We have to preprocess our def file because we need different symbols in debug
 # builds exposed that are not built in non-debug builds.
 $(DEFFILE): sqlite.def
-	@$(PYTHON) $(topsrcdir)/config/Preprocessor.py $(DEFINES) \
-	  $(srcdir)/sqlite.def > $(DEFFILE)
+	@$(call py_action,preprocessor,$(DEFINES) \
+	  $(srcdir)/sqlite.def -o $(DEFFILE))
 
 export:: sqlite-version.h
 endif
@@ -118,7 +114,7 @@ include $(topsrcdir)/config/rules.mk
 LOCAL_INCLUDES += -I$(srcdir)
 
 ifeq ($(OS_ARCH),OS2)
-ADD_TO_DEF_FILE = $(PYTHON) $(topsrcdir)/config/Preprocessor.py $(DEFINES) \
+ADD_TO_DEF_FILE = $(PYTHON) -m mozbuild.action.preprocessor $(DEFINES) \
        $(srcdir)/sqlite.def | sed -e '1,/^EXPORTS$$/ d' -e 's,sqlite3,_\0,' \
        -e 's,\ DATA.*$$,,' >> $(DEF_FILE)
 endif

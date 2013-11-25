@@ -34,6 +34,10 @@ XPCOMUtils.defineLazyServiceGetter(this, "gNetworkManager",
                                    "@mozilla.org/network/manager;1",
                                    "nsINetworkManager");
 
+XPCOMUtils.defineLazyServiceGetter(this, "gNetworkService",
+                                   "@mozilla.org/network/service;1",
+                                   "nsINetworkService");
+
 XPCOMUtils.defineLazyServiceGetter(this, "gSettingsService",
                                    "@mozilla.org/settingsService;1",
                                    "nsISettingsService");
@@ -172,7 +176,7 @@ this.EthernetManager = {
   // network interface related
   initInterface: function EthernetManager_initInterface(ifname) {
   	debug("EthernetManager_initInterface: " + ifname);
-  	gNetworkManager.getEthernetStats(ifname, this);
+  	gNetworkService.getEthernetStats(ifname, this);
   },
 
   // checkEthernetState: function EthernetManager_checkEthernetStats(ifname) {

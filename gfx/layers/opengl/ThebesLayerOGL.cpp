@@ -74,30 +74,6 @@ CreateClampOrRepeatTextureImage(GLContext *aGl,
   return aGl->CreateTextureImage(aSize, aContentType, WrapMode(aGl, aFlags));
 }
 
-static void
-SetAntialiasingFlags(Layer* aLayer, gfxContext* aTarget)
-{
-  if (aTarget->IsCairo()) {
-    nsRefPtr<gfxASurface> surface = aTarget->CurrentSurface();
-    if (surface->GetContentType() != GFX_CONTENT_COLOR_ALPHA) {
-      // Destination doesn't have alpha channel; no need to set any special flags
-      return;
-    }
-
-    surface->SetSubpixelAntialiasingEnabled(
-        !(aLayer->GetContentFlags() & Layer::CONTENT_COMPONENT_ALPHA));
-  } else {
-    RefPtr<DrawTarget> dt = aTarget->GetDrawTarget();
-
-    if (dt->GetFormat() != FORMAT_B8G8R8A8) {
-      return;
-    }
-
-    dt->SetPermitSubpixelAA(
-        !(aLayer->GetContentFlags() & Layer::CONTENT_COMPONENT_ALPHA));
-  }
-}
-
 class ThebesLayerBufferOGL
 {
   NS_INLINE_DECL_REFCOUNTING(ThebesLayerBufferOGL)
@@ -828,12 +804,14 @@ BasicBufferOGL::BeginPaint(ContentType aContentType,
   // although they never cover it. This leads to two draw rects, the narow strip and the actually
   // newly exposed area. It would be wise to fix this glitch in any way to have simpler
   // clip and draw regions.
-  gfxUtils::ClipToRegion(result.mContext, result.mRegionToDraw);
+  result.mClip = CLIP_DRAW;
 
   if (mTexImage->GetContentType() == GFX_CONTENT_COLOR_ALPHA) {
+    result.mContext->Save();
+    gfxUtils::ClipToRegion(result.mContext, result.mRegionToDraw);
     result.mContext->SetOperator(gfxContext::OPERATOR_CLEAR);
     result.mContext->Paint();
-    result.mContext->SetOperator(gfxContext::OPERATOR_OVER);
+    result.mContext->Restore();
   }
 
   return result;
@@ -931,7 +909,7 @@ ThebesLayerOGL::RenderLayer(int aPreviousFrameBuffer,
     } else {
       void* callbackData = mOGLManager->GetThebesLayerCallbackData();
       SetAntialiasingFlags(this, state.mContext);
-      callback(this, state.mContext, state.mRegionToDraw,
+      callback(this, state.mContext, state.mRegionToDraw, state.mClip,
                state.mRegionToInvalidate, callbackData);
       // Everything that's visible has been validated. Do this instead of just
       // OR-ing with aRegionToDraw, since that can lead to a very complex region

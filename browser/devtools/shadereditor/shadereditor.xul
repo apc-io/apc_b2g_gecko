@@ -13,6 +13,10 @@
 ]>
 
 <window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+
+  <script type="application/javascript;version=1.8"
+          src="chrome://browser/content/devtools/theme-switching.js"/>
+
   <script type="application/javascript" src="shadereditor.js"/>
 
   <vbox id="body" flex="1">
@@ -24,7 +28,7 @@
       <button id="requests-menu-reload-notice-button"
               class="devtools-toolbarbutton"
               label="&shaderEditorUI.reloadNotice1;"
-              oncommand="gFront.setup();"/>
+              oncommand="gFront.setup({ reload: true });"/>
       <label id="requests-menu-reload-notice-label"
              class="plain"
              value="&shaderEditorUI.reloadNotice2;"/>
@@ -40,7 +44,8 @@
              value="&shaderEditorUI.emptyNotice;"/>
     </hbox>
 
-    <box id="content" class="devtools-responsive-container" flex="1" hidden="true">
+    <box id="content" flex="1" hidden="true"
+        class="devtools-responsive-container theme-body">
       <vbox id="shaders-pane"/>
       <splitter class="devtools-side-splitter"/>
       <box id="shaders-editors" class="devtools-responsive-container" flex="1">

@@ -9,6 +9,10 @@
 pref("nglayout.debug.disable_xul_cache", true);
 pref("nglayout.debug.disable_xul_fastload", true);
 pref("devtools.errorconsole.enabled", true);
+pref("devtools.chrome.enabled", true);
+#else
+pref("devtools.errorconsole.enabled", false);
+pref("devtools.chrome.enabled", false);
 #endif
 
 // Automatically submit crash reports
@@ -39,8 +43,8 @@ pref("layers.componentalpha.enabled", false);
 
 // Prefs to control the async pan/zoom behaviour
 pref("apz.touch_start_tolerance", "0.1"); // dpi * tolerance = pixel threshold
-pref("apz.pan_repaint_interval", "50");   // prefer 20 fps
-pref("apz.fling_repaint_interval", "50"); // prefer 20 fps
+pref("apz.pan_repaint_interval", 50);   // prefer 20 fps
+pref("apz.fling_repaint_interval", 50); // prefer 20 fps
 pref("apz.fling_friction", "0.002");
 pref("apz.fling_stopped_threshold", "0.2");
 
@@ -87,10 +91,10 @@ pref("toolkit.telemetry.prompted", 2);
 
 pref("toolkit.screen.lock", false);
 
-// From libpref/src/init/all.js, extended to allow a slightly wider zoom range.
-pref("zoom.minPercent", 20);
-pref("zoom.maxPercent", 400);
-pref("toolkit.zoomManager.zoomValues", ".2,.3,.5,.67,.8,.9,1,1.1,1.2,1.33,1.5,1.7,2,2.4,3,4");
+// From libpref/src/init/all.js. Disabling text zoom in favor of APZ zoom. See bug 936940.
+pref("zoom.minPercent", 100);
+pref("zoom.maxPercent", 100);
+pref("toolkit.zoomManager.zoomValues", "1");
 
 // Device pixel to CSS px ratio, in percent. Set to -1 to calculate based on display density.
 pref("browser.viewport.scaleRatio", -1);
@@ -188,9 +192,6 @@ pref("browser.helperApps.deleteTempFileOnExit", false);
 
 /* password manager */
 pref("signon.rememberSignons", true);
-
-/* find helper */
-pref("findhelper.autozoom", true);
 
 // this will automatically enable inline spellchecking (if it is available) for
 // editable elements in HTML
@@ -382,9 +383,6 @@ pref("privacy.sanitize.migrateFx3Prefs",    false);
 // enable geo
 pref("geo.enabled", true);
 pref("geo.wifi.uri", "https://www.googleapis.com/geolocation/v1/geolocate?key=%GOOGLE_API_KEY%");
-
-// JS error console
-pref("devtools.errorconsole.enabled", false);
 
 // snapped view
 pref("browser.ui.snapped.maxWidth", 600);

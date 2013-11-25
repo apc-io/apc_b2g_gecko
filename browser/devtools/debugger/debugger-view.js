@@ -188,11 +188,14 @@ let DebuggerView = {
   _initializeEditor: function(aCallback) {
     dumpn("Initializing the DebuggerView editor");
 
-    // This needs to be more localizable: see bug 929234.
     let extraKeys = {};
-    extraKeys[(Services.appinfo.OS == "Darwin" ? "Cmd-" : "Ctrl-") + "F"] = (cm) => {
-      DebuggerView.Filtering._doTokenSearch();
-    };
+    let tokenSearch = document.getElementById("tokenSearchKey").getAttribute("key");
+    let globalSearch = document.getElementById("globalSearchKey").getAttribute("key");
+    let tokenSearchShortcut = Editor.accel(tokenSearch);
+    let globalSearchShortcut = Editor.accel(globalSearch, { alt: true });
+    extraKeys[tokenSearchShortcut] = () => this.Filtering._doTokenSearch();
+    extraKeys[globalSearchShortcut] = () => this.Filtering._doGlobalSearch();
+    extraKeys[Editor.keyFor("jumpToLine")] = false;
 
     this.editor = new Editor({
       mode: Editor.modes.text,

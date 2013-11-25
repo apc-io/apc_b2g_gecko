@@ -190,8 +190,6 @@ ContentClientRemoteBuffer::BuildDeprecatedTextureClients(ContentType aType,
   NS_ABORT_IF_FALSE(!mIsNewBuffer,
                     "Bad! Did we create a buffer twice without painting?");
 
-  mIsNewBuffer = true;
-
   if (mDeprecatedTextureClient) {
     mOldTextures.AppendElement(mDeprecatedTextureClient);
     if (mDeprecatedTextureClientOnWhite) {
@@ -218,6 +216,7 @@ ContentClientRemoteBuffer::BuildDeprecatedTextureClients(ContentType aType,
   }
 
   CreateFrontBufferAndNotify(aRect);
+  mIsNewBuffer = true;
 }
 
 bool
@@ -327,6 +326,21 @@ ContentClientRemoteBuffer::SwapBuffers(const nsIntRegion& aFrontUpdatedRegion)
   }
 }
 
+
+void
+ContentClientRemoteBuffer::OnActorDestroy()
+{
+  if (mDeprecatedTextureClient) {
+    mDeprecatedTextureClient->OnActorDestroy();
+  }
+  if (mDeprecatedTextureClientOnWhite) {
+    mDeprecatedTextureClientOnWhite->OnActorDestroy();
+  }
+  for (size_t i = 0; i < mOldTextures.Length(); ++i) {
+    mOldTextures[i]->OnActorDestroy();
+  }
+}
+
 ContentClientDoubleBuffered::~ContentClientDoubleBuffered()
 {
   if (mDeprecatedTextureClient) {
@@ -427,6 +441,26 @@ ContentClientDoubleBuffered::SwapBuffers(const nsIntRegion& aFrontUpdatedRegion)
   ContentClientRemoteBuffer::SwapBuffers(aFrontUpdatedRegion);
 }
 
+void
+ContentClientDoubleBuffered::OnActorDestroy()
+{
+  if (mDeprecatedTextureClient) {
+    mDeprecatedTextureClient->OnActorDestroy();
+  }
+  if (mDeprecatedTextureClientOnWhite) {
+    mDeprecatedTextureClientOnWhite->OnActorDestroy();
+  }
+  for (size_t i = 0; i < mOldTextures.Length(); ++i) {
+    mOldTextures[i]->OnActorDestroy();
+  }
+  if (mFrontClient) {
+    mFrontClient->OnActorDestroy();
+  }
+  if (mFrontClientOnWhite) {
+    mFrontClientOnWhite->OnActorDestroy();
+  }
+}
+
 struct AutoDeprecatedTextureClient {
   AutoDeprecatedTextureClient()
     : mTexture(nullptr)
@@ -462,6 +496,8 @@ private:
 void
 ContentClientDoubleBuffered::SyncFrontBufferToBackBuffer()
 {
+  mIsNewBuffer = false;
+
   if (!mFrontAndBackBufferDiffer) {
     return;
   }
@@ -520,7 +556,6 @@ ContentClientDoubleBuffered::SyncFrontBufferToBackBuffer()
     UpdateDestinationFrom(frontBuffer, updateRegion);
   }
 
-  mIsNewBuffer = false;
   mFrontAndBackBufferDiffer = false;
 }
 
@@ -530,6 +565,9 @@ ContentClientDoubleBuffered::UpdateDestinationFrom(const RotatedBuffer& aSource,
 {
   nsRefPtr<gfxContext> destCtx =
     GetContextForQuadrantUpdate(aUpdateRegion.GetBounds(), BUFFER_BLACK);
+  if (!destCtx) {
+    return;
+  }
   destCtx->SetOperator(gfxContext::OPERATOR_SOURCE);
 
   bool isClippingCheap = IsClippingCheap(destCtx, aUpdateRegion);
@@ -586,14 +624,20 @@ ContentClientSingleBuffered::CreateFrontBufferAndNotify(const nsIntRect& aBuffer
 void
 ContentClientSingleBuffered::SyncFrontBufferToBackBuffer()
 {
+  mIsNewBuffer = false;
   if (!mFrontAndBackBufferDiffer) {
     return;
   }
+  mFrontAndBackBufferDiffer = false;
 
   if (SupportsAzureContent()) {
     DrawTarget* backBuffer = GetDTBuffer();
     if (!backBuffer && mDeprecatedTextureClient) {
       backBuffer = mDeprecatedTextureClient->LockDrawTarget();
+    }
+    if (!backBuffer) {
+      NS_WARNING("Could not lock texture client");
+      return;
     }
 
     RefPtr<DrawTarget> oldBuffer;
@@ -605,12 +649,20 @@ ContentClientSingleBuffered::SyncFrontBufferToBackBuffer()
     if (!backBuffer && mDeprecatedTextureClientOnWhite) {
       backBuffer = mDeprecatedTextureClientOnWhite->LockDrawTarget();
     }
+    if (!backBuffer) {
+      NS_WARNING("Could not lock texture client (on white)");
+      return;
+    }
 
     oldBuffer = SetDTBufferOnWhite(backBuffer);
   } else {
     gfxASurface* backBuffer = GetBuffer();
     if (!backBuffer && mDeprecatedTextureClient) {
       backBuffer = mDeprecatedTextureClient->LockSurface();
+    }
+    if (!backBuffer) {
+      NS_WARNING("Could not lock texture client");
+      return;
     }
 
     nsRefPtr<gfxASurface> oldBuffer;
@@ -622,12 +674,13 @@ ContentClientSingleBuffered::SyncFrontBufferToBackBuffer()
     if (!backBuffer && mDeprecatedTextureClientOnWhite) {
       backBuffer = mDeprecatedTextureClientOnWhite->LockSurface();
     }
+    if (!backBuffer) {
+      NS_WARNING("Could not lock texture client (on white)");
+      return;
+    }
 
     oldBuffer = SetBufferOnWhite(backBuffer);
   }
-
-  mIsNewBuffer = false;
-  mFrontAndBackBufferDiffer = false;
 }
 
 static void
@@ -894,12 +947,14 @@ ContentClientIncremental::BeginPaintBuffer(ThebesLayer* aLayer,
   // although they never cover it. This leads to two draw rects, the narow strip and the actually
   // newly exposed area. It would be wise to fix this glitch in any way to have simpler
   // clip and draw regions.
-  gfxUtils::ClipToRegion(result.mContext, result.mRegionToDraw);
+  result.mClip = CLIP_DRAW;
 
   if (mContentType == GFX_CONTENT_COLOR_ALPHA) {
+    result.mContext->Save();
+    gfxUtils::ClipToRegion(result.mContext, result.mRegionToDraw);
     result.mContext->SetOperator(gfxContext::OPERATOR_CLEAR);
     result.mContext->Paint();
-    result.mContext->SetOperator(gfxContext::OPERATOR_OVER);
+    result.mContext->Restore();
   }
 
   return result;

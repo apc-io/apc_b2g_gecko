@@ -14,6 +14,7 @@ const COLLAPSE_ATTRIBUTE_LENGTH = 120;
 const COLLAPSE_DATA_URL_REGEX = /^data.+base64/;
 const COLLAPSE_DATA_URL_LENGTH = 60;
 const CONTAINER_FLASHING_DURATION = 500;
+const IMAGE_PREVIEW_MAX_DIM = 400;
 
 const {UndoStack} = require("devtools/shared/undo");
 const {editableField, InplaceEditor} = require("devtools/shared/inplace-editor");
@@ -99,6 +100,10 @@ function MarkupView(aInspector, aFrame, aControllerWindow) {
   gDevTools.on("pref-changed", this._handlePrefChange);
 
   this._initPreview();
+
+  this.tooltip = new Tooltip(this._inspector.panelDoc);
+  this.tooltip.startTogglingOnHover(this._elt,
+    this._buildTooltipContent.bind(this));
 }
 
 exports.MarkupView = MarkupView;
@@ -146,6 +151,25 @@ MarkupView.prototype = {
 
     // Recursively update each node starting with documentElement.
     updateChildren(documentElement);
+  },
+
+  _buildTooltipContent: function(target) {
+    // From the target passed here, let's find the parent MarkupContainer
+    // and ask it if the tooltip should be shown
+    let parent = target, container;
+    while (parent !== this.doc.body) {
+      if (parent.container) {
+        container = parent.container;
+        break;
+      }
+      parent = parent.parentNode;
+    }
+
+    if (container) {
+      // With the newly found container, delegate the tooltip content creation
+      // and decision to show or not the tooltip
+      return container._buildTooltipContent(target, this.tooltip);
+    }
   },
 
   /**
@@ -272,6 +296,10 @@ MarkupView.prototype = {
           selection = next.container;
         }
         this.navigate(selection);
+        break;
+      }
+      case Ci.nsIDOMKeyEvent.DOM_VK_F2: {
+        this.beginEditingOuterHTML(this._selectedContainer.node);
         break;
       }
       default:
@@ -665,7 +693,11 @@ MarkupView.prototype = {
         return;
       }
       this.htmlEditor.show(container.tagLine, oldValue);
-      this.htmlEditor.once("popup-hidden", (e, aCommit, aValue) => {
+      this.htmlEditor.once("popuphidden", (e, aCommit, aValue) => {
+        // Need to focus the <html> element instead of the frame / window
+        // in order to give keyboard focus back to doc (from editor).
+        this._frame.contentDocument.documentElement.focus();
+
         if (aCommit) {
           this.updateNodeOuterHTML(aNode, aValue, oldValue);
         }
@@ -908,6 +940,8 @@ MarkupView.prototype = {
   destroy: function() {
     gDevTools.off("pref-changed", this._handlePrefChange);
 
+    delete this._outputParser;
+
     this.htmlEditor.destroy();
     delete this.htmlEditor;
 
@@ -919,8 +953,6 @@ MarkupView.prototype = {
 
     this._frame.removeEventListener("focus", this._boundFocus, false);
     delete this._boundFocus;
-
-    delete this._outputParser;
 
     if (this._boundUpdatePreview) {
       this._frame.contentWindow.removeEventListener("scroll",
@@ -950,17 +982,21 @@ MarkupView.prototype = {
 
     delete this._elt;
 
-    for ([key, container] of this._containers) {
+    for (let [key, container] of this._containers) {
       container.destroy();
     }
     delete this._containers;
+
+    this.tooltip.destroy();
+    delete this.tooltip;
   },
 
   /**
    * Initialize the preview panel.
    */
   _initPreview: function() {
-    if (!Services.prefs.getBoolPref("devtools.inspector.markupPreview")) {
+    this._previewEnabled = Services.prefs.getBoolPref("devtools.inspector.markupPreview");
+    if (!this._previewEnabled) {
       return;
     }
 
@@ -990,6 +1026,9 @@ MarkupView.prototype = {
    * Move the preview viewbox.
    */
   _updatePreview: function() {
+    if (!this._previewEnabled) {
+      return;
+    }
     let win = this._frame.contentWindow;
 
     if (win.scrollMaxY == 0) {
@@ -1025,6 +1064,9 @@ MarkupView.prototype = {
    * Hide the preview while resizing, to avoid slowness.
    */
   _resizePreview: function() {
+    if (!this._previewEnabled) {
+      return;
+    }
     let win = this._frame.contentWindow;
     this._previewBar.classList.add("hide");
     win.clearTimeout(this._resizePreviewTimeout);
@@ -1099,8 +1141,11 @@ function MarkupContainer(aMarkupView, aNode, aInspector) {
   this._onMouseDown = this._onMouseDown.bind(this);
   this.elt.addEventListener("mousedown", this._onMouseDown, false);
 
-  this.tooltip = null;
-  this._attachTooltipIfNeeded();
+  this._onClick = this._onClick.bind(this);
+  this.elt.addEventListener("click", this._onClick, false);
+
+  // Prepare the image preview tooltip data if any
+  this._prepareImagePreview();
 }
 
 MarkupContainer.prototype = {
@@ -1108,36 +1153,43 @@ MarkupContainer.prototype = {
     return "[MarkupContainer for " + this.node + "]";
   },
 
-  _attachTooltipIfNeeded: function() {
+  _prepareImagePreview: function() {
     if (this.node.tagName) {
       let tagName = this.node.tagName.toLowerCase();
-      let isImage = tagName === "img" &&
-        this.editor.getAttributeElement("src");
-      let isCanvas = tagName && tagName === "canvas";
+      let srcAttr = this.editor.getAttributeElement("src");
+      let isImage = tagName === "img" && srcAttr;
+      let isCanvas = tagName === "canvas";
 
       // Get the image data for later so that when the user actually hovers over
       // the element, the tooltip does contain the image
       if (isImage || isCanvas) {
-        this.tooltip = new Tooltip(this._inspector.panelDoc);
+        let def = promise.defer();
 
-        this.node.getImageData().then(data => {
+        this.tooltipData = {
+          target: isImage ? srcAttr : this.editor.tag,
+          data: def.promise
+        };
+
+        this.node.getImageData(IMAGE_PREVIEW_MAX_DIM).then(data => {
           if (data) {
-            data.string().then(str => {
-              this.tooltip.setImageContent(str);
+            data.data.string().then(str => {
+              // Resolving the data promise and, to always keep tooltipData.data
+              // as a promise, create a new one that resolves immediately
+              def.resolve(str, data.size);
+              this.tooltipData.data = promise.resolve(str, data.size);
             });
           }
         });
       }
+    }
+  },
 
-      // If it's an image, show the tooltip on the src attribute
-      if (isImage) {
-        this.tooltip.startTogglingOnHover(this.editor.getAttributeElement("src"));
-      }
-
-      // If it's a canvas, show it on the tag
-      if (isCanvas) {
-        this.tooltip.startTogglingOnHover(this.editor.tag);
-      }
+  _buildTooltipContent: function(target, tooltip) {
+    if (this.tooltipData && target === this.tooltipData.target) {
+      this.tooltipData.data.then((data, size) => {
+        tooltip.setImageContent(data, size);
+      });
+      return true;
     }
   },
 
@@ -1226,9 +1278,23 @@ MarkupContainer.prototype = {
   },
 
   _onMouseDown: function(event) {
-    this.highlighted = false;
-    this.markup.navigate(this);
-    event.stopPropagation();
+    if (event.target.nodeName !== "a") {
+      this.highlighted = false;
+      this.markup.navigate(this);
+      event.stopPropagation();
+    }
+  },
+
+  _onClick: function(event) {
+    let target = event.target;
+
+    if (target.nodeName === "a") {
+      event.stopPropagation();
+      event.preventDefault();
+      let browserWin = this.markup._inspector.target
+                           .tab.ownerDocument.defaultView;
+      browserWin.openUILinkIn(target.href, "tab");
+    }
   },
 
   /**
@@ -1371,16 +1437,11 @@ MarkupContainer.prototype = {
     this.elt.removeEventListener("mouseover", this._onMouseOver, false);
     this.elt.removeEventListener("mouseout", this._onMouseOut, false);
     this.elt.removeEventListener("mousedown", this._onMouseDown, false);
+    this.elt.removeEventListener("click", this._onClick, false);
     this.expander.removeEventListener("click", this._onToggle, false);
 
     // Destroy my editor
     this.editor.destroy();
-
-    // Destroy the tooltip if any
-    if (this.tooltip) {
-      this.tooltip.destroy();
-      this.tooltip = null;
-    }
   }
 };
 
@@ -1542,7 +1603,9 @@ function ElementEditor(aContainer, aNode) {
   // Create the main editor
   this.template("element", this);
 
-  this.rawNode = aNode.rawNode();
+  if (aNode.isLocal_toBeDeprecated()) {
+    this.rawNode = aNode.rawNode();
+  }
 
   // Make the tag name editable (unless this is a remote node or
   // a document element)
@@ -1732,7 +1795,10 @@ ElementEditor.prototype = {
 
     if (typeof aAttr.value !== "undefined") {
       let outputParser = this.markup._outputParser;
-      let frag = outputParser.parseHTMLAttribute(aAttr.value);
+      let frag = outputParser.parseHTMLAttribute(aAttr.value, {
+        urlClass: "theme-link",
+        baseURI: this.node.baseURI
+      });
       frag = this._truncateFrag(frag);
       val.appendChild(frag);
     }
@@ -1752,8 +1818,13 @@ ElementEditor.prototype = {
    *         Truncated fragment.
    */
   _truncateFrag: function(frag) {
-    let chars = 0;
     let text = frag.textContent;
+
+    if (!text) {
+      return frag;
+    }
+
+    let chars = 0;
     let maxWidth = text.match(COLLAPSE_DATA_URL_REGEX) ?
                             COLLAPSE_DATA_URL_LENGTH : COLLAPSE_ATTRIBUTE_LENGTH;
     let overBy = text.length - maxWidth;
@@ -1782,7 +1853,15 @@ ElementEditor.prototype = {
 
       let numChars = text.length;
       if (chars + numChars > maxWidth / 2) {
-        node.textContent = text.substr(0, chars + numChars - maxWidth / 2) + "…";
+        let insertionPoint = maxWidth / 2 - chars;
+        let start = text.substr(0, insertionPoint) + "…";
+        let end = text.substr(insertionPoint);
+
+        if (end.length > maxWidth / 2) {
+          end = end.substr(end.length - maxWidth / 2);
+        }
+
+        node.textContent = start + end;
         croppedNode = node;
         break;
       } else {

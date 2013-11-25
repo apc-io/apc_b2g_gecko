@@ -19,6 +19,7 @@
 #include "nsIControllers.h"
 #include "nsIStringBundle.h"
 #include "nsFocusManager.h"
+#include "nsNumberControlFrame.h"
 #include "nsPIDOMWindow.h"
 #include "nsContentCID.h"
 #include "nsIComponentManager.h"
@@ -993,9 +994,7 @@ UploadLastDir::FetchDirectoryAndDisplayPicker(nsIDocument* aDoc,
   nsIURI* docURI = aDoc->GetDocumentURI();
   NS_PRECONDITION(docURI, "docURI is null");
 
-  nsCOMPtr<nsISupports> container = aDoc->GetContainer();
-  nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(container);
-
+  nsCOMPtr<nsILoadContext> loadContext = aDoc->GetLoadContext();
   nsCOMPtr<nsIContentPrefCallback2> prefCallback = 
     new UploadLastDir::ContentPrefCallback(aFilePicker, aFpCallback);
 
@@ -1046,8 +1045,7 @@ UploadLastDir::StoreLastUsedDirectory(nsIDocument* aDoc, nsIFile* aDir)
     return NS_ERROR_OUT_OF_MEMORY;
   prefValue->SetAsAString(unicodePath);
 
-  nsCOMPtr<nsISupports> container = aDoc->GetContainer();
-  nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(container);
+  nsCOMPtr<nsILoadContext> loadContext = aDoc->GetLoadContext();
   return contentPrefService->Set(spec, CPS_PREF_NAME, prefValue, loadContext, nullptr);
 }
 
@@ -2061,7 +2059,7 @@ HTMLInputElement::ApplyStep(int32_t aStep)
 
   Decimal value = GetValueAsDecimal();
   if (value.isNaN()) {
-    return NS_OK;
+    value = 0;
   }
 
   Decimal minimum = GetMinimum();
@@ -2143,6 +2141,14 @@ NS_IMETHODIMP
 HTMLInputElement::StepUp(int32_t n, uint8_t optional_argc)
 {
   return ApplyStep(optional_argc ? n : 1);
+}
+
+void
+HTMLInputElement::FlushFrames()
+{
+  if (GetCurrentDoc()) {
+    GetCurrentDoc()->FlushPendingNotifications(Flush_Frames);
+  }
 }
 
 void
@@ -2236,12 +2242,27 @@ HTMLInputElement::MozSetFileNameArray(const PRUnichar** aFileNames, uint32_t aLe
 bool
 HTMLInputElement::MozIsTextField(bool aExcludePassword)
 {
-  // TODO: temporary until bug 635240 and 773205 are fixed.
+  // TODO: temporary until bug 773205 is fixed.
   if (IsExperimentalMobileType(mType)) {
     return false;
   }
 
   return IsSingleLineTextControl(aExcludePassword);
+}
+
+HTMLInputElement*
+HTMLInputElement::GetOwnerNumberControl()
+{
+  if (IsInNativeAnonymousSubtree() &&
+      mType == NS_FORM_INPUT_TEXT &&
+      GetParent() && GetParent()->GetParent()) {
+    HTMLInputElement* grandparent =
+      HTMLInputElement::FromContentOrNull(GetParent()->GetParent());
+    if (grandparent && grandparent->mType == NS_FORM_INPUT_NUMBER) {
+      return grandparent;
+    }
+  }
+  return nullptr;
 }
 
 NS_IMETHODIMP
@@ -2675,6 +2696,14 @@ HTMLInputElement::SetValueInternal(const nsAString& aValue,
           SetValueChanged(true);
         }
         OnValueChanged(!mParserCreating);
+
+        if (mType == NS_FORM_INPUT_NUMBER) {
+          nsNumberControlFrame* numberControlFrame =
+            do_QueryFrame(GetPrimaryFrame());
+          if (numberControlFrame) {
+            numberControlFrame->UpdateForValueChange(value);
+          }
+        }
       }
 
       // Call parent's SetAttr for color input so its control frame is notified
@@ -2941,8 +2970,40 @@ HTMLInputElement::SetCheckedInternal(bool aChecked, bool aNotify)
 }
 
 void
+HTMLInputElement::Blur(ErrorResult& aError)
+{
+  if (mType == NS_FORM_INPUT_NUMBER) {
+    // Blur our anonymous text control, if we have one. (DOM 'change' event
+    // firing and other things depend on this.)
+    nsNumberControlFrame* numberControlFrame =
+      do_QueryFrame(GetPrimaryFrame());
+    if (numberControlFrame) {
+      HTMLInputElement* textControl = numberControlFrame->GetAnonTextControl();
+      if (textControl) {
+        textControl->Blur(aError);
+        return;
+      }
+    }
+  }
+  nsGenericHTMLElement::Blur(aError);
+}
+
+void
 HTMLInputElement::Focus(ErrorResult& aError)
 {
+  if (mType == NS_FORM_INPUT_NUMBER) {
+    // Focus our anonymous text control, if we have one.
+    nsNumberControlFrame* numberControlFrame =
+      do_QueryFrame(GetPrimaryFrame());
+    if (numberControlFrame) {
+      HTMLInputElement* textControl = numberControlFrame->GetAnonTextControl();
+      if (textControl) {
+        textControl->Focus(aError);
+        return;
+      }
+    }
+  }
+
   if (mType != NS_FORM_INPUT_FILE) {
     nsGenericHTMLElement::Focus(aError);
     return;
@@ -3213,7 +3274,45 @@ HTMLInputElement::PreHandleEvent(nsEventChainPreVisitor& aVisitor)
     }
   }
 
-  return nsGenericHTMLFormElementWithState::PreHandleEvent(aVisitor);
+  nsresult rv = nsGenericHTMLFormElementWithState::PreHandleEvent(aVisitor);
+
+  // We do this after calling the base class' PreHandleEvent so that
+  // nsIContent::PreHandleEvent doesn't reset any change we make to mCanHandle.
+  if (mType == NS_FORM_INPUT_NUMBER &&
+      aVisitor.mEvent->mFlags.mIsTrusted  &&
+      aVisitor.mEvent->originalTarget != this) {
+    // <input type=number> has an anonymous <input type=text> descendant. If
+    // 'input' or 'change' events are fired at that text control then we need
+    // to do some special handling here.
+    HTMLInputElement* textControl = nullptr;
+    nsNumberControlFrame* numberControlFrame =
+      do_QueryFrame(GetPrimaryFrame());
+    if (numberControlFrame) {
+      textControl = numberControlFrame->GetAnonTextControl();
+    }
+    if (textControl && aVisitor.mEvent->originalTarget == textControl) {
+      if (aVisitor.mEvent->message == NS_FORM_INPUT) {
+        // Propogate the anon text control's new value to our HTMLInputElement:
+        numberControlFrame->HandlingInputEvent(true);
+        nsAutoString value;
+        textControl->GetValue(value);
+        SetValueInternal(value, false, true);
+        numberControlFrame->HandlingInputEvent(false);
+      }
+      else if (aVisitor.mEvent->message == NS_FORM_CHANGE) {
+        // We cancel the DOM 'change' event that is fired for any change to our
+        // anonymous text control since we fire our own 'change' events and
+        // content shouldn't be seeing two 'change' events. Besides that we
+        // (as a number) control have tighter restrictions on when our internal
+        // value changes than our anon text control does, so in some cases
+        // (if our text control's value doesn't parse as a number) we don't
+        // want to fire a 'change' event at all.
+        aVisitor.mCanHandle = false;
+      }
+    }
+  }
+
+  return rv;
 }
 
 void
@@ -3224,6 +3323,14 @@ HTMLInputElement::StartRangeThumbDrag(WidgetGUIEvent* aEvent)
   nsIPresShell::SetCapturingContent(this, CAPTURE_IGNOREALLOWED |
                                           CAPTURE_RETARGETTOELEMENT);
   nsRangeFrame* rangeFrame = do_QueryFrame(GetPrimaryFrame());
+
+  // Before we change the value, record the current value so that we'll
+  // correctly send a 'change' event if appropriate. We need to do this here
+  // because the 'focus' event is handled after the 'mousedown' event that
+  // we're being called for (i.e. too late to update mFocusedValue, since we'll
+  // have changed it by then).
+  GetValueInternal(mFocusedValue);
+
   SetValueOfRangeForUserEvent(rangeFrame->GetValueAtEventPoint(aEvent));
 }
 
@@ -3371,7 +3478,8 @@ HTMLInputElement::PostHandleEvent(nsEventChainPostVisitor& aVisitor)
   if (aVisitor.mEvent->message == NS_FOCUS_CONTENT ||
       aVisitor.mEvent->message == NS_BLUR_CONTENT) {
     if (aVisitor.mEvent->message == NS_FOCUS_CONTENT &&
-        MayFireChangeOnBlur()) {
+        MayFireChangeOnBlur() &&
+        !mIsDraggingRange) { // StartRangeThumbDrag already set mFocusedValue
       GetValueInternal(mFocusedValue);
     }
 
@@ -3400,7 +3508,8 @@ HTMLInputElement::PostHandleEvent(nsEventChainPostVisitor& aVisitor)
   // the click event handling, and allow cancellation of DOMActivate to cancel
   // the click.
   if (aVisitor.mEventStatus != nsEventStatus_eConsumeNoDefault &&
-      !IsSingleLineTextControl(true)) {
+      !IsSingleLineTextControl(true) &&
+      mType != NS_FORM_INPUT_NUMBER) {
     WidgetMouseEvent* mouseEvent = aVisitor.mEvent->AsMouseEvent();
     if (mouseEvent && mouseEvent->IsLeftClickEvent() &&
         !ShouldPreventDOMActivateDispatch(aVisitor.mEvent->originalTarget)) {
@@ -4456,9 +4565,9 @@ HTMLInputElement::ParseAttribute(int32_t aNamespaceID,
                                               aResult);
 }
 
-static void
-MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
-                      nsRuleData* aData)
+void
+HTMLInputElement::MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
+                                        nsRuleData* aData)
 {
   const nsAttrValue* value = aAttributes->GetAttr(nsGkAtoms::type);
   if (value && value->Type() == nsAttrValue::eEnum &&
@@ -5495,7 +5604,8 @@ HTMLInputElement::IsHTMLFocusable(bool aWithMouse, bool* aIsFocusable, int32_t* 
   }
 
   if (IsSingleLineTextControl(false) ||
-      mType == NS_FORM_INPUT_RANGE) {
+      mType == NS_FORM_INPUT_RANGE ||
+      mType == NS_FORM_INPUT_NUMBER) {
     *aIsFocusable = true;
     return false;
   }
@@ -5706,7 +5816,7 @@ HTMLInputElement::PlaceholderApplies() const
 bool
 HTMLInputElement::DoesPatternApply() const
 {
-  // TODO: temporary until bug 635240 and bug 773205 are fixed.
+  // TODO: temporary until bug 773205 is fixed.
   if (IsExperimentalMobileType(mType)) {
     return false;
   }
@@ -6822,3 +6932,5 @@ HTMLInputElement::WrapNode(JSContext* aCx, JS::Handle<JSObject*> aScope)
 
 } // namespace dom
 } // namespace mozilla
+
+#undef NS_ORIGINAL_CHECKED_VALUE

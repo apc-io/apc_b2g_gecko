@@ -600,8 +600,10 @@ protected:
       }
     }
     virtual void WillRefresh(mozilla::TimeStamp aTime) MOZ_OVERRIDE {
-      if (mPresShell)
-        mPresShell->ProcessSynthMouseMoveEvent(mFromScroll);
+      if (mPresShell) {
+        nsRefPtr<PresShell> shell = mPresShell;
+        shell->ProcessSynthMouseMoveEvent(mFromScroll);
+      }
     }
   private:
     PresShell* mPresShell;
@@ -755,6 +757,8 @@ protected:
 
   // The `performance.now()` value when we last started to process reflows.
   DOMHighResTimeStamp       mLastReflowStart;
+
+  mozilla::TimeStamp        mLoadBegin;  // used to time loads
 
   // Information needed to properly handle scrolling content into view if the
   // pre-scroll reflow flush can be interrupted.  mContentToScrollTo is

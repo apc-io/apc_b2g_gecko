@@ -199,8 +199,7 @@ ErrorResult::ReportJSExceptionFromJSImplementation(JSContext* aCx)
              "Why didn't you tell us you planned to handle JS exceptions?");
 
   dom::DOMError* domError;
-  nsresult rv = UNWRAP_OBJECT(DOMError, aCx, &mJSException.toObject(),
-                              domError);
+  nsresult rv = UNWRAP_OBJECT(DOMError, &mJSException.toObject(), domError);
   if (NS_FAILED(rv)) {
     // Unwrapping really shouldn't fail here, if mExceptionHandling is set to
     // eRethrowContentExceptions then the CallSetup destructor only stores an
@@ -214,16 +213,7 @@ ErrorResult::ReportJSExceptionFromJSImplementation(JSContext* aCx)
   nsString message;
   domError->GetMessage(message);
 
-  JSErrorReport errorReport;
-  memset(&errorReport, 0, sizeof(JSErrorReport));
-  errorReport.errorNumber = JSMSG_USER_DEFINED_ERROR;
-  errorReport.ucmessage = message.get();
-  errorReport.exnType = JSEXN_ERR;
-  JS::Rooted<JSScript*> script(aCx);
-  if (JS_DescribeScriptedCaller(aCx, &script, &errorReport.lineno)) {
-    errorReport.filename = JS_GetScriptFilename(aCx, script);
-  }
-  JS_ThrowReportedError(aCx, nullptr, &errorReport);
+  JS_ReportError(aCx, "%hs", message.get());
   JS_RemoveValueRoot(aCx, &mJSException);
   
   // We no longer have a useful exception but we do want to signal that an error
@@ -532,17 +522,23 @@ CreateInterfaceObject(JSContext* cx, JS::Handle<JSObject*> global,
 }
 
 bool
-DefineWebIDLBindingPropertiesOnXPCProto(JSContext* cx,
-                                        JS::Handle<JSObject*> proto,
-                                        const NativeProperties* properties)
+DefineWebIDLBindingPropertiesOnXPCObject(JSContext* cx,
+                                         JS::Handle<JSObject*> obj,
+                                         const NativeProperties* properties,
+                                         bool defineUnforgeableAttributes)
 {
   if (properties->methods &&
-      !DefinePrefable(cx, proto, properties->methods)) {
+      !DefinePrefable(cx, obj, properties->methods)) {
     return false;
   }
 
   if (properties->attributes &&
-      !DefinePrefable(cx, proto, properties->attributes)) {
+      !DefinePrefable(cx, obj, properties->attributes)) {
+    return false;
+  }
+
+  if (defineUnforgeableAttributes && properties->unforgeableAttributes &&
+      !DefinePrefable(cx, obj, properties->unforgeableAttributes)) {
     return false;
   }
 
@@ -741,7 +737,7 @@ TryPreserveWrapper(JSObject* obj)
 // Can only be called with the immediate prototype of the instance object. Can
 // only be called on the prototype of an object known to be a DOM instance.
 bool
-InstanceClassHasProtoAtDepth(JS::Handle<JSObject*> protoObject, uint32_t protoID,
+InstanceClassHasProtoAtDepth(JSObject* protoObject, uint32_t protoID,
                              uint32_t depth)
 {
   const DOMClass* domClass = static_cast<const DOMClass*>(
@@ -1111,7 +1107,7 @@ ResolvePrototypeOrConstructor(JSContext* cx, JS::Handle<JSObject*> wrapper,
   JS::Rooted<JSObject*> global(cx, js::GetGlobalForObjectCrossCompartment(obj));
   {
     JSAutoCompartment ac(cx, global);
-    JS::Heap<JSObject*>* protoAndIfaceArray = GetProtoAndIfaceArray(global);
+    ProtoAndIfaceArray& protoAndIfaceArray = *GetProtoAndIfaceArray(global);
     JSObject* protoOrIface = protoAndIfaceArray[protoAndIfaceArrayIndex];
     if (!protoOrIface) {
       return false;
@@ -1793,13 +1789,13 @@ ReparentWrapper(JSContext* aCx, JS::Handle<JSObject*> aObjArg)
   }
 
   nsObjectLoadingContent* htmlobject;
-  nsresult rv = UNWRAP_OBJECT(HTMLObjectElement, aCx, aObj, htmlobject);
+  nsresult rv = UNWRAP_OBJECT(HTMLObjectElement, aObj, htmlobject);
   if (NS_FAILED(rv)) {
     rv = UnwrapObject<prototypes::id::HTMLEmbedElement,
-                      HTMLSharedObjectElement>(aCx, aObj, htmlobject);
+                      HTMLSharedObjectElement>(aObj, htmlobject);
     if (NS_FAILED(rv)) {
       rv = UnwrapObject<prototypes::id::HTMLAppletElement,
-                        HTMLSharedObjectElement>(aCx, aObj, htmlobject);
+                        HTMLSharedObjectElement>(aObj, htmlobject);
       if (NS_FAILED(rv)) {
         htmlobject = nullptr;
       }
@@ -2102,7 +2098,7 @@ ConvertJSValueToByteString(JSContext* cx, JS::Handle<JS::Value> v,
       return true;
     }
 
-    s = JS_ValueToString(cx, v);
+    s = JS::ToString(cx, v);
     if (!s) {
       return false;
     }
@@ -2147,10 +2143,45 @@ ConvertJSValueToByteString(JSContext* cx, JS::Handle<JS::Value> v,
 }
 
 bool
-ThreadsafeCheckIsChrome(JSContext* aCx, JSObject* aObj) {
+ThreadsafeCheckIsChrome(JSContext* aCx, JSObject* aObj)
+{
   using mozilla::dom::workers::GetWorkerPrivateFromContext;
   return NS_IsMainThread() ? xpc::AccessCheck::isChrome(aObj):
-                             GetWorkerPrivateFromContext(aCx)->IsChromeWorker();
+                             GetWorkerPrivateFromContext(aCx)->UsesSystemPrincipal();
+}
+
+void
+TraceGlobal(JSTracer* aTrc, JSObject* aObj)
+{
+  MOZ_ASSERT(js::GetObjectClass(aObj)->flags & JSCLASS_DOM_GLOBAL);
+  mozilla::dom::TraceProtoAndIfaceCache(aTrc, aObj);
+}
+
+void
+FinalizeGlobal(JSFreeOp* aFreeOp, JSObject* aObj)
+{
+  MOZ_ASSERT(js::GetObjectClass(aObj)->flags & JSCLASS_DOM_GLOBAL);
+  mozilla::dom::DestroyProtoAndIfaceCache(aObj);
+}
+
+bool
+ResolveGlobal(JSContext* aCx, JS::Handle<JSObject*> aObj,
+              JS::MutableHandle<jsid> aId, unsigned aFlags,
+              JS::MutableHandle<JSObject*> aObjp)
+{
+  bool resolved;
+  if (!JS_ResolveStandardClass(aCx, aObj, aId, &resolved)) {
+    return false;
+  }
+
+  aObjp.set(resolved ? aObj.get() : nullptr);
+  return true;
+}
+
+bool
+EnumerateGlobal(JSContext* aCx, JS::Handle<JSObject*> aObj)
+{
+  return JS_EnumerateStandardClasses(aCx, aObj);
 }
 
 } // namespace dom

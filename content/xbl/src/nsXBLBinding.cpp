@@ -154,8 +154,9 @@ nsXBLService::getClass(nsCStringKey *k)
 
 // Constructors/Destructors
 nsXBLBinding::nsXBLBinding(nsXBLPrototypeBinding* aBinding)
-  : mMarkedForDeath(false),
-    mPrototypeBinding(aBinding)
+  : mMarkedForDeath(false)
+  , mUsingXBLScope(false)
+  , mPrototypeBinding(aBinding)
 {
   NS_ASSERTION(mPrototypeBinding, "Must have a prototype binding!");
   // Grab a ref to the document info so the prototype binding won't die
@@ -297,6 +298,20 @@ nsXBLBinding::SetBoundElement(nsIContent* aElement)
   mBoundElement = aElement;
   if (mNextBinding)
     mNextBinding->SetBoundElement(aElement);
+
+  if (!mBoundElement) {
+    return;
+  }
+
+  // Compute whether we're using an XBL scope.
+  //
+  // We disable XBL scopes for remote XUL, where we care about compat more
+  // than security. So we need to know whether we're using an XBL scope so that
+  // we can decide what to do about untrusted events when "allowuntrusted"
+  // is not given in the handler declaration.
+  nsCOMPtr<nsIGlobalObject> go = mBoundElement->OwnerDoc()->GetScopeObject();
+  NS_ENSURE_TRUE_VOID(go && go->GetGlobalJSObject());
+  mUsingXBLScope = xpc::UseXBLScope(js::GetObjectCompartment(go->GetGlobalJSObject()));
 }
 
 bool
@@ -530,7 +545,7 @@ nsXBLBinding::InstallEventHandlers()
 
           bool hasAllowUntrustedAttr = curr->HasAllowUntrustedAttr();
           if ((hasAllowUntrustedAttr && curr->AllowUntrustedEvents()) ||
-              (!hasAllowUntrustedAttr && !isChromeDoc)) {
+              (!hasAllowUntrustedAttr && !isChromeDoc && !mUsingXBLScope)) {
             flags.mAllowUntrustedEvents = true;
           }
 
@@ -546,6 +561,7 @@ nsXBLBinding::InstallEventHandlers()
       for (i = 0; i < keyHandlers->Count(); ++i) {
         nsXBLKeyEventHandler* handler = keyHandlers->ObjectAt(i);
         handler->SetIsBoundToChrome(isChromeDoc);
+        handler->SetUsingXBLScope(mUsingXBLScope);
 
         nsAutoString type;
         handler->GetEventName(type);
@@ -1064,24 +1080,12 @@ nsXBLBinding::AllowScripts()
     return false;
   }
 
-  nsCOMPtr<nsIScriptGlobalObject> global = do_QueryInterface(doc->GetWindow());
-  if (!global) {
+  nsCOMPtr<nsIScriptGlobalObject> global = do_QueryInterface(doc->GetInnerWindow());
+  if (!global || !global->GetGlobalJSObject()) {
     return false;
   }
 
-  nsCOMPtr<nsIScriptContext> context = global->GetContext();
-  if (!context) {
-    return false;
-  }
-  
-  AutoPushJSContext cx(context->GetNativeContext());
-
-  nsCOMPtr<nsIDocument> ourDocument =
-    mPrototypeBinding->XBLDocumentInfo()->GetDocument();
-  bool canExecute;
-  nsresult rv =
-    mgr->CanExecuteScripts(cx, ourDocument->NodePrincipal(), &canExecute);
-  return NS_SUCCEEDED(rv) && canExecute;
+  return mgr->ScriptAllowed(global->GetGlobalJSObject());
 }
 
 nsXBLBinding*
@@ -1108,7 +1112,7 @@ nsXBLBinding::ResolveAllFields(JSContext *cx, JS::Handle<JSObject*> obj) const
 }
 
 bool
-nsXBLBinding::LookupMember(JSContext* aCx, JS::HandleId aId,
+nsXBLBinding::LookupMember(JSContext* aCx, JS::Handle<jsid> aId,
                            JS::MutableHandle<JSPropertyDescriptor> aDesc)
 {
   // We should never enter this function with a pre-filled property descriptor.
@@ -1137,7 +1141,7 @@ nsXBLBinding::LookupMember(JSContext* aCx, JS::HandleId aId,
   // Enter the xbl scope and invoke the internal version.
   {
     JSAutoCompartment ac(aCx, xblScope);
-    JS::RootedId id(aCx, aId);
+    JS::Rooted<jsid> id(aCx, aId);
     if (!JS_WrapId(aCx, id.address()) ||
         !LookupMemberInternal(aCx, name, id, aDesc, xblScope))
     {
@@ -1151,7 +1155,7 @@ nsXBLBinding::LookupMember(JSContext* aCx, JS::HandleId aId,
 
 bool
 nsXBLBinding::LookupMemberInternal(JSContext* aCx, nsString& aName,
-                                   JS::HandleId aNameAsId,
+                                   JS::Handle<jsid> aNameAsId,
                                    JS::MutableHandle<JSPropertyDescriptor> aDesc,
                                    JS::Handle<JSObject*> aXBLScope)
 {
@@ -1167,7 +1171,7 @@ nsXBLBinding::LookupMemberInternal(JSContext* aCx, nsString& aName,
 
   // Find our class object. It's in a protected scope and permanent just in case,
   // so should be there no matter what.
-  JS::RootedValue classObject(aCx);
+  JS::Rooted<JS::Value> classObject(aCx);
   if (!JS_GetProperty(aCx, aXBLScope, mJSClass->name, &classObject)) {
     return false;
   }

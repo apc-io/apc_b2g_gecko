@@ -43,6 +43,9 @@
 #include "BasicLayers.h"
 #include "libdisplay/GonkDisplay.h"
 #include "pixelflinger/format.h"
+#include "mozilla/BasicEvents.h"
+#include "mozilla/layers/CompositorParent.h"
+#include "ParentProcessController.h"
 
 #include "HwcComposer2D.h"
 
@@ -544,10 +547,11 @@ nsWindow::GetDefaultScaleInternal()
     if (dpi < 200.0) {
         return 1.0; // mdpi devices.
     }
-    if (dpi < 280.0) {
+    if (dpi < 300.0) {
         return 1.5; // hdpi devices.
     }
-    return 2.0; // xhdpi devices.
+    // xhdpi devices and beyond.
+    return floor(dpi / 150.0);
 }
 
 LayerManager *
@@ -587,6 +591,10 @@ nsWindow::GetLayerManager(PLayerTransactionChild* aShadowManager,
 
     if (sUsingOMTC) {
         CreateCompositor();
+        if (mCompositorParent) {
+            uint64_t rootLayerTreeId = mCompositorParent->RootLayerTreeId();
+            CompositorParent::SetControllerForLayerTree(rootLayerTreeId, new ParentProcessController());
+        }
         if (mLayerManager)
             return mLayerManager;
     }

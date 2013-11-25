@@ -15,7 +15,15 @@ dictionary MmsAttachment
                       // for text should always be "utf-8".
 };
 
-[scriptable, builtinclass, uuid(2e5e1c16-b7af-11e2-af04-8f4b1610a600)]
+dictionary MmsDeliveryInfo
+{
+  DOMString? receiver;
+  DOMString? deliveryStatus;
+  jsval      deliveryTimestamp; // Date object; null if not available (e.g.,
+                                // |delivery| = "received" or not yet delivered).
+};
+
+[scriptable, builtinclass, uuid(82ca2465-f967-4107-a4da-65b7a15d5dba)]
 interface nsIDOMMozMmsMessage : nsISupports
 {
   /**
@@ -28,12 +36,19 @@ interface nsIDOMMozMmsMessage : nsISupports
   readonly attribute unsigned long long threadId;
 
   /**
+   * Integrated Circuit Card Identifier.
+   *
+   * Will be null if ICC is not available.
+   */
+  readonly attribute DOMString iccId;
+
+  /**
    * Should be "not-downloaded", "received", "sending", "sent" or "error".
    */
   readonly attribute DOMString delivery;
 
   [implicit_jscontext]
-  readonly attribute jsval     deliveryStatus; // DOMString[]
+  readonly attribute jsval     deliveryInfo;   // MmsDeliveryInfo[]
 
   readonly attribute DOMString sender;
 
@@ -54,4 +69,7 @@ interface nsIDOMMozMmsMessage : nsISupports
   readonly attribute jsval     expiryDate;     // Date object
                                                // Expiry date for an MMS to be
                                                // manually downloaded.
+
+  // Request read report from sender or not.
+  readonly attribute boolean   readReportRequested;
 };

@@ -78,8 +78,7 @@ ImageLayerComposite::GetLayer()
 }
 
 void
-ImageLayerComposite::RenderLayer(const nsIntPoint& aOffset,
-                                 const nsIntRect& aClipRect)
+ImageLayerComposite::RenderLayer(const nsIntRect& aClipRect)
 {
   if (!mImageHost || !mImageHost->IsAttached()) {
     return;
@@ -104,7 +103,6 @@ ImageLayerComposite::RenderLayer(const nsIntPoint& aOffset,
   mImageHost->Composite(effectChain,
                         GetEffectiveOpacity(),
                         transform,
-                        gfx::Point(aOffset.x, aOffset.y),
                         gfx::ToFilter(mFilter),
                         clipRect);
 }
@@ -160,7 +158,6 @@ ImageLayerComposite::CleanupResources()
   mImageHost = nullptr;
 }
 
-#ifdef MOZ_LAYERS_HAVE_LOG
 nsACString&
 ImageLayerComposite::PrintInfo(nsACString& aTo, const char* aPrefix)
 {
@@ -173,7 +170,6 @@ ImageLayerComposite::PrintInfo(nsACString& aTo, const char* aPrefix)
   }
   return aTo;
 }
-#endif
 
 } /* layers */
 } /* mozilla */

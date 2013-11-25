@@ -57,7 +57,6 @@ protected:
   bool mInverted;
 };
 
-
 class DeprecatedTextureClientSharedOGL : public DeprecatedTextureClient
 {
 public:

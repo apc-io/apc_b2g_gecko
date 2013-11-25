@@ -88,8 +88,9 @@ ifneq (,$(findstring mingw,$(CONFIG_GUESS)))
 # check for CRLF line endings
 ifneq (0,$(shell $(PERL) -e 'binmode(STDIN); while (<STDIN>) { if (/\r/) { print "1"; exit } } print "0"' < $(TOPSRCDIR)/client.mk))
 $(error This source tree appears to have Windows-style line endings. To \
-convert it to Unix-style line endings, run \
-"python mozilla/build/win32/mozilla-dos2unix.py")
+convert it to Unix-style line endings, check \
+"https://developer.mozilla.org/en-US/docs/Developer_Guide/Mozilla_build_FAQ\#Win32-specific_questions" \
+for a workaround of this issue.)
 endif
 endif
 
@@ -126,6 +127,11 @@ MOZCONFIG_OUT_FILTERED := $(filter-out $(START_COMMENT)%,$(MOZCONFIG_OUT_LINES))
 
 ifdef AUTOCLOBBER
 export AUTOCLOBBER=1
+endif
+
+ifdef MOZ_PARALLEL_BUILD
+  MOZ_MAKE_FLAGS := $(filter-out -j%,$(MOZ_MAKE_FLAGS))
+  MOZ_MAKE_FLAGS += -j$(MOZ_PARALLEL_BUILD)
 endif
 
 # Automatically add -jN to make flags if not defined. N defaults to number of cores.

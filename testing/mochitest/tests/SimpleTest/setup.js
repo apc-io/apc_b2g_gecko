@@ -107,6 +107,11 @@ if (params.failureFile) {
   TestRunner.setFailureFile(params.failureFile);
 }
 
+// Breaks execution and enters the JS debugger on a test failure
+if (params.debugOnFailure) {
+  TestRunner.debugOnFailure = true;
+}
+
 // logFile to write our results
 if (params.logFile) {
   var spl = new SpecialPowersLogger(params.logFile);
@@ -124,6 +129,18 @@ if (!params.quiet) {
 // A temporary hack for android 4.0 where Fennec utilizes the pandaboard so much it reboots
 if (params.runSlower) {
   TestRunner.runSlower = true;
+}
+
+if (params.dumpOutputDirectory) {
+  TestRunner.dumpOutputDirectory = params.dumpOutputDirectory;
+}
+
+if (params.dumpAboutMemoryAfterTest) {
+  TestRunner.dumpAboutMemoryAfterTest = true;
+}
+
+if (params.dumpDMDAfterTest) {
+  TestRunner.dumpDMDAfterTest = true;
 }
 
 var gTestList = [];

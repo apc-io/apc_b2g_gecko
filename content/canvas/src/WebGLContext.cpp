@@ -392,6 +392,10 @@ WebGLContext::SetDimensions(int32_t width, int32_t height)
     if (gl) {
         MakeContextCurrent();
 
+        // If we've already drawn, we should commit the current buffer.
+        PresentScreenBuffer();
+
+        // ResizeOffscreen scraps the current prod buffer before making a new one.
         gl->ResizeOffscreen(gfxIntSize(width, height)); // Doesn't matter if it succeeds (soft-fail)
         // It's unlikely that we'll get a proper-sized context if we recreate if we didn't on resize
 
@@ -400,9 +404,7 @@ WebGLContext::SetDimensions(int32_t width, int32_t height)
         mHeight = gl->OffscreenSize().height;
         mResetLayer = true;
 
-        ScopedBindFramebuffer autoFB(gl, 0);
-        gl->ClearSafely();
-        mShouldPresent = true;
+        ClearScreen();
 
         return NS_OK;
     }
@@ -792,17 +794,17 @@ WebGLContext::GetInputStream(const char* aMimeType,
     if (!gl)
         return NS_ERROR_FAILURE;
 
-    uint8_t* imageBuffer = nullptr;
-    int32_t format = 0;
-    GetImageBuffer(&imageBuffer, &format);
-    if (!imageBuffer) {
-        return NS_ERROR_FAILURE;
-    }
-
     nsCString enccid("@mozilla.org/image/encoder;2?type=");
     enccid += aMimeType;
     nsCOMPtr<imgIEncoder> encoder = do_CreateInstance(enccid.get());
     if (!encoder) {
+        return NS_ERROR_FAILURE;
+    }
+
+    nsAutoArrayPtr<uint8_t> imageBuffer;
+    int32_t format = 0;
+    GetImageBuffer(getter_Transfers(imageBuffer), &format);
+    if (!imageBuffer) {
         return NS_ERROR_FAILURE;
     }
 
@@ -1171,6 +1173,10 @@ WebGLContext::ForceClearFramebufferWithDefaultValues(GLbitfield mask, const bool
 bool
 WebGLContext::PresentScreenBuffer()
 {
+    if (IsContextLost()) {
+        return false;
+    }
+
     if (!mShouldPresent) {
         return false;
     }

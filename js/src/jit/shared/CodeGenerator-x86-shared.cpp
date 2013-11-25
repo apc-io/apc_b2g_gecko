@@ -194,9 +194,13 @@ CodeGeneratorX86Shared::visitCompareD(LCompareD *comp)
     FloatRegister rhs = ToFloatRegister(comp->right());
 
     Assembler::DoubleCondition cond = JSOpToDoubleCondition(comp->mir()->jsop());
+
+    Assembler::NaNCond nanCond = Assembler::NaNCondFromDoubleCondition(cond);
+    if (comp->mir()->operandsAreNeverNaN())
+        nanCond = Assembler::NaN_HandledByCond;
+
     masm.compareDouble(cond, lhs, rhs);
-    masm.emitSet(Assembler::ConditionFromDoubleCondition(cond), ToRegister(comp->output()),
-            Assembler::NaNCondFromDoubleCondition(cond));
+    masm.emitSet(Assembler::ConditionFromDoubleCondition(cond), ToRegister(comp->output()), nanCond);
     return true;
 }
 
@@ -207,9 +211,13 @@ CodeGeneratorX86Shared::visitCompareF(LCompareF *comp)
     FloatRegister rhs = ToFloatRegister(comp->right());
 
     Assembler::DoubleCondition cond = JSOpToDoubleCondition(comp->mir()->jsop());
+
+    Assembler::NaNCond nanCond = Assembler::NaNCondFromDoubleCondition(cond);
+    if (comp->mir()->operandsAreNeverNaN())
+        nanCond = Assembler::NaN_HandledByCond;
+
     masm.compareFloat(cond, lhs, rhs);
-    masm.emitSet(Assembler::ConditionFromDoubleCondition(cond), ToRegister(comp->output()),
-            Assembler::NaNCondFromDoubleCondition(cond));
+    masm.emitSet(Assembler::ConditionFromDoubleCondition(cond), ToRegister(comp->output()), nanCond);
     return true;
 }
 
@@ -226,9 +234,15 @@ CodeGeneratorX86Shared::visitNotD(LNotD *ins)
 {
     FloatRegister opd = ToFloatRegister(ins->input());
 
+    // Not returns true if the input is a NaN. We don't have to worry about
+    // it if we know the input is never NaN though.
+    Assembler::NaNCond nanCond = Assembler::NaN_IsTrue;
+    if (ins->mir()->operandIsNeverNaN())
+        nanCond = Assembler::NaN_HandledByCond;
+
     masm.xorpd(ScratchFloatReg, ScratchFloatReg);
     masm.compareDouble(Assembler::DoubleEqualOrUnordered, opd, ScratchFloatReg);
-    masm.emitSet(Assembler::Equal, ToRegister(ins->output()), Assembler::NaN_IsTrue);
+    masm.emitSet(Assembler::Equal, ToRegister(ins->output()), nanCond);
     return true;
 }
 
@@ -237,9 +251,15 @@ CodeGeneratorX86Shared::visitNotF(LNotF *ins)
 {
     FloatRegister opd = ToFloatRegister(ins->input());
 
+    // Not returns true if the input is a NaN. We don't have to worry about
+    // it if we know the input is never NaN though.
+    Assembler::NaNCond nanCond = Assembler::NaN_IsTrue;
+    if (ins->mir()->operandIsNeverNaN())
+        nanCond = Assembler::NaN_HandledByCond;
+
     masm.xorps(ScratchFloatReg, ScratchFloatReg);
     masm.compareFloat(Assembler::DoubleEqualOrUnordered, opd, ScratchFloatReg);
-    masm.emitSet(Assembler::Equal, ToRegister(ins->output()), Assembler::NaN_IsTrue);
+    masm.emitSet(Assembler::Equal, ToRegister(ins->output()), nanCond);
     return true;
 }
 
@@ -250,9 +270,13 @@ CodeGeneratorX86Shared::visitCompareDAndBranch(LCompareDAndBranch *comp)
     FloatRegister rhs = ToFloatRegister(comp->right());
 
     Assembler::DoubleCondition cond = JSOpToDoubleCondition(comp->mir()->jsop());
+
+    Assembler::NaNCond nanCond = Assembler::NaNCondFromDoubleCondition(cond);
+    if (comp->mir()->operandsAreNeverNaN())
+        nanCond = Assembler::NaN_HandledByCond;
+
     masm.compareDouble(cond, lhs, rhs);
-    emitBranch(Assembler::ConditionFromDoubleCondition(cond), comp->ifTrue(), comp->ifFalse(),
-               Assembler::NaNCondFromDoubleCondition(cond));
+    emitBranch(Assembler::ConditionFromDoubleCondition(cond), comp->ifTrue(), comp->ifFalse(), nanCond);
     return true;
 }
 
@@ -263,9 +287,13 @@ CodeGeneratorX86Shared::visitCompareFAndBranch(LCompareFAndBranch *comp)
     FloatRegister rhs = ToFloatRegister(comp->right());
 
     Assembler::DoubleCondition cond = JSOpToDoubleCondition(comp->mir()->jsop());
+
+    Assembler::NaNCond nanCond = Assembler::NaNCondFromDoubleCondition(cond);
+    if (comp->mir()->operandsAreNeverNaN())
+        nanCond = Assembler::NaN_HandledByCond;
+
     masm.compareFloat(cond, lhs, rhs);
-    emitBranch(Assembler::ConditionFromDoubleCondition(cond), comp->ifTrue(), comp->ifFalse(),
-               Assembler::NaNCondFromDoubleCondition(cond));
+    emitBranch(Assembler::ConditionFromDoubleCondition(cond), comp->ifTrue(), comp->ifFalse(), nanCond);
     return true;
 }
 
@@ -523,19 +551,29 @@ CodeGeneratorX86Shared::visitPowHalfD(LPowHalfD *ins)
 
     Label done, sqrt;
 
-    // Branch if not -Infinity.
-    masm.loadConstantDouble(NegativeInfinity(), ScratchFloatReg);
-    masm.branchDouble(Assembler::DoubleNotEqualOrUnordered, input, ScratchFloatReg, &sqrt);
+    if (!ins->mir()->operandIsNeverNegativeInfinity()) {
+        // Branch if not -Infinity.
+        masm.loadConstantDouble(NegativeInfinity(), ScratchFloatReg);
 
-    // Math.pow(-Infinity, 0.5) == Infinity.
-    masm.xorpd(input, input);
-    masm.subsd(ScratchFloatReg, input);
-    masm.jump(&done);
+        Assembler::DoubleCondition cond = Assembler::DoubleNotEqualOrUnordered;
+        if (ins->mir()->operandIsNeverNaN())
+            cond = Assembler::DoubleNotEqual;
+        masm.branchDouble(cond, input, ScratchFloatReg, &sqrt);
 
-    // Math.pow(-0, 0.5) == 0 == Math.pow(0, 0.5). Adding 0 converts any -0 to 0.
-    masm.bind(&sqrt);
-    masm.xorpd(ScratchFloatReg, ScratchFloatReg);
-    masm.addsd(ScratchFloatReg, input);
+        // Math.pow(-Infinity, 0.5) == Infinity.
+        masm.xorpd(input, input);
+        masm.subsd(ScratchFloatReg, input);
+        masm.jump(&done);
+
+        masm.bind(&sqrt);
+    }
+
+    if (!ins->mir()->operandIsNeverNegativeZero()) {
+        // Math.pow(-0, 0.5) == 0 == Math.pow(0, 0.5). Adding 0 converts any -0 to 0.
+        masm.xorpd(ScratchFloatReg, ScratchFloatReg);
+        masm.addsd(ScratchFloatReg, input);
+    }
+
     masm.sqrtsd(input, input);
 
     masm.bind(&done);

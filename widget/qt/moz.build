@@ -6,16 +6,17 @@
 
 DIRS += ['faststartupqt']
 
-MODULE = 'widget'
-
 EXPORTS += [
     'nsQtKeyUtils.h',
 ]
 
-SOURCES += [
+GENERATED_SOURCES += [
     'moc_moziqwidget.cpp',
     'moc_mozqwidget.cpp',
     'moc_nsAppShell.cpp',
+]
+
+SOURCES += [
     'mozqglwidgetwrapper.cpp',
     'mozqwidget.cpp',
     'mozSwipeGesture.cpp',
@@ -41,21 +42,22 @@ SOURCES += [
 
 if CONFIG['MOZ_ENABLE_CONTENTMANAGER']:
     SOURCES += [
-        'moc_nsMFilePicker.cpp',
         'nsMFilePicker.cpp',
+    ]
+    GENERATED_SOURCES += [
+        'moc_nsMFilePicker.cpp',
     ]
 
 if CONFIG[' MOZ_ENABLE_QTMOBILITY']:
     SOURCES += [
-        'moc_mozqorientationsensorfilter.cpp',
         'mozqorientationsensorfilter.cpp',
     ]
-
-LIBXUL_LIBRARY = True
+    GENERATED_SOURCES += [
+        'moc_mozqorientationsensorfilter.cpp',
+    ]
 
 LIBRARY_NAME = 'widget_qt'
 
-EXPORT_LIBRARY = True
-
 include('/ipc/chromium/chromium-config.mozbuild')
 
+FINAL_LIBRARY = 'xul'

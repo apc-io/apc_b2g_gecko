@@ -82,9 +82,6 @@ struct nsCSSBorderRenderer {
                       int aSkipSides,
                       nscolor aBackgroundColor);
 
-  static void Init();
-  static void Shutdown();
-
   gfxCornerSizes mBorderCornerDimensions;
 
   // destination context
@@ -233,6 +230,8 @@ struct nsCSSBorderRenderer {
                                 gfxCornerSizes *aOuterRadiiRet);
 };
 
+namespace mozilla {
+
 #ifdef DEBUG_NEW_BORDERS
 #include <stdarg.h>
 
@@ -290,5 +289,7 @@ static inline void SN(const char *s = nullptr) {}
 static inline void SF(const char *fmt, ...) {}
 static inline void SX(gfxContext *ctx) {}
 #endif
+
+}
 
 #endif /* NS_CSS_RENDERING_BORDERS_H */

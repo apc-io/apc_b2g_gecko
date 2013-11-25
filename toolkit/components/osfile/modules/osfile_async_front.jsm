@@ -171,8 +171,8 @@ let Scheduler = {
         if (error instanceof PromiseWorker.WorkerError) {
           throw OS.File.Error.fromMsg(error.data);
         }
-        // Extract something meaningful from WorkerErrorEvent
-        if (typeof error == "object" && error && error.constructor.name == "WorkerErrorEvent") {
+        // Extract something meaningful from ErrorEvent
+        if (error instanceof ErrorEvent) {
           let message = error.message;
           if (message == "uncaught exception: [object StopIteration]") {
             throw StopIteration;
@@ -880,7 +880,7 @@ let DirectoryIterator = function DirectoryIterator(path, options) {
    * @rejects {StopIteration} If all entries have already been visited
    * or the iterator has been closed.
    */
-  this._itmsg = Scheduler.post(
+  this.__itmsg = Scheduler.post(
     "new_DirectoryIterator", [Type.path.toMsg(path), options],
     path
   );
@@ -889,6 +889,17 @@ let DirectoryIterator = function DirectoryIterator(path, options) {
 DirectoryIterator.prototype = {
   iterator: function () this,
   __iterator__: function () this,
+
+  // Once close() is called, _itmsg should reject with a
+  // StopIteration. However, we don't want to create the promise until
+  // it's needed because it might never be used. In that case, we
+  // would get a warning on the console.
+  get _itmsg() {
+    if (!this.__itmsg) {
+      this.__itmsg = Promise.reject(StopIteration);
+    }
+    return this.__itmsg;
+  },
 
   /**
    * Determine whether the directory exists.
@@ -1029,7 +1040,9 @@ DirectoryIterator.prototype = {
     let self = this;
     return this._itmsg.then(
       function withIterator(iterator) {
-        self._itmsg = Promise.reject(StopIteration);
+        // Set __itmsg to null so that the _itmsg getter returns a
+        // rejected StopIteration promise if it's ever used.
+        self.__itmsg = null;
         return Scheduler.post("DirectoryIterator_prototype_close", [iterator]);
       }
     );

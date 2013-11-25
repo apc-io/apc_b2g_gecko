@@ -617,6 +617,44 @@ JSPropertyDescriptor::trace(JSTracer *trc)
     }
 }
 
+// Mark a chain of PersistentRooted pointers that might be null.
+template<typename Referent>
+static void
+MarkPersistentRootedChain(JSTracer *trc,
+                          mozilla::LinkedList<PersistentRooted<Referent *> > &list,
+                          void (*marker)(JSTracer *trc, Referent **ref, const char *name),
+                          const char *name)
+{
+    for (PersistentRooted<Referent *> *r = list.getFirst();
+         r != nullptr;
+         r = r->getNext())
+    {
+        if (r->get())
+            marker(trc, r->address(), name);
+    }
+}
+
+void
+js::gc::MarkPersistentRootedChains(JSTracer *trc)
+{
+    JSRuntime *rt = trc->runtime;
+
+    MarkPersistentRootedChain(trc, rt->functionPersistentRooteds, &MarkObjectRoot,
+                              "PersistentRooted<JSFunction *>");
+    MarkPersistentRootedChain(trc, rt->objectPersistentRooteds, &MarkObjectRoot,
+                              "PersistentRooted<JSObject *>");
+    MarkPersistentRootedChain(trc, rt->scriptPersistentRooteds, &MarkScriptRoot,
+                              "PersistentRooted<JSScript *>");
+    MarkPersistentRootedChain(trc, rt->stringPersistentRooteds, &MarkStringRoot, 
+                              "PersistentRooted<JSString *>");
+
+    // Mark the PersistentRooted chains of types that are never null.
+    for (JS::PersistentRootedId *r = rt->idPersistentRooteds.getFirst(); r != nullptr; r = r->getNext())
+        MarkIdRoot(trc, r->address(), "PersistentRooted<jsid>");
+    for (JS::PersistentRootedValue *r = rt->valuePersistentRooteds.getFirst(); r != nullptr; r = r->getNext())
+        MarkValueRoot(trc, r->address(), "PersistentRooted<Value>");
+}
+
 void
 js::gc::MarkRuntime(JSTracer *trc, bool useSavedRoots)
 {
@@ -626,7 +664,7 @@ js::gc::MarkRuntime(JSTracer *trc, bool useSavedRoots)
     JS_ASSERT(!rt->mainThread.suppressGC);
 
     if (IS_GC_MARKING_TRACER(trc)) {
-        for (CompartmentsIter c(rt); !c.done(); c.next()) {
+        for (CompartmentsIter c(rt, SkipAtoms); !c.done(); c.next()) {
             if (!c->zone()->isCollecting())
                 c->markCrossCompartmentWrappers(trc);
         }
@@ -661,27 +699,28 @@ js::gc::MarkRuntime(JSTracer *trc, bool useSavedRoots)
         }
     }
 
+    MarkPersistentRootedChains(trc);
+
     if (rt->scriptAndCountsVector) {
         ScriptAndCountsVector &vec = *rt->scriptAndCountsVector;
         for (size_t i = 0; i < vec.length(); i++)
             MarkScriptRoot(trc, &vec[i].script, "scriptAndCountsVector");
     }
 
-    if (!rt->isBeingDestroyed() &&
-        !trc->runtime->isHeapMinorCollecting() &&
-        (!IS_GC_MARKING_TRACER(trc) || rt->atomsCompartment()->zone()->isCollecting()))
-    {
-        MarkAtoms(trc);
-        rt->staticStrings.trace(trc);
+    if (!rt->isBeingDestroyed() && !trc->runtime->isHeapMinorCollecting()) {
+        if (!IS_GC_MARKING_TRACER(trc) || rt->atomsCompartment()->zone()->isCollecting()) {
+            MarkAtoms(trc);
+            rt->staticStrings.trace(trc);
 #ifdef JS_ION
-        jit::JitRuntime::Mark(trc);
+            jit::JitRuntime::Mark(trc);
 #endif
+        }
     }
 
     for (ContextIter acx(rt); !acx.done(); acx.next())
         acx->mark(trc);
 
-    for (ZonesIter zone(rt); !zone.done(); zone.next()) {
+    for (ZonesIter zone(rt, SkipAtoms); !zone.done(); zone.next()) {
         if (IS_GC_MARKING_TRACER(trc) && !zone->isCollecting())
             continue;
 
@@ -703,7 +742,7 @@ js::gc::MarkRuntime(JSTracer *trc, bool useSavedRoots)
     }
 
     /* We can't use GCCompartmentsIter if we're called from TraceRuntime. */
-    for (CompartmentsIter c(rt); !c.done(); c.next()) {
+    for (CompartmentsIter c(rt, SkipAtoms); !c.done(); c.next()) {
         if (trc->runtime->isHeapMinorCollecting())
             c->globalWriteBarriered = false;
 
@@ -733,7 +772,7 @@ js::gc::MarkRuntime(JSTracer *trc, bool useSavedRoots)
          * which have been entered. Globals aren't nursery allocated so there's
          * no need to do this for minor GCs.
          */
-        for (CompartmentsIter c(rt); !c.done(); c.next())
+        for (CompartmentsIter c(rt, SkipAtoms); !c.done(); c.next())
             c->mark(trc);
 
         /*

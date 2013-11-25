@@ -9,6 +9,7 @@ bcrook.com: max-age too low: 86400
 betnet.fr: could not connect to host
 bigshinylock.minazo.net: could not connect to host
 bitbucket.org: max-age too low: 2592000
+blog.lookout.com: did not receive HSTS header
 braintreegateway.com: did not receive HSTS header
 braintreepayments.com: did not receive HSTS header
 browserid.org: did not receive HSTS header
@@ -22,23 +23,24 @@ codereview.chromium.org: did not receive HSTS header
 crowdcurity.com: did not receive HSTS header
 crypto.is: did not receive HSTS header
 csawctf.poly.edu: did not receive HSTS header
-cybozu.com: did not receive HSTS header
 dl.google.com: did not receive HSTS header
 docs.google.com: did not receive HSTS header
 drive.google.com: did not receive HSTS header
 dropcam.com: did not receive HSTS header
+email.lookout.com: could not connect to host
 emailprivacytester.com: did not receive HSTS header
 encrypted.google.com: did not receive HSTS header
 epoxate.com: max-age too low: 259200
-factor.cc: could not connect to host
 fatzebra.com.au: did not receive HSTS header
 fj.simple.com: did not receive HSTS header
+get.zenpayroll.com: did not receive HSTS header
 gmail.com: did not receive HSTS header
 gocardless.com: [Exception... "Component returned failure code: 0x80004005 (NS_ERROR_FAILURE) [nsISiteSecurityService.processHeader]"  nsresult: "0x80004005 (NS_ERROR_FAILURE)"  location: "JS frame :: /builds/slave/m-cen-l64-hsts-000000000000000/getHSTSPreloadList.js :: processStsHeader :: line 124"  data: no]
 googlemail.com: did not receive HSTS header
 googleplex.com: could not connect to host
+goto.google.com: did not receive HSTS header
 greplin.com: did not receive HSTS header
-grepular.com: [Exception... "Component returned failure code: 0x80004005 (NS_ERROR_FAILURE) [nsISiteSecurityService.processHeader]"  nsresult: "0x80004005 (NS_ERROR_FAILURE)"  location: "JS frame :: /builds/slave/m-cen-l64-hsts-000000000000000/getHSTSPreloadList.js :: processStsHeader :: line 124"  data: no]
+grepular.com: max-age too low: 8640000
 groups.google.com: did not receive HSTS header
 history.google.com: did not receive HSTS header
 hostedtalkgadget.google.com: did not receive HSTS header
@@ -48,12 +50,14 @@ irccloud.com: did not receive HSTS header
 jitsi.org: did not receive HSTS header
 jottit.com: did not receive HSTS header
 kiwiirc.com: max-age too low: 5256000
-ledgerscope.net: max-age too low: 86400
+ledgerscope.net: did not receive HSTS header
+liberty.lavabit.com: did not receive HSTS header
 lists.mayfirst.org: did not receive HSTS header
 logentries.com: did not receive HSTS header
 lumi.do: [Exception... "Component returned failure code: 0x80004005 (NS_ERROR_FAILURE) [nsISiteSecurityService.processHeader]"  nsresult: "0x80004005 (NS_ERROR_FAILURE)"  location: "JS frame :: /builds/slave/m-cen-l64-hsts-000000000000000/getHSTSPreloadList.js :: processStsHeader :: line 124"  data: no]
 mail.google.com: did not receive HSTS header
 market.android.com: did not receive HSTS header
+mattmccutchen.net: could not connect to host
 medium.com: max-age too low: 2592000
 my.alfresco.com: did not receive HSTS header
 mydigipass.com: did not receive HSTS header
@@ -64,7 +68,7 @@ oraprodsso.corp.google.com: could not connect to host
 ottospora.nl: could not connect to host
 packagist.org: max-age too low: 2592000
 paypal.com: max-age too low: 14400
-piratenlogin.de: could not connect to host
+platform.lookout.com: could not connect to host
 plus.google.com: did not receive HSTS header
 plus.sandbox.google.com: did not receive HSTS header
 profiles.google.com: did not receive HSTS header
@@ -78,7 +82,6 @@ serverdensity.io: did not receive HSTS header
 shops.neonisi.com: could not connect to host
 silentcircle.org: could not connect to host
 simon.butcher.name: max-age too low: 2629743
-simple.com: did not receive HSTS header
 sites.google.com: did not receive HSTS header
 sol.io: could not connect to host
 spreadsheets.google.com: did not receive HSTS header
@@ -104,7 +107,7 @@ www.gov.uk: [Exception... "Component returned failure code: 0x80004005 (NS_ERROR
 www.greplin.com: could not connect to host
 www.jitsi.org: did not receive HSTS header
 www.lastpass.com: did not receive HSTS header
-www.ledgerscope.net: max-age too low: 86400
+www.ledgerscope.net: did not receive HSTS header
 www.logentries.com: did not receive HSTS header
 www.moneybookers.com: did not receive HSTS header
 www.neonisi.com: could not connect to host
@@ -112,4 +115,4 @@ www.paycheckrecords.com: max-age too low: 86400
 www.paypal.com: [Exception... "Component returned failure code: 0x80004005 (NS_ERROR_FAILURE) [nsISiteSecurityService.processHeader]"  nsresult: "0x80004005 (NS_ERROR_FAILURE)"  location: "JS frame :: /builds/slave/m-cen-l64-hsts-000000000000000/getHSTSPreloadList.js :: processStsHeader :: line 124"  data: no]
 www.sandbox.mydigipass.com: could not connect to host
 www.surfeasy.com: did not receive HSTS header
-zoo24.de: max-age too low: 2592000
+zoo24.de: did not receive HSTS header

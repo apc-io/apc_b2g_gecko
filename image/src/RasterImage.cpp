@@ -1436,12 +1436,13 @@ RasterImage::StartAnimation()
   EnsureAnimExists();
 
   imgFrame* currentFrame = GetCurrentImgFrame();
-  if (currentFrame) {
-    if (currentFrame->GetTimeout() < 0) { // -1 means display this frame forever
-      mAnimationFinished = true;
-      return NS_ERROR_ABORT;
-    }
+  // A timeout of -1 means we should display this frame forever.
+  if (currentFrame && currentFrame->GetTimeout() < 0) {
+    mAnimationFinished = true;
+    return NS_ERROR_ABORT;
+  }
 
+  if (mAnim) {
     // We need to set the time that this initial frame was first displayed, as
     // this is used in AdvanceFrame().
     mAnim->InitAnimationFrameTimeIfNecessary();
@@ -1457,12 +1458,15 @@ RasterImage::StopAnimation()
 {
   NS_ABORT_IF_FALSE(mAnimating, "Should be animating!");
 
-  if (mError)
-    return NS_ERROR_FAILURE;
+  nsresult rv = NS_OK;
+  if (mError) {
+    rv = NS_ERROR_FAILURE;
+  } else {
+    mAnim->SetAnimationFrameTime(TimeStamp());
+  }
 
-  mAnim->SetAnimationFrameTime(TimeStamp());
-
-  return NS_OK;
+  mAnimating = false;
+  return rv;
 }
 
 //******************************************************************************
@@ -1483,9 +1487,7 @@ RasterImage::ResetAnimation()
     StopAnimation();
 
   mFrameBlender.ResetAnimation();
-  if (mAnim) {
-    mAnim->ResetAnimation();
-  }
+  mAnim->ResetAnimation();
 
   UpdateImageContainer();
 
@@ -1498,13 +1500,9 @@ RasterImage::ResetAnimation()
     mStatusTracker->FrameChanged(&rect);
   }
 
-  if (ShouldAnimate()) {
-    StartAnimation();
-    // The animation may not have been running before, if mAnimationFinished
-    // was false (before we changed it to true in this function). So, mark the
-    // animation as running.
-    mAnimating = true;
-  }
+  // Start the animation again. It may not have been running before, if
+  // mAnimationFinished was true before entering this function.
+  EvaluateAnimation();
 
   return NS_OK;
 }
@@ -1573,10 +1571,8 @@ RasterImage::AddSourceData(const char *aBuffer, uint32_t aCount)
   // so that there's no gap for anything to miss us.
   if (mMultipart && mBytesDecoded == 0) {
     // Our previous state may have been animated, so let's clean up
-    if (mAnimating) {
+    if (mAnimating)
       StopAnimation();
-      mAnimating = false;
-    }
     mAnimationFinished = false;
     if (mAnim) {
       delete mAnim;
@@ -1593,10 +1589,11 @@ RasterImage::AddSourceData(const char *aBuffer, uint32_t aCount)
   // write the data directly to the decoder. (If we haven't gotten the size,
   // we'll queue up the data and write it out when we do.)
   if (!StoringSourceData() && mHasSize) {
-    mDecoder->SetSynchronous(true);
-    rv = WriteToDecoder(aBuffer, aCount);
-    mDecoder->SetSynchronous(false);
-    CONTAINER_ENSURE_SUCCESS(rv);
+    {
+      AutoSetSyncDecode syncDecode(mDecoder);
+      rv = WriteToDecoder(aBuffer, aCount);
+      CONTAINER_ENSURE_SUCCESS(rv);
+    }
 
     // We're not storing source data, so this data is probably coming straight
     // from the network. In this case, we want to display data as soon as we
@@ -1965,7 +1962,7 @@ RasterImage::StoringSourceData() const {
 // Sets up a decoder for this image. It is an error to call this function
 // when decoding is already in process (ie - when mDecoder is non-null).
 nsresult
-RasterImage::InitDecoder(bool aDoSizeDecode, bool aIsSynchronous /* = false */)
+RasterImage::InitDecoder(bool aDoSizeDecode)
 {
   // Ensure that the decoder is not already initialized
   NS_ABORT_IF_FALSE(!mDecoder, "Calling InitDecoder() while already decoding!");
@@ -2030,7 +2027,6 @@ RasterImage::InitDecoder(bool aDoSizeDecode, bool aIsSynchronous /* = false */)
   mDecoder->SetObserver(mDecodeRequest->mStatusTracker->GetDecoderObserver());
   mDecoder->SetSizeDecode(aDoSizeDecode);
   mDecoder->SetDecodeFlags(mFrameDecodeFlags);
-  mDecoder->SetSynchronous(aIsSynchronous);
   if (!aDoSizeDecode) {
     // We already have the size; tell the decoder so it can preallocate a
     // frame.  By default, we create an ARGB frame with no offset. If decoders
@@ -2317,14 +2313,8 @@ RasterImage::RequestDecodeCore(RequestDecodeType aDecodeType)
   // to finish decoding.
   if (!mDecoded && !mInDecoder && mHasSourceData && aDecodeType == SYNCHRONOUS_NOTIFY_AND_SOME_DECODE) {
     PROFILER_LABEL_PRINTF("RasterImage", "DecodeABitOf", "%s", GetURIString().get());
-    mDecoder->SetSynchronous(true);
-
+    AutoSetSyncDecode syncDecode(mDecoder);
     DecodePool::Singleton()->DecodeABitOf(this);
-
-    // DecodeABitOf can destroy mDecoder.
-    if (mDecoder) {
-      mDecoder->SetSynchronous(false);
-    }
     return NS_OK;
   }
 
@@ -2402,15 +2392,17 @@ RasterImage::SyncDecode()
 
   // If we don't have a decoder, create one
   if (!mDecoder) {
-    rv = InitDecoder(/* aDoSizeDecode = */ false, /* aIsSynchronous = */ true);
+    rv = InitDecoder(/* aDoSizeDecode = */ false);
     CONTAINER_ENSURE_SUCCESS(rv);
-  } else {
-    mDecoder->SetSynchronous(true);
   }
 
-  // Write everything we have
-  rv = DecodeSomeData(mSourceData.Length() - mBytesDecoded);
-  CONTAINER_ENSURE_SUCCESS(rv);
+  {
+    AutoSetSyncDecode syncDecode(mDecoder);
+
+    // Write everything we have
+    rv = DecodeSomeData(mSourceData.Length() - mBytesDecoded);
+    CONTAINER_ENSURE_SUCCESS(rv);
+  }
 
   // When we're doing a sync decode, we want to get as much information from the
   // image as possible. We've send the decoder all of our data, so now's a good
@@ -2423,11 +2415,9 @@ RasterImage::SyncDecode()
 
   rv = FinishedSomeDecoding();
   CONTAINER_ENSURE_SUCCESS(rv);
-
+  
+  // If our decoder's still open, there's still work to be done.
   if (mDecoder) {
-    mDecoder->SetSynchronous(false);
-
-    // If our decoder's still open, there's still work to be done.
     DecodePool::Singleton()->RequestDecode(this);
   }
 

@@ -93,7 +93,7 @@ DesktopNotification::PostDesktopNotification()
       nsString manifestUrl = EmptyString();
       appsService->GetManifestURLByLocalId(appId, manifestUrl);
       mozilla::AutoSafeJSContext cx;
-      JS::RootedValue val(cx);
+      JS::Rooted<JS::Value> val(cx);
       AppNotificationServiceOptions ops;
       ops.mTextClickable = true;
       ops.mManifestURL = manifestUrl;
@@ -119,13 +119,15 @@ DesktopNotification::PostDesktopNotification()
   // to nsIObservers, thus cookies must be unique to differentiate observers.
   nsString uniqueName = NS_LITERAL_STRING("desktop-notification:");
   uniqueName.AppendInt(sCount++);
+  nsIPrincipal* principal = GetOwner()->GetDoc()->NodePrincipal();
   return alerts->ShowAlertNotification(mIconURL, mTitle, mDescription,
                                        true,
                                        uniqueName,
                                        mObserver,
                                        uniqueName,
                                        NS_LITERAL_STRING("auto"),
-                                       EmptyString());
+                                       EmptyString(),
+                                       principal);
 }
 
 DesktopNotification::DesktopNotification(const nsAString & title,
@@ -177,12 +179,9 @@ DesktopNotification::Init()
     // Corresponding release occurs in DeallocPContentPermissionRequest.
     nsRefPtr<DesktopNotificationRequest> copy = request;
 
-    nsTArray<PermissionRequest> permArray;
-    permArray.AppendElement(PermissionRequest(
-                            NS_LITERAL_CSTRING("desktop-notification"),
-                            NS_LITERAL_CSTRING("unused")));
     child->SendPContentPermissionRequestConstructor(copy.forget().get(),
-                                                    permArray,
+                                                    NS_LITERAL_CSTRING("desktop-notification"),
+                                                    NS_LITERAL_CSTRING("unused"),
                                                     IPC::Principal(mPrincipal));
 
     request->Sendprompt();
@@ -354,11 +353,17 @@ DesktopNotificationRequest::Allow()
 }
 
 NS_IMETHODIMP
-DesktopNotificationRequest::GetTypes(nsIArray** aTypes)
+DesktopNotificationRequest::GetType(nsACString & aType)
 {
-  return CreatePermissionArray(NS_LITERAL_CSTRING("desktop-notification"),
-                               NS_LITERAL_CSTRING("unused"),
-                               aTypes);
+  aType = "desktop-notification";
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+DesktopNotificationRequest::GetAccess(nsACString & aAccess)
+{
+  aAccess = "unused";
+  return NS_OK;
 }
 
 } // namespace dom

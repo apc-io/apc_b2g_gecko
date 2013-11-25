@@ -38,6 +38,7 @@
 #include "nsIDNSService.h"
 #include "nsWeakReference.h"
 #include "nricectx.h"
+#include "rlogringbuffer.h"
 #include "mozilla/SyncRunnable.h"
 #include "logging.h"
 #include "stunserver.h"
@@ -102,6 +103,50 @@ using namespace mozilla;
 using namespace mozilla::dom;
 
 namespace test {
+class RingbufferDumper : public ::testing::EmptyTestEventListener {
+  void ClearRingBuffer_s() {
+    RLogRingBuffer::CreateInstance();
+    // Set limit to zero to clear the ringbuffer
+    RLogRingBuffer::GetInstance()->SetLogLimit(0);
+    RLogRingBuffer::GetInstance()->SetLogLimit(UINT32_MAX);
+  }
+
+  void DestroyRingBuffer_s() {
+    RLogRingBuffer::DestroyInstance();
+  }
+
+  void DumpRingBuffer_s() {
+      std::deque<std::string> logs;
+      // Get an unlimited number of log lines, with no filter
+      RLogRingBuffer::GetInstance()->GetAny(0, &logs);
+      for (auto l = logs.begin(); l != logs.end(); ++l) {
+        std::cout << *l << std::endl;
+      }
+      ClearRingBuffer_s();
+  }
+
+  virtual void OnTestStart(const ::testing::TestInfo& testInfo) {
+    mozilla::SyncRunnable::DispatchToThread(
+      test_utils->sts_target(),
+      WrapRunnable(this, &RingbufferDumper::ClearRingBuffer_s));
+  }
+
+  virtual void OnTestEnd(const ::testing::TestInfo& testInfo) {
+    mozilla::SyncRunnable::DispatchToThread(
+      test_utils->sts_target(),
+      WrapRunnable(this, &RingbufferDumper::DestroyRingBuffer_s));
+  }
+
+  // Called after a failed assertion or a SUCCEED() invocation.
+  virtual void OnTestPartResult(const ::testing::TestPartResult& testResult) {
+    if (testResult.failed()) {
+      // Dump (and empty) the RLogRingBuffer
+      mozilla::SyncRunnable::DispatchToThread(
+        test_utils->sts_target(),
+        WrapRunnable(this, &RingbufferDumper::DumpRingBuffer_s));
+    }
+  }
+};
 
 std::string indent(const std::string &s, int width = 4) {
   std::string prefix;
@@ -2033,6 +2078,28 @@ TEST_F(SignalingTest, FullCallAudioOnly)
   ASSERT_GE(a2_->GetPacketsReceived(0), 40);
 }
 
+TEST_F(SignalingTest, FullCallAnswererRejectsVideo)
+{
+  sipcc::MediaConstraints offerconstraints;
+  sipcc::MediaConstraints answerconstraints;
+  answerconstraints.setBooleanConstraint("OfferToReceiveAudio", true, false);
+  answerconstraints.setBooleanConstraint("OfferToReceiveVideo", false, false);
+  OfferAnswer(offerconstraints, answerconstraints, OFFER_AV | ANSWER_AUDIO,
+              true, SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AUDIO);
+
+  // Wait for some data to get written
+  ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
+                   a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+
+  a1_->CloseSendStreams();
+  a2_->CloseReceiveStreams();
+  // Check that we wrote a bunch of data
+  ASSERT_GE(a1_->GetPacketsSent(0), 40);
+  //ASSERT_GE(a2_->GetPacketsSent(0), 40);
+  //ASSERT_GE(a1_->GetPacketsReceived(0), 40);
+  ASSERT_GE(a2_->GetPacketsReceived(0), 40);
+}
+
 TEST_F(SignalingTest, FullCallVideoOnly)
 {
   sipcc::MediaConstraints constraints;
@@ -3625,6 +3692,10 @@ int main(int argc, char **argv) {
     }
   }
 
+  ::testing::TestEventListeners& listeners =
+        ::testing::UnitTest::GetInstance()->listeners();
+  // Adds a listener to the end.  Google Test takes the ownership.
+  listeners.Append(new test::RingbufferDumper);
   test_utils->sts_target()->Dispatch(
     WrapRunnableNM(&TestStunServer::GetInstance), NS_DISPATCH_SYNC);
 

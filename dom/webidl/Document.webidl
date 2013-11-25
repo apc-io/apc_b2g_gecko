@@ -54,7 +54,9 @@ interface Document : Node {
   ProcessingInstruction createProcessingInstruction(DOMString target, DOMString data);
 
   [Throws]
-  Node importNode(Node node, optional boolean deep = true);
+  Node importNode(Node node, boolean deep);
+  [Throws]
+  Node importNode(Node node);
   [Throws]
   Node adoptNode(Node node);
 
@@ -149,7 +151,7 @@ partial interface Document {
    * True if this document is synthetic : stand alone image, video, audio file,
    * etc.
    */
-  [ChromeOnly] readonly attribute boolean mozSyntheticDocument;
+  [Func="IsChromeOrXBL"] readonly attribute boolean mozSyntheticDocument;
   /**
    * Returns the script element whose script is currently being processed.
    *

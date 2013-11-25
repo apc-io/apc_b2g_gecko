@@ -28,7 +28,7 @@
 #include "mozilla/layers/PCompositorChild.h"
 #include "mozilla/net/NeckoChild.h"
 #include "mozilla/Preferences.h"
-#if defined(MOZ_CONTENT_SANDBOX) && defined(XP_UNIX)
+#if defined(MOZ_CONTENT_SANDBOX) && defined(XP_UNIX) && !defined(XP_MACOSX)
 #include "mozilla/Sandbox.h"
 #endif
 #include "mozilla/unused.h"
@@ -71,6 +71,8 @@
 #include "nsPermission.h"
 #include "nsPermissionManager.h"
 #endif
+
+#include "PermissionMessageUtils.h"
 
 #if defined(MOZ_WIDGET_ANDROID)
 #include "APKOpen.h"
@@ -117,6 +119,7 @@
 #include "AudioChannelService.h"
 #include "JavaScriptChild.h"
 #include "mozilla/dom/telephony/PTelephonyChild.h"
+#include "mozilla/net/NeckoMessageUtils.h"
 
 using namespace base;
 using namespace mozilla;
@@ -383,10 +386,26 @@ ContentChild::SetProcessName(const nsAString& aName)
     mozilla::ipc::SetThisProcessName(NS_LossyConvertUTF16toASCII(aName).get());
 }
 
-const void
+void
 ContentChild::GetProcessName(nsAString& aName)
 {
     aName.Assign(mProcessName);
+}
+
+void
+ContentChild::GetProcessName(nsACString& aName)
+{
+    aName.Assign(NS_ConvertUTF16toUTF8(mProcessName));
+}
+
+/* static */ void
+ContentChild::AppendProcessId(nsACString& aName)
+{
+    if (!aName.IsEmpty()) {
+        aName.AppendLiteral(" ");
+    }
+    unsigned pid = getpid();
+    aName.Append(nsPrintfCString("(pid %u)", pid));
 }
 
 void
@@ -416,7 +435,7 @@ ContentChild::InitXPCOM()
 }
 
 PMemoryReportRequestChild*
-ContentChild::AllocPMemoryReportRequestChild()
+ContentChild::AllocPMemoryReportRequestChild(const uint32_t& generation)
 {
     return new MemoryReportRequestChild();
 }
@@ -463,13 +482,17 @@ NS_IMPL_ISUPPORTS1(
 )
 
 bool
-ContentChild::RecvPMemoryReportRequestConstructor(PMemoryReportRequestChild* child)
+ContentChild::RecvPMemoryReportRequestConstructor(
+    PMemoryReportRequestChild* child,
+    const uint32_t& generation)
 {
     nsCOMPtr<nsIMemoryReporterManager> mgr = do_GetService("@mozilla.org/memory-reporter-manager;1");
 
     InfallibleTArray<MemoryReport> reports;
 
-    nsPrintfCString process("Content (%d)", getpid());
+    nsCString process;
+    GetProcessName(process);
+    AppendProcessId(process);
 
     // Run each reporter.  The callback will turn each measurement into a
     // MemoryReport.
@@ -485,7 +508,7 @@ ContentChild::RecvPMemoryReportRequestConstructor(PMemoryReportRequestChild* chi
       r->CollectReports(cb, wrappedReports);
     }
 
-    child->Send__delete__(child, reports);
+    child->Send__delete__(child, generation, reports);
     return true;
 }
 
@@ -553,7 +576,7 @@ ContentChild::RecvSetProcessPrivileges(const ChildPrivileges& aPrivs)
                           aPrivs;
   // If this fails, we die.
   SetCurrentProcessPrivileges(privs);
-#if defined(MOZ_CONTENT_SANDBOX) && defined(XP_UNIX)
+#if defined(MOZ_CONTENT_SANDBOX) && defined(XP_UNIX) && !defined(XP_MACOSX)
   // SetCurrentProcessSandbox should be moved close to process initialization
   // time if/when possible. SetCurrentProcessPrivileges should probably be
   // moved as well. Right now this is set ONLY if we receive the
@@ -1151,14 +1174,15 @@ ContentChild::RecvNotifyVisited(const URIParams& aURI)
 bool
 ContentChild::RecvAsyncMessage(const nsString& aMsg,
                                const ClonedMessageData& aData,
-                               const InfallibleTArray<CpowEntry>& aCpows)
+                               const InfallibleTArray<CpowEntry>& aCpows,
+                               const IPC::Principal& aPrincipal)
 {
   nsRefPtr<nsFrameMessageManager> cpm = nsFrameMessageManager::sChildProcessManager;
   if (cpm) {
     StructuredCloneData cloneData = ipc::UnpackClonedMessageDataForChild(aData);
     CpowIdHolder cpows(GetCPOWManager(), aCpows);
     cpm->ReceiveMessage(static_cast<nsIContentFrameMessageManager*>(cpm.get()),
-                        aMsg, false, &cloneData, &cpows, nullptr);
+                        aMsg, false, &cloneData, &cpows, aPrincipal, nullptr);
   }
   return true;
 }
@@ -1266,6 +1290,14 @@ ContentChild::RecvCycleCollect()
     return true;
 }
 
+#ifdef MOZ_NUWA_PROCESS
+static void
+OnFinishNuwaPreparation ()
+{
+    MakeNuwaProcess();
+}
+#endif
+
 static void
 PreloadSlowThings()
 {
@@ -1273,6 +1305,18 @@ PreloadSlowThings()
     nsLayoutStylesheetCache::UserContentSheet();
 
     TabChild::PreloadSlowThings();
+
+#ifdef MOZ_NUWA_PROCESS
+    // After preload of slow things, start freezing threads.
+    if (IsNuwaProcess()) {
+        // Perform GC before freezing the Nuwa process to reduce memory usage.
+        ContentChild::GetSingleton()->RecvGarbageCollect();
+
+        MessageLoop::current()->
+                PostTask(FROM_HERE,
+                         NewRunnableFunction(OnFinishNuwaPreparation));
+    }
+#endif
 }
 
 bool

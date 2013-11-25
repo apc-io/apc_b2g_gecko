@@ -114,6 +114,7 @@ GetCairoSurfaceSize(cairo_surface_t* surface, IntSize& size)
     }
 #endif
 #ifdef CAIRO_HAS_WIN32_SURFACE
+#ifdef MOZ2D_HAS_MOZ_CAIRO
     case CAIRO_SURFACE_TYPE_WIN32:
     case CAIRO_SURFACE_TYPE_WIN32_PRINTING:
     {
@@ -121,6 +122,21 @@ GetCairoSurfaceSize(cairo_surface_t* surface, IntSize& size)
       size.height = cairo_win32_surface_get_height(surface);
       return true;
     }
+#else
+    case CAIRO_SURFACE_TYPE_WIN32:
+    {
+      cairo_surface_t *img = cairo_win32_surface_get_image(surface);
+
+      if (!img) {
+        // XXX - fix me
+        MOZ_ASSERT(false);
+        return true;
+      }
+      size.width = cairo_image_surface_get_width(img);
+      size.height = cairo_image_surface_get_height(img);
+      return true;
+    }
+#endif
 #endif
 
     default:
@@ -708,14 +724,19 @@ DrawTargetCairo::CopySurface(SourceSurface *aSurface,
   AutoPrepareForDrawing prep(this, mContext);
   AutoClearDeviceOffset clear(aSurface);
 
-  if (!aSurface || aSurface->GetType() != SURFACE_CAIRO) {
+  if (!aSurface) {
     gfxWarning() << "Unsupported surface type specified";
     return;
   }
 
-  cairo_surface_t* surf = static_cast<SourceSurfaceCairo*>(aSurface)->GetSurface();
+  cairo_surface_t* surf = GetCairoSurfaceForSourceSurface(aSurface);
+  if (!surf) {
+    gfxWarning() << "Unsupported surface type specified";
+    return;
+  }
 
   CopySurfaceInternal(surf, aSource, aDest);
+  cairo_surface_destroy(surf);
 }
 
 void
@@ -825,6 +846,16 @@ DrawTargetCairo::Fill(const Path *aPath,
   path->SetPathOnContext(mContext);
 
   DrawPattern(aPattern, StrokeOptions(), aOptions, DRAW_FILL);
+}
+
+void
+DrawTargetCairo::SetPermitSubpixelAA(bool aPermitSubpixelAA)
+{
+  DrawTarget::SetPermitSubpixelAA(aPermitSubpixelAA);
+#ifdef MOZ_TREE_CAIRO
+  cairo_surface_set_subpixel_antialiasing(mSurface,
+    aPermitSubpixelAA ? CAIRO_SUBPIXEL_ANTIALIASING_ENABLED : CAIRO_SUBPIXEL_ANTIALIASING_DISABLED);
+#endif
 }
 
 void
@@ -1099,6 +1130,13 @@ DrawTargetCairo::InitAlreadyReferenced(cairo_surface_t* aSurface, const IntSize&
   mSize = aSize;
   mFormat = CairoContentToGfxFormat(cairo_surface_get_content(aSurface));
 
+  if (mFormat == FORMAT_B8G8R8A8 ||
+      mFormat == FORMAT_R8G8B8A8) {
+    SetPermitSubpixelAA(false);
+  } else {
+    SetPermitSubpixelAA(true);
+  }
+
   return true;
 }
 
@@ -1150,6 +1188,25 @@ DrawTargetCairo::Init(cairo_surface_t* aSurface, const IntSize& aSize)
 {
   cairo_surface_reference(aSurface);
   return InitAlreadyReferenced(aSurface, aSize);
+}
+
+bool
+DrawTargetCairo::Init(const IntSize& aSize, SurfaceFormat aFormat)
+{
+  cairo_surface_t *surf = cairo_image_surface_create(GfxFormatToCairoFormat(aFormat), aSize.width, aSize.height);
+  return InitAlreadyReferenced(surf, aSize);
+}
+
+bool
+DrawTargetCairo::Init(unsigned char* aData, const IntSize &aSize, int32_t aStride, SurfaceFormat aFormat)
+{
+  cairo_surface_t* surf =
+    cairo_image_surface_create_for_data(aData,
+                                        GfxFormatToCairoFormat(aFormat),
+                                        aSize.width,
+                                        aSize.height,
+                                        aStride);
+  return InitAlreadyReferenced(surf, aSize);
 }
 
 void *

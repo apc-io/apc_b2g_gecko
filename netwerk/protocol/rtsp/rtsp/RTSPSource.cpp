@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "RtspPrlog.h"
 #include "RTSPSource.h"
 #include "ARTPConnection.h"
 #include "RTSPConnectionHandler.h"
@@ -28,13 +29,6 @@
 #include "nsString.h"
 #include "nsStringStream.h"
 #include "nsAutoPtr.h"
-#include "prlog.h"
-
-extern PRLogModuleInfo* gRtspLog;
-#define LOGI(msg, ...) PR_LOG(gRtspLog, PR_LOG_ALWAYS, (msg, ##__VA_ARGS__))
-#define LOGV(msg, ...) PR_LOG(gRtspLog, PR_LOG_DEBUG, (msg, ##__VA_ARGS__))
-#define LOGE(msg, ...) PR_LOG(gRtspLog, PR_LOG_ERROR, (msg, ##__VA_ARGS__))
-#define LOGW(msg, ...) PR_LOG(gRtspLog, PR_LOG_WARNING, (msg, ##__VA_ARGS__))
 
 using namespace mozilla;
 using namespace mozilla::net;
@@ -565,11 +559,12 @@ void RTSPSource::onDisconnected(const sp<AMessage> &msg) {
     }
     if (mListener) {
       // err is always set to UNKNOWN_ERROR from
-      // Android right now, rename err to NS_ERROR_NOT_CONNECTED.
-      mListener->OnDisconnected(0, NS_ERROR_NOT_CONNECTED);
+      // Android right now, rename err to NS_ERROR_NET_TIMEOUT.
+      mListener->OnDisconnected(0, NS_ERROR_NET_TIMEOUT);
     }
     mAudioTrack = NULL;
     mVideoTrack = NULL;
+    mTracks.clear();
 }
 
 void RTSPSource::finishDisconnectIfPossible() {

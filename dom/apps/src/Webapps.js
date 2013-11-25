@@ -79,27 +79,28 @@ WebappsRegistry.prototype = {
     return uri.prePath;
   },
 
-  _validateURL: function(aURL) {
+  // Checks that the URL scheme is appropriate (http or https) and
+  // asynchronously fire an error on the DOM Request if it isn't.
+  _validateURL: function(aURL, aRequest) {
     let uri;
     let res;
+
     try {
       uri = Services.io.newURI(aURL, null, null);
       if (uri.schemeIs("http") || uri.schemeIs("https")) {
         res = uri.spec;
       }
     } catch(e) {
-      throw new Components.Exception(
-        "INVALID_URL: '" + aURL + "'", Cr.NS_ERROR_FAILURE
-      );
+      Services.DOMRequest.fireErrorAsync(aRequest, "INVALID_URL");
+      return false;
     }
 
-    // The scheme is incorrect, throw an exception.
+    // The scheme is incorrect, fire DOMRequest error.
     if (!res) {
-      throw new Components.Exception(
-        "INVALID_URL_SCHEME: '" + uri.scheme + "'; must be 'http' or 'https'",
-        Cr.NS_ERROR_FAILURE
-      );
+      Services.DOMRequest.fireErrorAsync(aRequest, "INVALID_URL");
+      return false;
     }
+
     return uri.spec;
   },
 
@@ -113,13 +114,7 @@ WebappsRegistry.prototype = {
       return true;
     }
 
-    let runnable = {
-      run: function run() {
-        Services.DOMRequest.fireError(aRequest, "BACKGROUND_APP");
-      }
-    }
-    Services.tm.currentThread.dispatch(runnable,
-                                       Ci.nsIThread.DISPATCH_NORMAL);
+    Services.DOMRequest.fireErrorAsync(aRequest, "BACKGROUND_APP");
     return false;
   },
 
@@ -155,11 +150,11 @@ WebappsRegistry.prototype = {
   // mozIDOMApplicationRegistry implementation
 
   install: function(aURL, aParams) {
-    let uri = this._validateURL(aURL);
-
     let request = this.createRequest();
 
-    if (this._ensureForeground(request)) {
+    let uri = this._validateURL(aURL, request);
+
+    if (uri && this._ensureForeground(request)) {
       this.addMessageListeners("Webapps:Install:Return:KO");
       cpmm.sendAsyncMessage("Webapps:Install",
                             this._prepareInstall(uri, request, aParams, false));
@@ -218,11 +213,11 @@ WebappsRegistry.prototype = {
   },
 
   installPackage: function(aURL, aParams) {
-    let uri = this._validateURL(aURL);
-
     let request = this.createRequest();
 
-    if (this._ensureForeground(request)) {
+    let uri = this._validateURL(aURL, request);
+
+    if (uri && this._ensureForeground(request)) {
       this.addMessageListeners("Webapps:Install:Return:KO");
       cpmm.sendAsyncMessage("Webapps:InstallPackage",
                             this._prepareInstall(uri, request, aParams, true));
@@ -253,6 +248,7 @@ WebappsRegistry.prototype = {
   classID: Components.ID("{fff440b3-fae2-45c1-bf03-3b5a2e432270}"),
 
   QueryInterface: XPCOMUtils.generateQI([Ci.nsISupportsWeakReference,
+                                         Ci.nsIObserver,
                                          Ci.mozIDOMApplicationRegistry,
                                          Ci.mozIDOMApplicationRegistry2,
                                          Ci.nsIDOMGlobalPropertyInitializer]),
@@ -471,13 +467,7 @@ WebappsApplication.prototype = {
           requestID: this.getRequestId(request) }
       );
     } else {
-      let runnable = {
-        run: function run() {
-          Services.DOMRequest.fireError(request, "NO_CLEARABLE_BROWSER");
-        }
-      }
-      Services.tm.currentThread.dispatch(runnable,
-                                         Ci.nsIThread.DISPATCH_NORMAL);
+      Services.DOMRequest.fireErrorAsync(request, "NO_CLEARABLE_BROWSER");
     }
     return request;
   },
@@ -513,7 +503,7 @@ WebappsApplication.prototype = {
     this._onprogress = null;
     cpmm.sendAsyncMessage("Webapps:UnregisterForMessages", [
       "Webapps:FireEvent",
-      "Webapps:PackageEvent"
+      "Webapps:UpdateState"
     ]);
 
     manifestCache.evict(this.manifestURL, this.innerWindowID);
@@ -645,7 +635,8 @@ WebappsApplication.prototype = {
   classID: Components.ID("{723ed303-7757-4fb0-b261-4f78b1f6bd22}"),
 
   QueryInterface: XPCOMUtils.generateQI([Ci.mozIDOMApplication,
-                                         Ci.nsISupportsWeakReference]),
+                                         Ci.nsISupportsWeakReference,
+                                         Ci.nsIObserver]),
 
   classInfo: XPCOMUtils.generateCI({classID: Components.ID("{723ed303-7757-4fb0-b261-4f78b1f6bd22}"),
                                     contractID: "@mozilla.org/webapps/application;1",
@@ -751,7 +742,7 @@ WebappsApplicationMgmt.prototype = {
     var msg = aMessage.json;
     let req = this.getRequest(msg.requestID);
     // We want Webapps:Install:Return:OK and Webapps:Uninstall:Broadcast:Return:OK
-    // to be boradcasted to all instances of mozApps.mgmt.
+    // to be broadcasted to all instances of mozApps.mgmt.
     if (!((msg.oid == this._id && req) ||
           aMessage.name == "Webapps:Install:Return:OK" ||
           aMessage.name == "Webapps:Uninstall:Broadcast:Return:OK")) {
@@ -800,7 +791,9 @@ WebappsApplicationMgmt.prototype = {
 
   classID: Components.ID("{8c1bca96-266f-493a-8d57-ec7a95098c15}"),
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.mozIDOMApplicationMgmt, Ci.nsISupportsWeakReference]),
+  QueryInterface: XPCOMUtils.generateQI([Ci.mozIDOMApplicationMgmt,
+                                         Ci.nsISupportsWeakReference,
+                                         Ci.nsIObserver]),
 
   classInfo: XPCOMUtils.generateCI({classID: Components.ID("{8c1bca96-266f-493a-8d57-ec7a95098c15}"),
                                     contractID: "@mozilla.org/webapps/application-mgmt;1",

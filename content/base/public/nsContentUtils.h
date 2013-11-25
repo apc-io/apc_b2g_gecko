@@ -190,7 +190,8 @@ public:
   static bool     IsImageSrcSetDisabled();
 
   static bool LookupBindingMember(JSContext* aCx, nsIContent *aContent,
-                                  JS::HandleId aId, JS::MutableHandle<JSPropertyDescriptor> aDesc);
+                                  JS::Handle<jsid> aId,
+                                  JS::MutableHandle<JSPropertyDescriptor> aDesc);
 
   /**
    * Returns the parent node of aChild crossing document boundaries.
@@ -1884,6 +1885,21 @@ public:
    * @return Whether the subdocument is tabbable.
    */
   static bool IsSubDocumentTabbable(nsIContent* aContent);
+
+  /**
+   * Returns if aNode ignores user focus.
+   *
+   * @param aNode node to test
+   *
+   * @return Whether the node ignores user focus.
+   */
+  static bool IsUserFocusIgnored(nsINode* aNode);
+
+  /**
+   * Returns if aContent has the 'scrollgrab' property.
+   * aContent may be null (in this case false is returned).
+   */
+  static bool HasScrollgrab(nsIContent* aContent);
 
   /**
    * Flushes the layout tree (recursively)

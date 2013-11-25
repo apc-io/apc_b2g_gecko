@@ -23,7 +23,7 @@
 #include "nsGlobalWindow.h"
 #include "nsDOMJSUtils.h"
 #include "nsIScriptSecurityManager.h"
-#include "nsContentPermissionHelper.h"
+#include "mozilla/dom/PermissionMessageUtils.h"
 #ifdef MOZ_B2G
 #include "nsIDOMDesktopNotification.h"
 #endif
@@ -73,8 +73,8 @@ public:
                                                                        aTitle,
                                                                        options);
     JSAutoCompartment ac(aCx, mGlobal);
-    JS::RootedObject scope(aCx, mGlobal);
-    JS::RootedObject element(aCx, notification->WrapObject(aCx, scope));
+    JS::Rooted<JSObject*> scope(aCx, mGlobal);
+    JS::Rooted<JSObject*> element(aCx, notification->WrapObject(aCx, scope));
     NS_ENSURE_TRUE(element, NS_ERROR_FAILURE);
 
     if (!JS_DefineElement(aCx, mNotifications, mCount++,
@@ -87,7 +87,7 @@ public:
   NS_IMETHOD Done(JSContext* aCx)
   {
     JSAutoCompartment ac(aCx, mGlobal);
-    Optional<JS::HandleValue> result(aCx, JS::ObjectValue(*mNotifications));
+    JS::Rooted<JS::Value> result(aCx, JS::ObjectValue(*mNotifications));
     mPromise->MaybeResolve(aCx, result);
     return NS_OK;
   }
@@ -267,11 +267,9 @@ NotificationPermissionRequest::Run()
     // Corresponding release occurs in DeallocPContentPermissionRequest.
     AddRef();
 
-    nsTArray<PermissionRequest> permArray;
-    permArray.AppendElement(PermissionRequest(
-                            NS_LITERAL_CSTRING("desktop-notification"),
-                            NS_LITERAL_CSTRING("unused")));
-    child->SendPContentPermissionRequestConstructor(this, permArray,
+    NS_NAMED_LITERAL_CSTRING(type, "desktop-notification");
+    NS_NAMED_LITERAL_CSTRING(access, "unused");
+    child->SendPContentPermissionRequestConstructor(this, type, access,
                                                     IPC::Principal(mPrincipal));
 
     Sendprompt();
@@ -344,11 +342,17 @@ NotificationPermissionRequest::CallCallback()
 }
 
 NS_IMETHODIMP
-NotificationPermissionRequest::GetTypes(nsIArray** aTypes)
+NotificationPermissionRequest::GetAccess(nsACString& aAccess)
 {
-  return CreatePermissionArray(NS_LITERAL_CSTRING("desktop-notification"),
-                               NS_LITERAL_CSTRING("unused"),
-                               aTypes);
+  aAccess.AssignLiteral("unused");
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+NotificationPermissionRequest::GetType(nsACString& aType)
+{
+  aType.AssignLiteral("desktop-notification");
+  return NS_OK;
 }
 
 bool
@@ -494,6 +498,14 @@ Notification::CreateInternal(nsPIDOMWindow* aWindow,
   return notification.forget();
 }
 
+nsIPrincipal*
+Notification::GetPrincipal()
+{
+  nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(GetOwner());
+  NS_ENSURE_TRUE(sop, nullptr);
+  return sop->GetPrincipal();
+}
+
 void
 Notification::ShowInternal()
 {
@@ -549,7 +561,7 @@ Notification::ShowInternal()
       rv = appsService->GetManifestURLByLocalId(appId, manifestUrl);
       if (NS_SUCCEEDED(rv)) {
         mozilla::AutoSafeJSContext cx;
-        JS::RootedValue val(cx);
+        JS::Rooted<JS::Value> val(cx);
         AppNotificationServiceOptions ops;
         ops.mTextClickable = true;
         ops.mManifestURL = manifestUrl;
@@ -576,7 +588,8 @@ Notification::ShowInternal()
   uniqueCookie.AppendInt(sCount++);
   alertService->ShowAlertNotification(absoluteUrl, mTitle, mBody, true,
                                       uniqueCookie, observer, alertName,
-                                      DirectionToString(mDir), mLang);
+                                      DirectionToString(mDir), mLang,
+                                             GetPrincipal());
 }
 
 void
@@ -749,7 +762,7 @@ Notification::CloseInternal()
       nsString alertName;
       rv = GetAlertName(alertName);
       if (NS_SUCCEEDED(rv)) {
-        alertService->CloseAlert(alertName);
+        alertService->CloseAlert(alertName, GetPrincipal());
       }
     }
   }

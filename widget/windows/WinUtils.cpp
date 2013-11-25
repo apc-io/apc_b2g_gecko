@@ -10,6 +10,12 @@
 #include "KeyboardLayout.h"
 #include "nsIDOMMouseEvent.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/WindowsVersion.h"
+
+#ifdef MOZ_LOGGING
+#define FORCE_PR_LOG /* Allow logging in the release build */
+#endif // MOZ_LOGGING
+#include "prlog.h"
 
 #include "nsString.h"
 #include "nsDirectoryServiceUtils.h"
@@ -34,6 +40,10 @@
 #include <textstor.h>
 #include "nsTextStore.h"
 #endif // #ifdef NS_ENABLE_TSF
+
+#ifdef PR_LOGGING
+PRLogModuleInfo* gWindowsLog = nullptr;
+#endif
 
 namespace mozilla {
 namespace widget {
@@ -75,7 +85,12 @@ WinUtils::DwmGetCompositionTimingInfoProc WinUtils::dwmGetCompositionTimingInfoP
 void
 WinUtils::Initialize()
 {
-  if (!sDwmDll && WinUtils::GetWindowsVersion() >= WinUtils::VISTA_VERSION) {
+#ifdef PR_LOGGING
+  if (!gWindowsLog) {
+    gWindowsLog = PR_NewLogModule("Widget");
+  }
+#endif
+  if (!sDwmDll && IsVistaOrLater()) {
     sDwmDll = ::LoadLibraryW(kDwmLibraryName);
 
     if (sDwmDll) {
@@ -92,40 +107,79 @@ WinUtils::Initialize()
   }
 }
 
-/* static */ 
-WinUtils::WinVersion
-WinUtils::GetWindowsVersion()
+// static
+void
+WinUtils::LogW(const wchar_t *fmt, ...)
 {
-  static int32_t version = 0;
-
-  if (version) {
-    return static_cast<WinVersion>(version);
+  va_list args = nullptr;
+  if(!lstrlenW(fmt)) {
+    return;
   }
+  va_start(args, fmt);
+  int buflen = _vscwprintf(fmt, args);
+  wchar_t* buffer = new wchar_t[buflen+1];
+  if (!buffer) {
+    va_end(args);
+    return;
+  }
+  vswprintf(buffer, buflen, fmt, args);
+  va_end(args);
 
-  OSVERSIONINFOEX osInfo;
-  osInfo.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
-  // This cast is safe and supposed to be here, don't worry
-  ::GetVersionEx((OSVERSIONINFO*)&osInfo);
-  version =
-    (osInfo.dwMajorVersion & 0xff) << 8 | (osInfo.dwMinorVersion & 0xff);
-  return static_cast<WinVersion>(version);
+  // MSVC, including remote debug sessions
+  OutputDebugStringW(buffer);
+  OutputDebugStringW(L"\n");
+
+  int len = wcslen(buffer);
+  if (len) {
+    char* utf8 = new char[len+1];
+    memset(utf8, 0, sizeof(utf8));
+    if (WideCharToMultiByte(CP_ACP, 0, buffer,
+                            -1, utf8, len+1, nullptr,
+                            nullptr) > 0) {
+      // desktop console
+      printf("%s\n", utf8);
+#ifdef PR_LOGGING
+      NS_ASSERTION(gWindowsLog, "Called WinUtils Log() but Widget "
+                                   "log module doesn't exist!");
+      PR_LOG(gWindowsLog, PR_LOG_ALWAYS, (utf8));
+#endif
+    }
+    delete[] utf8;
+  }
+  delete[] buffer;
 }
 
-/* static */
-bool
-WinUtils::GetWindowsServicePackVersion(UINT& aOutMajor, UINT& aOutMinor)
+// static
+void
+WinUtils::Log(const char *fmt, ...)
 {
-  OSVERSIONINFOEX osInfo;
-  osInfo.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
-  // This cast is safe and supposed to be here, don't worry
-  if (!::GetVersionEx((OSVERSIONINFO*)&osInfo)) {
-    return false;
+  va_list args = nullptr;
+  if(!strlen(fmt)) {
+    return;
   }
-  
-  aOutMajor = osInfo.wServicePackMajor;
-  aOutMinor = osInfo.wServicePackMinor;
+  va_start(args, fmt);
+  int buflen = _vscprintf(fmt, args);
+  char* buffer = new char[buflen+1];
+  if (!buffer) {
+    va_end(args);
+    return;
+  }
+  vsprintf(buffer, fmt, args);
+  va_end(args);
 
-  return true;
+  // MSVC, including remote debug sessions
+  OutputDebugStringA(buffer);
+  OutputDebugStringW(L"\n");
+
+  // desktop console
+  printf("%s\n", buffer);
+
+#ifdef PR_LOGGING
+  NS_ASSERTION(gWindowsLog, "Called WinUtils Log() but Widget "
+                               "log module doesn't exist!");
+  PR_LOG(gWindowsLog, PR_LOG_ALWAYS, (buffer));
+#endif
+  delete[] buffer;
 }
 
 /* static */

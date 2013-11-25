@@ -10,12 +10,6 @@
 @namespace url(http://www.w3.org/1999/xhtml); /* set default namespace to HTML */
 @namespace xul url(http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul);
 
-%ifdef ANDROID
-%define INPUT_TYPE_COLOR_UNSUPPORTED
-%elifdef MOZ_WIDGET_GONK
-%define INPUT_TYPE_COLOR_UNSUPPORTED
-%endif
-
 *|*::-moz-fieldset-content {
   display: block;
   unicode-bidi: inherit;
@@ -376,8 +370,8 @@ select:disabled:disabled /* Need the pseudo-class twice to have the specificity
   cursor: inherit;
 }
 
-input:disabled > .anonymous-div,
-textarea:disabled > .anonymous-div {
+input:disabled,
+textarea:disabled {
   cursor: default;
 }
 
@@ -459,13 +453,15 @@ input[type="file"] > button[type="button"] {
 }
 
 /* colored part of the color selector button */
-input[type="color"]::-moz-color-swatch {
+input[type="color"]:-moz-system-metric(color-picker-available)::-moz-color-swatch {
   width: 100%;
   height: 100%;
   min-width: 40px;
   min-height: 15px;
   margin-left: auto;
   margin-right: auto;
+  -moz-box-sizing: border-box;
+  border: 1px solid grey;
   display: block;
 }
 
@@ -547,9 +543,7 @@ input[type="radio"]:hover:active {
 /* Non text-related properties for buttons: these ones are shared with
    input[type="color"] */
 button,
-%ifndef INPUT_TYPE_COLOR_UNSUPPORTED
-input[type="color"],
-%endif
+input[type="color"]:-moz-system-metric(color-picker-available),
 input[type="reset"],
 input[type="button"],
 input[type="submit"] {
@@ -593,9 +587,7 @@ button {
 }
 
 button:hover,
-%ifndef INPUT_TYPE_COLOR_UNSUPPORTED
-input[type="color"]:hover,
-%endif
+input[type="color"]:-moz-system-metric(color-picker-available):hover,
 input[type="reset"]:hover,
 input[type="button"]:hover,
 input[type="submit"]:hover {
@@ -610,9 +602,7 @@ input[type="submit"]:hover {
 }
 
 button:active:hover,
-%ifndef INPUT_TYPE_COLOR_UNSUPPORTED
-input[type="color"]:active:hover,
-%endif
+input[type="color"]:-moz-system-metric(color-picker-available):active:hover,
 input[type="reset"]:active:hover,
 input[type="button"]:active:hover,
 input[type="submit"]:active:hover {
@@ -629,9 +619,7 @@ input[type="submit"]:active:hover {
 }
 
 button::-moz-focus-inner,
-%ifndef INPUT_TYPE_COLOR_UNSUPPORTED
-input[type="color"]::-moz-focus-inner,
-%endif
+input[type="color"]:-moz-system-metric(color-picker-available)::-moz-focus-inner,
 input[type="reset"]::-moz-focus-inner,
 input[type="button"]::-moz-focus-inner,
 input[type="submit"]::-moz-focus-inner,
@@ -641,9 +629,7 @@ input[type="file"] > button[type="button"]::-moz-focus-inner {
 }
 
 button:-moz-focusring::-moz-focus-inner,
-%ifndef INPUT_TYPE_COLOR_UNSUPPORTED
-input[type="color"]:-moz-focusring::-moz-focus-inner,
-%endif
+input[type="color"]:-moz-system-metric(color-picker-available):-moz-focusring::-moz-focus-inner,
 input[type="reset"]:-moz-focusring::-moz-focus-inner,
 input[type="button"]:-moz-focusring::-moz-focus-inner,
 input[type="submit"]:-moz-focusring::-moz-focus-inner,
@@ -652,10 +638,8 @@ input[type="file"] > button[type="button"]:-moz-focusring::-moz-focus-inner {
 }
 
 button:disabled:active, button:disabled,
-%ifndef INPUT_TYPE_COLOR_UNSUPPORTED
-input[type="color"]:disabled:active,
-input[type="color"]:disabled,
-%endif
+input[type="color"]:-moz-system-metric(color-picker-available):disabled:active,
+input[type="color"]:-moz-system-metric(color-picker-available):disabled,
 input[type="reset"]:disabled:active,
 input[type="reset"]:disabled,
 input[type="button"]:disabled:active,
@@ -895,6 +879,84 @@ input[type=range]::-moz-range-thumb {
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><linearGradient id='g' x2='0' y2='100%'><stop stop-color='%23ddd'/><stop offset='100%' stop-color='white'/></linearGradient><rect fill='url(%23g)' width='100%' height='100%'/></svg>");
   /* Prevent nsFrame::HandlePress setting mouse capture to this element. */
   -moz-user-select: none ! important;
+}
+
+input[type="number"] {
+  /* Has to revert some properties applied by the generic input rule. */
+  -moz-binding: none;
+  width: 149px; /* to match type=text */
+}
+
+input[type=number]::-moz-number-wrapper {
+  /* Prevent styling that would change the type of frame we construct. */
+  display: flex;
+  float: none !important;
+  position: static !important;
+  -moz-box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+}
+
+input[type=number]::-moz-number-text {
+  -moz-appearance: none;
+  /* work around autofocus bug 939248 on initial load */
+  -moz-user-modify: read-write;
+  /* This pseudo-element is also an 'input' element (nested inside and
+   * distinct from the <input type=number> element) so we need to prevent the
+   * explicit setting of 'text-align' by the general CSS rule for 'input'
+   * above. We want to inherit its value from its <input type=number>
+   * ancestor, not have that general CSS rule reset it.
+   */
+  text-align: inherit;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  margin: 0;
+}
+
+input[type=number]::-moz-number-spin-box {
+  display: flex;
+  flex-direction: column;
+  flex: 0 8px;
+  cursor: default;
+  padding: 1px;
+}
+
+input[type=number]::-moz-number-spin-up {
+  /* We should be "display:block" so that we don't get wrapped in an anonymous
+   * flex item that will prevent the setting of the "flex" property below from
+   * working.
+   */
+  display: block;
+  flex: 1;
+  background-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="6" height="5"><path d="M1,4 L3,0 5,4" fill="dimgrey"/></svg>');
+  background-repeat: no-repeat;
+  background-position: center bottom;
+  border: 1px solid darkgray;
+  border-bottom: none;
+  border-top-left-radius: 4px;
+  border-top-right-radius: 4px;
+}
+
+input[type=number]::-moz-number-spin-down {
+  /* We should be "display:block" so that we don't get wrapped in an anonymous
+   * flex item that will prevent the setting of the "flex" property below from
+   * working.
+   */
+  display: block;
+  flex: 1;
+  background-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="6" height="5"><path d="M1,1 L3,5 5,1" fill="dimgrey"/></svg>');
+  background-repeat: no-repeat;
+  background-position: center top;
+  border: 1px solid darkgray;
+  border-top: none;
+  border-bottom-left-radius: 4px;
+  border-bottom-right-radius: 4px;
+}
+
+input[type="number"] > div > div > div:hover {
+  /* give some indication of hover state for the up/down buttons */
+  background-color: lightblue;
 }
 
 %ifdef XP_OS2

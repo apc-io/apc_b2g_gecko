@@ -10,9 +10,11 @@ import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoEvent;
 import org.mozilla.gecko.PrefsHelper;
 import org.mozilla.gecko.R;
+import org.mozilla.gecko.Tab;
+import org.mozilla.gecko.Tabs;
 import org.mozilla.gecko.TouchEventInterceptor;
 import org.mozilla.gecko.ZoomConstraints;
-import org.mozilla.gecko.mozglue.GeneratableAndroidBridgeTarget;
+import org.mozilla.gecko.mozglue.generatorannotations.WrapElementForJNI;
 import org.mozilla.gecko.util.EventDispatcher;
 
 import android.content.Context;
@@ -49,7 +51,7 @@ import java.util.ArrayList;
  *
  * Note that LayerView is accessed by Robocop via reflection.
  */
-public class LayerView extends FrameLayout {
+public class LayerView extends FrameLayout implements Tabs.OnTabsChangedListener {
     private static String LOGTAG = "GeckoLayerView";
 
     private GeckoLayerClient mLayerClient;
@@ -108,12 +110,19 @@ public class LayerView extends FrameLayout {
         mBackgroundColor = Color.WHITE;
 
         mTouchInterceptors = new ArrayList<TouchEventInterceptor>();
-        mOverscroll = new Overscroll(this);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.ICE_CREAM_SANDWICH) {
+            mOverscroll = new OverscrollEdgeEffect(this);
+        } else {
+            mOverscroll = null;
+        }
+        Tabs.registerOnTabsChangedListener(this);
     }
 
     public void initializeView(EventDispatcher eventDispatcher) {
         mLayerClient = new GeckoLayerClient(getContext(), this, eventDispatcher);
-        mLayerClient.setOverscrollHandler(mOverscroll);
+        if (mOverscroll != null) {
+            mLayerClient.setOverscrollHandler(mOverscroll);
+        }
 
         mPanZoomController = mLayerClient.getPanZoomController();
         mMarginsAnimator = mLayerClient.getLayerMarginsAnimator();
@@ -189,12 +198,12 @@ public class LayerView extends FrameLayout {
         });
     }
 
-    public void show() {
+    public void showSurface() {
         // Fix this if TextureView support is turned back on above
         mSurfaceView.setVisibility(View.VISIBLE);
     }
 
-    public void hide() {
+    public void hideSurface() {
         // Fix this if TextureView support is turned back on above
         mSurfaceView.setVisibility(View.INVISIBLE);
     }
@@ -206,6 +215,7 @@ public class LayerView extends FrameLayout {
         if (mRenderer != null) {
             mRenderer.destroy();
         }
+        Tabs.unregisterOnTabsChangedListener(this);
     }
 
     public void addTouchInterceptor(final TouchEventInterceptor aTouchInterceptor) {
@@ -244,7 +254,7 @@ public class LayerView extends FrameLayout {
         super.dispatchDraw(canvas);
 
         // We must have a layer client to get valid viewport metrics
-        if (mLayerClient != null) {
+        if (mLayerClient != null && mOverscroll != null) {
             mOverscroll.draw(canvas, getViewportMetrics());
         }
     }
@@ -510,8 +520,13 @@ public class LayerView extends FrameLayout {
      * TextureView instead of a SurfaceView, the first phase is skipped.
      */
     private void onSizeChanged(int width, int height) {
-        if (!mGLController.hasValidSurface() || mSurfaceView == null) {
-            surfaceChanged(width, height);
+        if (!mGLController.isCompositorCreated()) {
+            return;
+        }
+
+        surfaceChanged(width, height);
+
+        if (mSurfaceView == null) {
             return;
         }
 
@@ -519,21 +534,25 @@ public class LayerView extends FrameLayout {
             mListener.sizeChanged(width, height);
         }
 
-        mOverscroll.setSize(width, height);
+        if (mOverscroll != null) {
+            mOverscroll.setSize(width, height);
+        }
     }
 
     private void surfaceChanged(int width, int height) {
-        mGLController.surfaceChanged(width, height);
+        mGLController.serverSurfaceChanged(width, height);
 
         if (mListener != null) {
             mListener.surfaceChanged(width, height);
         }
 
-        mOverscroll.setSize(width, height);
+        if (mOverscroll != null) {
+            mOverscroll.setSize(width, height);
+        }
     }
 
     private void onDestroyed() {
-        mGLController.surfaceDestroyed();
+        mGLController.serverSurfaceDestroyed();
     }
 
     public Object getNativeWindow() {
@@ -543,7 +562,7 @@ public class LayerView extends FrameLayout {
         return mTextureView.getSurfaceTexture();
     }
 
-    @GeneratableAndroidBridgeTarget(allowMultithread = true, stubName = "RegisterCompositorWrapper")
+    @WrapElementForJNI(allowMultithread = true, stubName = "RegisterCompositorWrapper")
     public static GLController registerCxxCompositor() {
         try {
             LayerView layerView = GeckoAppShell.getLayerView();
@@ -657,5 +676,13 @@ public class LayerView extends FrameLayout {
 
     public boolean isFullScreen() {
         return mFullScreen;
+    }
+
+    @Override
+    public void onTabChanged(Tab tab, Tabs.TabEvents msg, Object data) {
+        if (msg == Tabs.TabEvents.VIEWPORT_CHANGE && Tabs.getInstance().isSelectedTab(tab)) {
+            setZoomConstraints(tab.getZoomConstraints());
+            setIsRTL(tab.getIsRTL());
+        }
     }
 }

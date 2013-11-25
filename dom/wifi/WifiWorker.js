@@ -84,6 +84,10 @@ XPCOMUtils.defineLazyServiceGetter(this, "gNetworkManager",
                                    "@mozilla.org/network/manager;1",
                                    "nsINetworkManager");
 
+XPCOMUtils.defineLazyServiceGetter(this, "gNetworkService",
+                                   "@mozilla.org/network/service;1",
+                                   "nsINetworkService");
+
 XPCOMUtils.defineLazyServiceGetter(this, "gSettingsService",
                                    "@mozilla.org/settingsService;1",
                                    "nsISettingsService");
@@ -195,12 +199,14 @@ var WifiManager = (function() {
       // On properly written drivers, bringing the interface
       // down powers down the interface.
       callback(0);
+      notify("supplicantlost", { success: true });
       return;
     }
 
     wifiCommand.unloadDriver(function(status) {
       driverLoaded = (status < 0);
       callback(status);
+      notify("supplicantlost", { success: true });
     });
   }
 
@@ -327,7 +333,7 @@ var WifiManager = (function() {
     if (!network)
       return;
 
-    gNetworkManager.setNetworkProxy(network);
+    gNetworkService.setNetworkProxy(network);
   }
 
   var staticIpConfig = Object.create(null);
@@ -413,6 +419,12 @@ var WifiManager = (function() {
   }
 
   function notifyStateChange(fields) {
+    // Don't handle any state change when and after disabling.
+    if (manager.state === "DISABLING" ||
+        manager.state === "UNINITIALIZED") {
+      return false;
+    }
+
     // If we're already in the COMPLETED state, we might receive events from
     // the supplicant that tell us that we're re-authenticating or reminding
     // us that we're associated to a network. In those cases, we don't need to
@@ -676,22 +688,22 @@ var WifiManager = (function() {
       return true;
     }
     if (eventData.indexOf("CTRL-EVENT-TERMINATING") === 0) {
-      // If the monitor socket is closed, we have already stopped the
-      // supplicant and we can stop waiting for more events and
-      // simply exit here (we don't have to notify about having lost
-      // the connection).
-      if (eventData.indexOf("connection closed") !== -1) {
-        notify("supplicantlost", { success: true });
-        return false;
-      }
-
-      // As long we haven't seen too many recv errors yet, we
-      // will keep going for a bit longer.
-      if (eventData.indexOf("recv error") !== -1 && ++recvErrors < 10)
+      // As long the monitor socket is not closed and we haven't seen too many
+      // recv errors yet, we will keep going for a bit longer.
+      if (eventData.indexOf("connection closed") === -1 &&
+          eventData.indexOf("recv error") !== -1 && ++recvErrors < 10)
         return true;
 
       notifyStateChange({ state: "DISCONNECTED", BSSID: null, id: -1 });
-      notify("supplicantlost", { success: true });
+
+      // If the supplicant is terminated as commanded, the supplicant lost
+      // notification will be sent after driver unloaded. In such case, the
+      // manager state will be "DISABLING" or "UNINITIALIZED".
+      // So if supplicant terminated with incorrect manager state, implying
+      // unexpected condition, we should notify supplicant lost here.
+      if (manager.state !== "DISABLING" && manager.state !== "UNINITIALIZED") {
+        notify("supplicantlost", { success: true });
+      }
       return false;
     }
     if (eventData.indexOf("CTRL-EVENT-DISCONNECTED") === 0) {
@@ -856,7 +868,7 @@ var WifiManager = (function() {
             manager.state = "UNINITIALIZED";
             return;
           }
-          gNetworkManager.setWifiOperationMode(manager.ifname,
+          gNetworkService.setWifiOperationMode(manager.ifname,
                                                WIFI_FIRMWARE_STATION,
                                                function (status) {
             if (status) {
@@ -897,6 +909,7 @@ var WifiManager = (function() {
       // Note these following calls ignore errors. If we fail to kill the
       // supplicant gracefully, then we need to continue telling it to die
       // until it does.
+      manager.state = "DISABLING";
       wifiCommand.terminateSupplicant(function (ok) {
         manager.connectionDropped(function () {
           wifiCommand.stopSupplicant(function (status) {
@@ -1604,7 +1617,6 @@ function WifiWorker() {
 
     if ("pin" in net) {
       net.pin = quote(net.pin);
-      net.pcsc = quote("");
     }
 
     if ("phase1" in net)

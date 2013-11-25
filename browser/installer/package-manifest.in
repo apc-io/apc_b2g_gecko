@@ -83,17 +83,7 @@
 #ifdef XP_WIN32
 @BINPATH@/plugin-hang-ui@BIN_SUFFIX@
 #ifndef MOZ_DEBUG
-#if MOZ_MSVC_REDIST == 1400
-@BINPATH@/Microsoft.VC80.CRT.manifest
-@BINPATH@/msvcm80.dll
-@BINPATH@/msvcp80.dll
-@BINPATH@/msvcr80.dll
-#elif MOZ_MSVC_REDIST == 1500
-@BINPATH@/Microsoft.VC90.CRT.manifest
-@BINPATH@/msvcm90.dll
-@BINPATH@/msvcp90.dll
-@BINPATH@/msvcr90.dll
-#elif MOZ_MSVC_REDIST == 1600
+#if MOZ_MSVC_REDIST == 1600
 @BINPATH@/msvcp100.dll
 @BINPATH@/msvcr100.dll
 #elif MOZ_MSVC_REDIST == 1700
@@ -172,6 +162,10 @@
 @BINPATH@/components/directory.xpt
 @BINPATH@/components/docshell.xpt
 @BINPATH@/components/dom.xpt
+#ifdef MOZ_ACTIVITIES
+@BINPATH@/components/dom_activities.xpt
+@BINPATH@/components/dom_messages.xpt
+#endif
 @BINPATH@/components/dom_apps.xpt
 @BINPATH@/components/dom_base.xpt
 @BINPATH@/components/dom_system.xpt
@@ -521,6 +515,19 @@
 @BINPATH@/components/TCPSocketParentIntermediary.js
 @BINPATH@/components/TCPSocket.manifest
 
+#ifdef MOZ_ACTIVITIES
+@BINPATH@/components/SystemMessageInternal.js
+@BINPATH@/components/SystemMessageManager.js
+@BINPATH@/components/SystemMessageManager.manifest
+
+@BINPATH@/components/Activities.manifest
+@BINPATH@/components/ActivityOptions.js
+@BINPATH@/components/ActivityProxy.js
+@BINPATH@/components/ActivityRequestHandler.js
+@BINPATH@/components/ActivityWrapper.js
+@BINPATH@/components/ActivityMessageConfigurator.js
+#endif
+
 @BINPATH@/components/Payment.js
 @BINPATH@/components/PaymentFlowInfo.js
 @BINPATH@/components/PaymentRequestInfo.js
@@ -697,6 +704,11 @@
 @BINPATH@/components/pipboot.xpt
 @BINPATH@/components/pipnss.xpt
 @BINPATH@/components/pippki.xpt
+
+; For content sandboxing
+#if defined(XP_WIN) && defined(MOZ_CONTENT_SANDBOX)
+@BINPATH@/@DLL_PREFIX@sandboxbroker@DLL_SUFFIX@
+#endif
 
 ; for Solaris SPARC
 #ifdef SOLARIS

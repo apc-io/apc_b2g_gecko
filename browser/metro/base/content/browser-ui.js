@@ -14,12 +14,12 @@ Cu.import("resource://gre/modules/devtools/dbg-server.jsm")
 const debugServerStateChanged = "devtools.debugger.remote-enabled";
 const debugServerPortChanged = "devtools.debugger.remote-port";
 
-// delay when showing the tab bar briefly after a new (empty) tab opens
-const kNewTabAnimationDelayMsec = 1000;
-// delay when showing the tab bar after opening a link on a new tab
-const kOpenInNewTabAnimationDelayMsec = 3000;
-// delay before closing tab bar after selecting another tab
-const kSelectTabAnimationDelayMsec = 500;
+// delay when showing the tab bar briefly after a new foreground tab opens
+const kForegroundTabAnimationDelay = 1000;
+// delay when showing the tab bar after opening a new background tab opens
+const kBackgroundTabAnimationDelay = 3000;
+// delay before closing tab bar after closing or selecting a tab
+const kChangeTabAnimationDelay = 500;
 
 /**
  * Cache of commonly used elements.
@@ -173,6 +173,14 @@ var BrowserUI = {
   },
 
   uninit: function() {
+    messageManager.removeMessageListener("DOMTitleChanged", this);
+    messageManager.removeMessageListener("DOMWillOpenModalDialog", this);
+    messageManager.removeMessageListener("DOMWindowClose", this);
+
+    messageManager.removeMessageListener("Browser:OpenURI", this);
+    messageManager.removeMessageListener("Browser:SaveAs:Return", this);
+    messageManager.removeMessageListener("Content:StateChange", this);
+
     messageManager.removeMessageListener("Browser:MozApplicationManifest", OfflineApps);
     Services.obs.removeObserver(this, "handle-xul-text-link");
 
@@ -180,7 +188,6 @@ var BrowserUI = {
     FlyoutPanelsUI.uninit();
     MetroDownloadsView.uninit();
     SettingsCharm.uninit();
-    messageManager.removeMessageListener("Content:StateChange", this);
     PageThumbs.uninit();
     this.stopDebugServer();
   },
@@ -194,6 +201,10 @@ var BrowserUI = {
       DebuggerServer.init();
       DebuggerServer.addBrowserActors();
       DebuggerServer.addActors('chrome://browser/content/dbg-metro-actors.js');
+
+      // Add these globally for chrome, until per-window chrome debugging is supported (bug 928018):
+      DebuggerServer.addGlobalActor(DebuggerServer.tabActorFactories.inspectorActor, "inspectorActor");
+      DebuggerServer.addGlobalActor(DebuggerServer.tabActorFactories.styleEditorActor, "styleEditorActor");
     }
     DebuggerServer.openListener(port);
   },
@@ -429,10 +440,30 @@ var BrowserUI = {
 
   /**
    * Open a new tab in the foreground in response to a user action.
+   * See Browser.addTab for more documentation.
    */
   addAndShowTab: function (aURI, aOwner) {
-    ContextUI.peekTabs(kNewTabAnimationDelayMsec);
+    ContextUI.peekTabs(kForegroundTabAnimationDelay);
     return Browser.addTab(aURI || kStartURI, true, aOwner);
+  },
+
+  /**
+   * Open a new tab in response to clicking a link in an existing tab.
+   * See Browser.addTab for more documentation.
+   */
+  openLinkInNewTab: function (aURI, aBringFront, aOwner) {
+    ContextUI.peekTabs(aBringFront ? kForegroundTabAnimationDelay
+                                   : kBackgroundTabAnimationDelay);
+    let params = null;
+    if (aOwner) {
+      params = {
+        referrerURI: aOwner.browser.documentURI,
+        charset: aOwner.browser.characterSet,
+      };
+    }
+    let tab = Browser.addTab(aURI, aBringFront, aOwner, params);
+    Elements.tabList.strip.ensureElementIsVisible(tab.chromeTab);
+    return tab;
   },
 
   setOnTabAnimationEnd: function setOnTabAnimationEnd(aCallback) {
@@ -459,7 +490,7 @@ var BrowserUI = {
     this.setOnTabAnimationEnd(function() {
       Browser.closeTab(tabToClose, { forceClose: true } );
       if (wasCollapsed)
-        ContextUI.dismissTabsWithDelay(kNewTabAnimationDelayMsec);
+        ContextUI.dismissTabsWithDelay(kChangeTabAnimationDelay);
     });
   },
 
@@ -501,7 +532,7 @@ var BrowserUI = {
 
   selectTabAndDismiss: function selectTabAndDismiss(aTab) {
     this.selectTab(aTab);
-    ContextUI.dismissTabsWithDelay(kSelectTabAnimationDelayMsec);
+    ContextUI.dismissTabsWithDelay(kChangeTabAnimationDelay);
   },
 
   selectTabAtIndex: function selectTabAtIndex(aIndex) {

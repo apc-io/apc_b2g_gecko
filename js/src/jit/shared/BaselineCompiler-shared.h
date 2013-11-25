@@ -26,6 +26,7 @@ class BaselineCompilerShared
     bool ionOSRCompileable_;
     bool debugMode_;
 
+    TempAllocator &alloc_;
     BytecodeAnalysis analysis_;
     FrameInfo frame;
 
@@ -68,7 +69,7 @@ class BaselineCompilerShared
 
     CodeOffsetLabel spsPushToggleOffset_;
 
-    BaselineCompilerShared(JSContext *cx, HandleScript script);
+    BaselineCompilerShared(JSContext *cx, TempAllocator &alloc, HandleScript script);
 
     ICEntry *allocateICEntry(ICStub *stub, bool isForOp) {
         if (!stub)
@@ -127,7 +128,12 @@ class BaselineCompilerShared
         masm.Push(BaselineFrameReg);
     }
 
-    bool callVM(const VMFunction &fun, bool preInitialize=false);
+    enum CallVMPhase {
+        POST_INITIALIZE,
+        PRE_INITIALIZE,
+        CHECK_OVER_RECURSED
+    };
+    bool callVM(const VMFunction &fun, CallVMPhase phase=POST_INITIALIZE);
 
   public:
     BytecodeAnalysis &analysis() {

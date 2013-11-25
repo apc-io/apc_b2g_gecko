@@ -261,7 +261,7 @@ nsXPCWrappedJSClass::CallQueryInterfaceOnJSObject(JSContext* cx,
                     // C++ QI failure. See if that is the case.
                     using namespace mozilla::dom;
                     Exception *e = nullptr;
-                    UNWRAP_OBJECT(Exception, cx, &jsexception.toObject(), e);
+                    UNWRAP_OBJECT(Exception, &jsexception.toObject(), e);
 
                     if (e &&
                         NS_SUCCEEDED(e->GetResult(&rv)) &&
@@ -326,9 +326,6 @@ nsXPCWrappedJSClass::GetNamedPropertyAsVariant(XPCCallContext& ccx,
 {
     JSContext* cx = ccx.GetJSContext();
     RootedObject aJSObj(cx, aJSObjArg);
-    bool ok;
-    RootedId id(cx);
-    nsresult rv = NS_ERROR_FAILURE;
 
     AutoScriptEvaluate scriptEval(cx);
     if (!scriptEval.StartEvaluating(aJSObj))
@@ -337,16 +334,21 @@ nsXPCWrappedJSClass::GetNamedPropertyAsVariant(XPCCallContext& ccx,
     // Wrap the string in a jsval after the AutoScriptEvaluate, so that the
     // resulting value ends up in the correct compartment.
     nsStringBuffer* buf;
-    jsval jsstr = XPCStringConvert::ReadableToJSVal(ccx, aName, &buf);
-    if (JSVAL_IS_NULL(jsstr))
+    RootedValue value(cx);
+    if (!XPCStringConvert::ReadableToJSVal(ccx, aName, &buf, &value))
         return NS_ERROR_OUT_OF_MEMORY;
     if (buf)
         buf->AddRef();
 
-    ok = JS_ValueToId(cx, jsstr, id.address()) &&
-        GetNamedPropertyAsVariantRaw(ccx, aJSObj, id, aResult, &rv);
-
-    return ok ? NS_OK : NS_FAILED(rv) ? rv : NS_ERROR_FAILURE;
+    RootedId id(cx);
+    nsresult rv = NS_OK;
+    if (!JS_ValueToId(cx, value, id.address()) ||
+        !GetNamedPropertyAsVariantRaw(ccx, aJSObj, id, aResult, &rv)) {
+        if (NS_FAILED(rv))
+            return rv;
+        return NS_ERROR_FAILURE;
+    }
+    return NS_OK;
 }
 
 /***************************************************************************/
@@ -386,7 +388,7 @@ nsXPCWrappedJSClass::BuildPropertyEnumerator(XPCCallContext& ccx,
         if (!JS_IdToValue(cx, idName, jsvalName.address()))
             return NS_ERROR_FAILURE;
 
-        JSString* name = JS_ValueToString(cx, jsvalName);
+        JSString* name = ToString(cx, jsvalName);
         if (!name)
             return NS_ERROR_FAILURE;
 

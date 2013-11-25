@@ -60,6 +60,8 @@ public:
   virtual TemporaryRef<SourceSurface> Snapshot();
   virtual IntSize GetSize();
 
+  virtual void SetPermitSubpixelAA(bool aPermitSubpixelAA);
+
   virtual bool LockBits(uint8_t** aData, IntSize* aSize,
                         int32_t* aStride, SurfaceFormat* aFormat);
   virtual void ReleaseBits(uint8_t* aData);
@@ -147,6 +149,8 @@ public:
   virtual void *GetNativeSurface(NativeSurfaceType aType);
 
   bool Init(cairo_surface_t* aSurface, const IntSize& aSize);
+  bool Init(const IntSize& aSize, SurfaceFormat aFormat);
+  bool Init(unsigned char* aData, const IntSize &aSize, int32_t aStride, SurfaceFormat aFormat);
 
   virtual void SetTransform(const Matrix& aTransform);
 

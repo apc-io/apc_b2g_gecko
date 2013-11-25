@@ -295,6 +295,14 @@ BaselineInspector::expectedBinaryArithSpecialization(jsbytecode *pc)
     MIRType result;
     ICStub *stubs[2];
 
+    const ICEntry &entry = icEntryFromPC(pc);
+    ICStub *stub = entry.fallbackStub();
+    if (stub->isBinaryArith_Fallback() &&
+        stub->toBinaryArith_Fallback()->hadUnoptimizableOperands())
+    {
+        return MIRType_None;
+    }
+
     stubs[0] = monomorphicStub(pc);
     if (stubs[0]) {
         if (TryToSpecializeBinaryArithOp(stubs, 1, &result))
@@ -397,6 +405,8 @@ BaselineInspector::getTemplateObject(jsbytecode *pc)
             return stub->toNewArray_Fallback()->templateObject();
           case ICStub::NewObject_Fallback:
             return stub->toNewObject_Fallback()->templateObject();
+          case ICStub::Rest_Fallback:
+            return stub->toRest_Fallback()->templateObject();
           case ICStub::Call_Scripted:
             if (JSObject *obj = stub->toCall_Scripted()->templateObject())
                 return obj;
@@ -440,4 +450,34 @@ BaselineInspector::templateCallObject()
     JS_ASSERT(res);
 
     return &res->as<CallObject>();
+}
+
+JSObject *
+BaselineInspector::commonGetPropFunction(jsbytecode *pc, Shape **lastProperty, JSFunction **commonGetter)
+{
+    const ICEntry &entry = icEntryFromPC(pc);
+    for (ICStub *stub = entry.firstStub(); stub; stub = stub->next()) {
+        if (stub->isGetProp_CallScripted() || stub->isGetProp_CallNative()) {
+            ICGetPropCallGetter *nstub = static_cast<ICGetPropCallGetter *>(stub);
+            *lastProperty = nstub->holderShape();
+            *commonGetter = nstub->getter();
+            return nstub->holder();
+        }
+    }
+    return nullptr;
+}
+
+JSObject *
+BaselineInspector::commonSetPropFunction(jsbytecode *pc, Shape **lastProperty, JSFunction **commonSetter)
+{
+    const ICEntry &entry = icEntryFromPC(pc);
+    for (ICStub *stub = entry.firstStub(); stub; stub = stub->next()) {
+        if (stub->isSetProp_CallScripted() || stub->isSetProp_CallNative()) {
+            ICSetPropCallSetter *nstub = static_cast<ICSetPropCallSetter *>(stub);
+            *lastProperty = nstub->holderShape();
+            *commonSetter = nstub->setter();
+            return nstub->holder();
+        }
+    }
+    return nullptr;
 }

@@ -265,6 +265,7 @@ public:
   typedef void (* DrawThebesLayerCallback)(ThebesLayer* aLayer,
                                            gfxContext* aContext,
                                            const nsIntRegion& aRegionToDraw,
+                                           DrawRegionClip aClip,
                                            const nsIntRegion& aRegionToInvalidate,
                                            void* aCallbackData);
 
@@ -504,10 +505,6 @@ public:
    */
   virtual bool NeedsWidgetInvalidation() { return true; }
 
-  // We always declare the following logging symbols, because it's
-  // extremely tricky to conditionally declare them.  However, for
-  // ifndef MOZ_LAYERS_HAVE_LOG builds, they only have trivial
-  // definitions in Layers.cpp.
   virtual const char* Name() const { return "???"; }
 
   /**
@@ -1226,6 +1223,7 @@ public:
    * marked as needed to be recomposited.
    */
   const nsIntRegion& GetInvalidRegion() { return mInvalidRegion; }
+  const void SetInvalidRegion(const nsIntRegion& aRect) { mInvalidRegion = aRect; }
 
   /**
    * Mark the entirety of the layer's visible region as being invalid.
@@ -1956,6 +1954,9 @@ protected:
   // 0 is a special value that means "no ID".
   uint64_t mId;
 };
+
+void
+SetAntialiasingFlags(Layer* aLayer, gfxContext* aTarget);
 
 #ifdef MOZ_DUMP_PAINTING
 void WriteSnapshotToDumpFile(Layer* aLayer, gfxASurface* aSurf);

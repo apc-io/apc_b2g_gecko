@@ -120,6 +120,21 @@ public class TopSitesPage extends HomeFragment {
         mUrlOpenListener = null;
     }
 
+    private static boolean logDebug = Log.isLoggable(LOGTAG, Log.DEBUG);
+    private static boolean logVerbose = Log.isLoggable(LOGTAG, Log.VERBOSE);
+
+    private static void debug(final String message) {
+        if (logDebug) {
+            Log.d(LOGTAG, message);
+        }
+    }
+
+    private static void trace(final String message) {
+        if (logVerbose) {
+            Log.v(LOGTAG, message);
+        }
+    }
+
     @Override
     public void onAttach(Activity activity) {
         super.onAttach(activity);
@@ -338,7 +353,8 @@ public class TopSitesPage extends HomeFragment {
         }
 
         if (itemId == R.id.top_sites_edit) {
-            mEditPinnedSiteListener.onEditPinnedSite(info.position);
+            // Decode "user-entered" URLs before showing them.
+            mEditPinnedSiteListener.onEditPinnedSite(info.position, decodeUserEnteredUrl(info.url));
             return true;
         }
 
@@ -382,7 +398,7 @@ public class TopSitesPage extends HomeFragment {
         private int mPosition;
 
         @Override
-        public void onEditPinnedSite(int position) {
+        public void onEditPinnedSite(int position, String searchTerm) {
             mPosition = position;
 
             final FragmentManager manager = getActivity().getSupportFragmentManager();
@@ -392,6 +408,7 @@ public class TopSitesPage extends HomeFragment {
             }
 
             dialog.setOnSiteSelectedListener(this);
+            dialog.setSearchTerm(searchTerm);
             dialog.show(manager, TAG_PIN_SITE);
         }
 
@@ -478,7 +495,7 @@ public class TopSitesPage extends HomeFragment {
 
         @Override
         public Cursor loadCursor() {
-            Log.d(LOGTAG, "TopSitesLoader.loadCursor()");
+            trace("TopSitesLoader.loadCursor()");
             return BrowserDB.getTopSites(getContext().getContentResolver(), mMaxGridEntries, SEARCH_LIMIT);
         }
     }
@@ -515,6 +532,7 @@ public class TopSitesPage extends HomeFragment {
 
     public class TopSitesGridAdapter extends CursorAdapter {
         // Cache to store the thumbnails.
+        // Ensure that this is only accessed from the UI thread.
         private Map<String, Bitmap> mThumbnails;
 
         public TopSitesGridAdapter(Context context, Cursor cursor) {
@@ -540,6 +558,17 @@ public class TopSitesPage extends HomeFragment {
          */
         public void updateThumbnails(Map<String, Bitmap> thumbnails) {
             mThumbnails = thumbnails;
+
+            final int count = mGrid.getChildCount();
+            for (int i = 0; i < count; i++) {
+                TopSitesGridItemView gridItem = (TopSitesGridItemView) mGrid.getChildAt(i);
+
+                // All the views have already got their initial state at this point.
+                // This will force each view to load favicons for the missing
+                // thumbnails if necessary.
+                gridItem.markAsDirty();
+            }
+
             notifyDataSetChanged();
         }
 
@@ -557,28 +586,52 @@ public class TopSitesPage extends HomeFragment {
             }
 
             final TopSitesGridItemView view = (TopSitesGridItemView) bindView;
-            view.setTitle(title);
-            view.setUrl(url);
-            view.setPinned(pinned);
 
             // If there is no url, then show "add bookmark".
             if (TextUtils.isEmpty(url)) {
-                view.displayThumbnail(R.drawable.top_site_add);
-            } else {
-                // Show the thumbnail, if any.
-                Bitmap thumbnail = (mThumbnails != null ? mThumbnails.get(url) : null);
-                if (thumbnail != null) {
-                    view.displayThumbnail(thumbnail);
-                } else {
-                    // If we have no thumbnail, attempt to show a Favicon instead.
-                    view.setLoadId(Favicons.getSizedFaviconForPageFromLocal(url, new OnFaviconLoadedListener() {
-                        @Override
-                        public void onFaviconLoaded(String url, String faviconURL, Bitmap favicon) {
-                            view.displayFavicon(favicon, faviconURL);
-                        }
-                    }));
+                // Wait until thumbnails are loaded before showing anything.
+                if (mThumbnails != null) {
+                    view.blankOut();
                 }
+
+                return;
             }
+
+            // Show the thumbnail, if any.
+            Bitmap thumbnail = (mThumbnails != null ? mThumbnails.get(url) : null);
+
+            // Debounce bindView calls to avoid redundant redraws and favicon
+            // fetches.
+            final boolean updated = view.updateState(title, url, pinned, thumbnail);
+
+            // If thumbnails are still being loaded, don't try to load favicons
+            // just yet. If we sent in a thumbnail, we're done now.
+            if (mThumbnails == null || thumbnail != null) {
+                return;
+            }
+
+            // Thumbnails are delivered late, so we can't short-circuit any
+            // sooner than this. But we can avoid a duplicate favicon
+            // fetch...
+            if (!updated) {
+                debug("bindView called twice for same values; short-circuiting.");
+                return;
+            }
+
+            // If we have no thumbnail, attempt to show a Favicon instead.
+            LoadIDAwareFaviconLoadedListener listener = new LoadIDAwareFaviconLoadedListener(view);
+            final int loadId = Favicons.getSizedFaviconForPageFromLocal(url, listener);
+            if (loadId == Favicons.LOADED) {
+                // Great!
+                return;
+            }
+
+            // Otherwise, do this until the async lookup returns.
+            view.displayThumbnail(R.drawable.favicon);
+
+            // Give each side enough information to shake hands later.
+            listener.setLoadId(loadId);
+            view.setLoadId(loadId);
         }
 
         @Override
@@ -587,10 +640,29 @@ public class TopSitesPage extends HomeFragment {
         }
     }
 
+    private static class LoadIDAwareFaviconLoadedListener implements OnFaviconLoadedListener {
+        private volatile int loadId = Favicons.NOT_LOADING;
+        private final TopSitesGridItemView view;
+        public LoadIDAwareFaviconLoadedListener(TopSitesGridItemView view) {
+            this.view = view;
+        }
+
+        public void setLoadId(int id) {
+            this.loadId = id;
+        }
+
+        @Override
+        public void onFaviconLoaded(String url, String faviconURL, Bitmap favicon) {
+            if (TextUtils.equals(this.view.getUrl(), url)) {
+                this.view.displayFavicon(favicon, faviconURL, this.loadId);
+            }
+        }
+    }
+
     private class CursorLoaderCallbacks implements LoaderCallbacks<Cursor> {
         @Override
         public Loader<Cursor> onCreateLoader(int id, Bundle args) {
-            Log.d(LOGTAG, "Creating TopSitesLoader: " + id);
+            trace("Creating TopSitesLoader: " + id);
             return new TopSitesLoader(getActivity());
         }
 
@@ -606,7 +678,7 @@ public class TopSitesPage extends HomeFragment {
          */
         @Override
         public void onLoadFinished(Loader<Cursor> loader, Cursor c) {
-            Log.d(LOGTAG, "onLoadFinished: " + c.getCount() + " rows.");
+            debug("onLoadFinished: " + c.getCount() + " rows.");
 
             mListAdapter.swapCursor(c);
             mGridAdapter.swapCursor(c);

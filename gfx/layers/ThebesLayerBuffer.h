@@ -21,6 +21,7 @@
 #include "nsRect.h"                     // for nsIntRect
 #include "nsRegion.h"                   // for nsIntRegion
 #include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
+#include "LayersTypes.h"
 
 struct gfxMatrix;
 struct nsIntSize;
@@ -61,6 +62,7 @@ public:
     , mBufferOnWhite(aBufferOnWhite)
     , mBufferRect(aBufferRect)
     , mBufferRotation(aBufferRotation)
+    , mDidSelfCopy(false)
   { }
   RotatedBuffer(gfx::DrawTarget* aDTBuffer, gfx::DrawTarget* aDTBufferOnWhite,
                 const nsIntRect& aBufferRect,
@@ -69,8 +71,11 @@ public:
     , mDTBufferOnWhite(aDTBufferOnWhite)
     , mBufferRect(aBufferRect)
     , mBufferRotation(aBufferRotation)
+    , mDidSelfCopy(false)
   { }
-  RotatedBuffer() { }
+  RotatedBuffer()
+    : mDidSelfCopy(false)
+  { }
 
   /*
    * Which buffer should be drawn to/read from.
@@ -111,6 +116,8 @@ protected:
     TOP, BOTTOM
   };
   nsIntRect GetQuadrantRectangle(XSide aXSide, YSide aYSide) const;
+
+  gfx::Rect GetSourceRectangle(XSide aXSide, YSide aYSide) const;
 
   /*
    * If aMask is non-null, then it is used as an alpha mask for rendering this
@@ -216,6 +223,7 @@ public:
     nsIntRegion mRegionToDraw;
     nsIntRegion mRegionToInvalidate;
     bool mDidSelfCopy;
+    DrawRegionClip mClip;
   };
 
   enum {
@@ -386,8 +394,8 @@ protected:
   /**
    * If the buffer hasn't been mapped, map it.
    */
-  void EnsureBuffer();
-  void EnsureBufferOnWhite();
+  bool EnsureBuffer();
+  bool EnsureBufferOnWhite();
   /**
    * True if we have a buffer where we can get it (but not necessarily
    * mapped currently).

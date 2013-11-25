@@ -417,7 +417,6 @@ protected:
                            nsCxPusher* aPusher);
 
   nsresult HandleEventSubType(nsListenerStruct* aListenerStruct,
-                              const mozilla::dom::EventListenerHolder& aListener,
                               nsIDOMEvent* aDOMEvent,
                               mozilla::dom::EventTarget* aCurrentTarget,
                               nsCxPusher* aPusher);
@@ -485,8 +484,12 @@ public:
   }
   mozilla::dom::OnErrorEventHandlerNonNull* GetOnErrorEventHandler()
   {
-    const nsEventHandler* handler =
-      GetEventHandlerInternal(nsGkAtoms::onerror, EmptyString());
+    const nsEventHandler* handler;
+    if (mIsMainThreadELM) {
+      handler = GetEventHandlerInternal(nsGkAtoms::onerror, EmptyString());
+    } else {
+      handler = GetEventHandlerInternal(nullptr, NS_LITERAL_STRING("onerror"));
+    }
     return handler ? handler->OnErrorEventHandler() : nullptr;
   }
   mozilla::dom::OnBeforeUnloadEventHandlerNonNull* GetOnBeforeUnloadEventHandler()

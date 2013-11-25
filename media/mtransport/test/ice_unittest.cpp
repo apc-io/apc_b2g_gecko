@@ -7,6 +7,7 @@
 // Original author: ekr@rtfm.com
 
 #include <algorithm>
+#include <deque>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -30,6 +31,7 @@
 #include "nriceresolver.h"
 #include "nrinterfaceprioritizer.h"
 #include "mtransport_test_utils.h"
+#include "rlogringbuffer.h"
 #include "runnable_utils.h"
 #include "stunserver.h"
 // TODO(bcampen@mozilla.com): Big fat hack since the build system doesn't give
@@ -85,6 +87,9 @@ bool operator<(const NrIceCandidate& lhs,
                const NrIceCandidate& rhs) {
   if (lhs.host == rhs.host) {
     if (lhs.port == rhs.port) {
+      if (lhs.type == rhs.type) {
+        return lhs.codeword < rhs.codeword;
+      }
       return lhs.type < rhs.type;
     }
     return lhs.port < rhs.port;
@@ -96,7 +101,8 @@ bool operator==(const NrIceCandidate& lhs,
                 const NrIceCandidate& rhs) {
   return lhs.host == rhs.host &&
          lhs.port == rhs.port &&
-         lhs.type == rhs.type;
+         lhs.type == rhs.type &&
+         lhs.codeword == rhs.codeword;
 }
 
 class IceCandidatePairCompare {
@@ -105,6 +111,9 @@ class IceCandidatePairCompare {
                     const NrIceCandidatePair& rhs) const {
       if (lhs.priority == rhs.priority) {
         if (lhs.local == rhs.local) {
+          if (lhs.remote == rhs.remote) {
+            return lhs.codeword < rhs.codeword;
+          }
           return lhs.remote < rhs.remote;
         }
         return lhs.local < rhs.local;
@@ -366,6 +375,8 @@ class IceTestPeer : public sigslot::has_slots<> {
               << cand.host
               << ":"
               << cand.port
+              << " codeword="
+              << cand.codeword
               << std::endl;
   }
 
@@ -479,7 +490,8 @@ class IceTestPeer : public sigslot::has_slots<> {
       std::cerr << "state = " << pair.state
                 << " priority = " << pair.priority
                 << " nominated = " << pair.nominated
-                << " selected = " << pair.selected << std::endl;
+                << " selected = " << pair.selected
+                << " codeword = " << pair.codeword << std::endl;
   }
 
   void DumpCandidatePairs(NrIceMediaStream *stream) {
@@ -1222,6 +1234,49 @@ TEST_F(IceConnectTest, TestPollCandPairsDuringConnect) {
   ASSERT_TRUE(ContainsSucceededPair(pairs2));
 }
 
+TEST_F(IceConnectTest, TestRLogRingBuffer) {
+  RLogRingBuffer::CreateInstance();
+  AddStream("first", 1);
+  ASSERT_TRUE(Gather(true));
+
+  p1_->Connect(p2_, TRICKLE_NONE, false);
+  p2_->Connect(p1_, TRICKLE_NONE, false);
+
+  std::vector<NrIceCandidatePair> pairs1;
+  std::vector<NrIceCandidatePair> pairs2;
+
+  p1_->StartChecks();
+  p1_->UpdateAndValidateCandidatePairs(0, &pairs1);
+  p2_->UpdateAndValidateCandidatePairs(0, &pairs2);
+
+  p2_->StartChecks();
+  p1_->UpdateAndValidateCandidatePairs(0, &pairs1);
+  p2_->UpdateAndValidateCandidatePairs(0, &pairs2);
+
+  WaitForComplete();
+  p1_->UpdateAndValidateCandidatePairs(0, &pairs1);
+  p2_->UpdateAndValidateCandidatePairs(0, &pairs2);
+  ASSERT_TRUE(ContainsSucceededPair(pairs1));
+  ASSERT_TRUE(ContainsSucceededPair(pairs2));
+
+  for (auto p = pairs1.begin(); p != pairs1.end(); ++p) {
+    std::deque<std::string> logs;
+    std::string substring("CAND-PAIR(");
+    substring += p->codeword;
+    RLogRingBuffer::GetInstance()->Filter(substring, 0, &logs);
+    ASSERT_NE(0U, logs.size());
+  }
+
+  for (auto p = pairs2.begin(); p != pairs2.end(); ++p) {
+    std::deque<std::string> logs;
+    std::string substring("CAND-PAIR(");
+    substring += p->codeword;
+    RLogRingBuffer::GetInstance()->Filter(substring, 0, &logs);
+    ASSERT_NE(0U, logs.size());
+  }
+
+  RLogRingBuffer::DestroyInstance();
+}
 
 TEST_F(PrioritizerTest, TestPrioritizer) {
   SetPriorizer(::mozilla::CreateInterfacePrioritizer());
