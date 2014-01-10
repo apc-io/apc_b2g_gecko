@@ -342,8 +342,7 @@ BluetoothService::Init()
   }
 
   // Only the main process should observe bluetooth settings changes.
-  if (IsMainProcess() &&
-      NS_FAILED(obs->AddObserver(this, MOZSETTINGS_CHANGED_ID, false))) {
+  if (NS_FAILED(obs->AddObserver(this, MOZSETTINGS_CHANGED_ID, false))) {
     BT_WARNING("Failed to add settings change observer!");
     return false;
   }
@@ -795,9 +794,9 @@ BluetoothService::TryFiringAdapterAdded()
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  if (IsToggling() || !mAdapterAddedReceived) {
+  /*if (IsToggling() || !mAdapterAddedReceived) {
     return;
-  }
+  }*/
 
   BluetoothSignal signal(NS_LITERAL_STRING("AdapterAdded"),
                          NS_LITERAL_STRING(KEY_MANAGER), true);
