@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #define _GNU_SOURCE
 
 #include <dirent.h>
@@ -49,6 +48,7 @@
 #include "nsGkAtoms.h"
 #include "nsIObserverService.h"
 #include "nsIScreen.h"
+#include "nsIMouseController.h"
 #include "nsScreenManagerGonk.h"
 #include "nsThreadUtils.h"
 #include "nsWindow.h"
@@ -93,6 +93,7 @@ static int signalfds[2] = {0};
 static bool sDevInputAudioJack;
 static int32_t sHeadphoneState;
 static int32_t sMicrophoneState;
+static nsCOMPtr<nsIMouseController> mouseCtrl;
 
 NS_IMPL_ISUPPORTS_INHERITED1(nsAppShell, nsBaseAppShell, nsIObserver)
 
@@ -109,6 +110,16 @@ void NotifyEvent()
 }
 
 } // namespace mozilla
+
+static bool
+initMouseController() {
+    if (mouseCtrl != 0) {
+        return true;
+    }
+    
+    mouseCtrl = do_GetService("@mozilla.org/hw/mousecontroller;1");
+    return (mouseCtrl != 0);
+}
 
 static void
 pipeHandler(int fd, FdHandler *data)
@@ -430,8 +441,8 @@ public:
     virtual int32_t getButtonState() const;
     virtual void setPosition(float x, float y);
     virtual void getPosition(float* outX, float* outY) const;
-    virtual void fade(Transition transition) {}
-    virtual void unfade(Transition transition) {}
+    virtual void fade(Transition transition);
+    virtual void unfade(Transition transition);
     virtual void setPresentation(Presentation presentation) {}
     virtual void setSpots(const PointerCoords* spotCoords, const uint32_t* spotIdToIndex,
             BitSet32 spotIdBits) {}
@@ -490,6 +501,22 @@ GeckoPointerController::getPosition(float* outX, float* outY) const
     *outY = mY;
 }
 
+void
+GeckoPointerController::fade(Transition transition) {
+    if (!initMouseController()) {
+        return;
+    }
+    mouseCtrl->SetVisible(false);
+}
+
+void
+GeckoPointerController::unfade(Transition transition) {
+    if (!initMouseController()) {
+        return;
+    }
+    mouseCtrl->SetVisible(true);
+}
+
 class GeckoInputReaderPolicy : public InputReaderPolicyInterface {
     InputReaderConfiguration mConfig;
 public:
@@ -499,7 +526,8 @@ public:
     virtual sp<PointerControllerInterface> obtainPointerController(int32_t
 deviceId)
     {
-        return new GeckoPointerController(&mConfig);
+        static sp<PointerControllerInterface> controller = new GeckoPointerController(&mConfig);
+        return controller;
     };
     virtual void notifyInputDevicesChanged(const android::Vector<InputDeviceInfo>& inputDevices) {};
     virtual sp<KeyCharacterMap> getKeyboardLayoutOverlay(const String8& inputDeviceDescriptor)
@@ -786,6 +814,14 @@ void GeckoInputDispatcher::notifyDeviceReset(const NotifyDeviceResetArgs* args)
             mEventQueue.push(data);
         }
         gAppShell->NotifyNativeEvent();
+    }
+
+    if ((resetAction == RESET_ACTION_ADDED) || (resetAction == RESET_ACTION_REMOVED)) {
+        if ((classes & INPUT_DEVICE_CLASS_EXTERNAL) && (classes & INPUT_DEVICE_CLASS_CURSOR)) {
+            if (initMouseController()) {
+                mouseCtrl->NotifyPresentChanged(args->deviceId, resetAction == RESET_ACTION_ADDED);
+            }
+        }
     }
 }
 

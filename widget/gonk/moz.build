@@ -53,6 +53,7 @@ SOURCES += [
     'nsAppShell.cpp',
     'nsIdleServiceGonk.cpp',
     'nsLookAndFeel.cpp',
+    'nsMouseController.cpp',
     'nsWidgetFactory.cpp',
     'nsWindow.cpp',
     'OrientationObserver.cpp',

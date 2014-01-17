@@ -67,6 +67,12 @@ XPCOMUtils.defineLazyServiceGetter(Services, 'captivePortalDetector',
                                   'nsICaptivePortalDetector');
 #endif
 
+#ifdef MOZ_WIDGET_GONK
+XPCOMUtils.defineLazyServiceGetter(Services, 'mouseController',
+                                  '@mozilla.org/hw/mousecontroller;1',
+                                  'nsIMouseController');
+#endif
+
 function getContentWindow() {
   return shell.contentBrowser.contentWindow;
 }
@@ -84,6 +90,9 @@ function debugCrashReport(aStr) {}
 #endif
 
 var shell = {
+
+  cursorVisible: null,
+  mouseCursor: null,
 
   get CrashSubmit() {
     delete this.CrashSubmit;
@@ -306,8 +315,12 @@ var shell = {
     window.addEventListener('mozfullscreenchange', this);
     window.addEventListener('MozAfterPaint', this);
     window.addEventListener('sizemodechange', this);
-    window.addEventListener('mousemove', this, true);
+    // window.addEventListener('mousemove', this, true);
     this.contentBrowser.addEventListener('mozbrowserloadstart', this, true);
+
+    this.cursorVisible = Services.mouseController.visible;
+    this.processCursorVisible();
+    Services.obs.addObserver(this, "mouse-cursor-visible-changed", false);
 
     CustomEventManager.init();
     WebappsHelper.init();
@@ -346,6 +359,30 @@ var shell = {
 
     UserAgentOverrides.uninit();
     IndexedDBPromptHelper.uninit();
+  },
+
+  observe: function shell_observer(subject, topic, state) {
+    if (topic == "mouse-cursor-visible-changed") {
+      this.cursorVisible = Services.mouseController.visible;
+      this.processCursorVisible();
+    }
+  },
+
+  processCursorVisible: function shell_processCursorVisible() {
+    if (this.mouseCursor == null) {
+      this.mouseCursor = document.getElementById("cursor");
+    }
+    if (this.cursorVisible) {
+      if (this.mouseCursor) {
+        this.mouseCursor.style.display = "block";
+      }
+      window.addEventListener('mousemove', this, true);
+    } else {
+      if (this.mouseCursor) {
+        this.mouseCursor.style.display = "none";
+      }
+      window.removeEventListener('mousemove', this, true);
+    }
   },
 
   // If this key event actually represents a hardware button, filter it here
@@ -530,9 +567,6 @@ var shell = {
         break;
       case 'mousemove':
         var cursor = document.getElementById("cursor");
-        if (cursor.style.display == "none") {
-          cursor.style.display = "block";
-        }
         cursor.style.left = (evt.screenX + 3) + "px";
         cursor.style.top = (evt.screenY + 3) + "px";
         break;
