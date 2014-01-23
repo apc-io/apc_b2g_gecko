@@ -94,7 +94,7 @@ DOMEthernetManager.prototype = {
     // Maintain this state for synchronous APIs.
     // this._connectionStatus = "disconnected";
     this._enabled = true;
-    this._connected = true;
+    this._connected = false;
     this._connection = null;
     this._onEnabledChanged = null;
     this._onConnectedChanged = null;
@@ -104,6 +104,7 @@ DOMEthernetManager.prototype = {
     const messages = ["EthernetManager:enable", "EthernetManager:disable",
                       "EthernetManager:connect", "EthernetManager:disconnect",
                       "EthernetManager:getEnabled", "EthernetManager:getConnected",
+                      "EthernetManager:onConnected", "EthernetManager:onDisconnected",
                       "EthernetManager:getConnection"];
     this.initDOMRequestHelper(aWindow, messages);
 
@@ -116,6 +117,8 @@ DOMEthernetManager.prototype = {
     }
     if (this._enabled) {
       // this._connection = this._mm.sendSyncMessage("EthernetManager:getConnection");
+      this._connected = (this._mm.sendSyncMessage("EthernetManager:getConnected") == "true") ? true : false;
+      debug("now connected == " + this._connected);
     }
   },
 
@@ -129,8 +132,6 @@ DOMEthernetManager.prototype = {
       interfaceName = subject.name;
     }
     debug("We got the message from " + subject + "(" + interfaceName + ") with topic " + topic + " and the data " + data);
-    // switch (topic) {
-    // }
   },
 
   _sendMessageForRequest: function(name, data, request) {
@@ -140,10 +141,22 @@ DOMEthernetManager.prototype = {
   },
 
   receiveMessage: function(aMessage) {
-    debug("receiveMessage: " + aMessage);
+    debug("receiveMessage: " + aMessage.name);
     let msg = aMessage.json;
     if (msg.mid && msg.mid != this._id)
       return;
+    switch (aMessage.name) {
+      case "EthernetManager:onConnected":
+        this._connected = true;
+        var evt = new this._window.Event("EthernetConnected");
+        this._onConnectedChanged.handleEvent(evt);
+        break;
+      case "EthernetManager:onDisconnected":
+        this._connected = false;
+        var evt = new this._window.Event("EthernetDisconnected");
+        this._onConnectedChanged.handleEvent(evt);
+        break;
+    }
   },
 
   enable: function nsIDOMEthernetManager_enable() {
@@ -189,7 +202,7 @@ DOMEthernetManager.prototype = {
   },
 
   get connected() {
-    debug("get connected");
+    debug("get connected = " + this._connected);
     if (!this._hasPrivileges)
       throw new Components.Exception("Denied", Cr.NS_ERROR_FAILURE);
     // TODO: better method for validating ip address
