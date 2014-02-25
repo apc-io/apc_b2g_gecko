@@ -104,6 +104,7 @@ DOMEthernetManager.prototype = {
     const messages = ["EthernetManager:enable", "EthernetManager:disable",
                       "EthernetManager:connect", "EthernetManager:disconnect",
                       "EthernetManager:getEnabled", "EthernetManager:getConnected",
+                      "EthernetManager:onEnabled", "EthernetManager:onDisabled",
                       "EthernetManager:onConnected", "EthernetManager:onDisconnected",
                       "EthernetManager:getConnection"];
     this.initDOMRequestHelper(aWindow, messages);
@@ -155,6 +156,16 @@ DOMEthernetManager.prototype = {
         this._connected = false;
         var evt = new this._window.Event("EthernetDisconnected");
         this._onConnectedChanged.handleEvent(evt);
+        break;
+      case "EthernetManager:onEnabled":
+        this._enabled = true;
+        var evt = new this._window.Event("EthernetEnabled");
+        this._onEnabledChanged.handleEvent(evt);
+        break;
+      case "EthernetManager:onDisabled":
+        this._enabled = false;
+        var evt = new this._window.Event("EthernetDisabled");
+        this._onEnabledChanged.handleEvent(evt);
         break;
     }
   },

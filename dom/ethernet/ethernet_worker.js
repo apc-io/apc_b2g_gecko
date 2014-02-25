@@ -25,9 +25,12 @@ self.onmessage = function(e) {
 
   switch (cmd) {
   case "ifc_enable":
+  case "ifc_disable":
   case "dhcp_stop":
   case "dhcp_release_lease":
+    debug("Calling " + cmd + " ..");
     var ret = libnetutils[cmd](data.ifname);
+    debug("return = " + ret);
     postMessage({ id: id, status: ret, ifname: data.ifname });
     break;
   case "dhcp_do_request":
