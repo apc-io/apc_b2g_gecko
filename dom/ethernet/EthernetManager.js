@@ -73,6 +73,7 @@ this.EthernetManager = {
   	this.settingEnabled = false;
   	this._isConnected = false;
     this.callbackObj = null;
+    this.enabled = false;
 
     // preferences
     this.getStartupPreferences();
@@ -111,10 +112,20 @@ this.EthernetManager = {
     debug("shutdown");
     for (ifname in this.networkInterfaces) {
       let iface = this.networkInterfaces[ifname];
-      gNetworkManager.unregisterNetworkInterface(iface);
-      delete this.networkInterfaces[ifname];
+      debug("Iface for " + ifname + " = " + iface);
+      // gNetworkManager.unregisterNetworkInterface(iface);
+      this.disableInterface(ifname);
+      // delete this.networkInterfaces[ifname];
     }
     // how to stop controlWorker?
+  },
+
+  enable: function EthernetManager_enable() {
+    return this.initInterface(kDefaultEthernetNetworkIface);
+  },
+
+  disable: function EthernetManager_disable() {
+    return this.shutdown();
   },
 
   // nsIObserver
@@ -177,6 +188,16 @@ this.EthernetManager = {
     // do some query here
     // ...
     return pref;
+  },
+
+  // enable/disable status
+  getEnabled: function EthernetManager_getEnabled() {
+    return this.enabled;
+  },
+
+  _setEnabled: function EthernetManager_setEnabled(enabled) {
+    this.enabled = enabled;
+    this.callbackObj.onEnabledChanged(enabled);
   },
 
   // network interface related
@@ -256,7 +277,18 @@ this.EthernetManager = {
       ifname: ifname
     };
 
-    this.controlMessage(workParams, this.onIfcEnableResult);
+    this.controlMessage(workParams, NetUtilsCallbacks.onIfcEnableResult);
+  },
+
+  disableInterface: function EthernetManager_disableInterface(ifname) {
+    debug("EthernetManager_disableInterface: " + ifname);
+
+    let workParams = {
+      cmd: "ifc_disable",
+      ifname: ifname
+    };
+
+    this.controlMessage(workParams, NetUtilsCallbacks.onIfcDisableResult);
   },
 
   connectInterface: function EthernetManager_connect(ifname) {
@@ -501,6 +533,18 @@ this.NetUtilsCallbacks = {
     if (!Utils.validateStatus(result)) {
       debug("Well, error when enabling interface: " + result.ifname);
       EthernetManager.removeInterface(result.ifname);
+      return;
+    }
+
+    EthernetManager._setEnabled(true);
+  },
+
+  onIfcDisableResult: function NetUtilsCallbacks_onIfcDisableResult(result) {
+    debug("NetUtilsCallbacks_onIfcDisableResult: " + result.ifname);
+    if (Utils.validateStatus(result)) {
+      debug("Ok, interface is disabled: " + result.ifname);
+      // EthernetManager.removeInterface(result.ifname); // need this line?
+      EthernetManager._setEnabled(false);
     }
   },
 

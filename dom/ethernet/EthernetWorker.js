@@ -24,9 +24,10 @@ var EthernetWorker = (function() {
   const messages = ["EthernetManager:enable", "EthernetManager:disable",
                     "EthernetManager:connect", "EthernetManager:disconnect",
                     "EthernetManager:getEnabled", "EthernetManager:getConnected",
+                    "EthernetManager:onEnabled", "EthernetManager:onDisabled",
                     "EthernetManager:onConnected", "EthernetManager:onDisconnected",
-                    "EthernetManager:getConnection"];
-                    // "child-process-shutdown"];
+                    "EthernetManager:getConnection",
+                    "child-process-shutdown"];
 
   messages.forEach((function(msgName) {
     this._mm.addMessageListener(msgName, this);
@@ -84,9 +85,23 @@ EthernetWorker.prototype = {
         }
         return this.getEnabled();
       }
-      case "EthernetManager:getConnected":
+      case "EthernetManager:getConnected": {
         return this.getConnected();
+      }
+      case "EthernetManager:enable": {
+        debug("ok, let's enable");
+        EthernetManager.enable();
+      }
+      break;
+      case "EthernetManager:disable": {
+        debug("Ok, let's disable");
+        EthernetManager.disable();
+      }
+      break;
+      default:
+        debug("Well, ok: " + aMessage.name);
     }
+    debug("Well, after: " + aMessage.name);
   },
 
   shutdown: function nsIEthernet_shutdown() {
@@ -95,11 +110,20 @@ EthernetWorker.prototype = {
   },
 
   getEnabled: function() {
-    return true;
+    return EthernetManager.getEnabled();
   },
   
   getConnected: function() {
     return EthernetManager.getConnected();
+  },
+
+  onEnabledChanged: function(enabled) {
+    debug("Ok, enabled is changed to: " + enabled);
+    if (enabled) {
+      this._fireEvent("onEnabled", {});
+    } else {
+      this._fireEvent("onDisabled", {});
+    }
   },
 
   onConnectedChanged: function(connected) {
