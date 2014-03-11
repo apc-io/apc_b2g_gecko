@@ -6,7 +6,7 @@
 
 importScripts("systemlibs.js");
 
-let DEBUG = false;
+let DEBUG = true;
 
 let debug;
 if (DEBUG) {
@@ -19,9 +19,14 @@ if (DEBUG) {
 
 self.onmessage = function(e) {
   debug("Ok, we got the message: " + e.data);
+  // postMessage("Here is what I return to you!");
   var data = e.data;
   var id = data.id;
   var cmd = data.cmd;
+
+  for (let k in data) {
+  	debug(">>>>>>> data." + k + ": " + data[k]);
+  }
 
   switch (cmd) {
   case "ifc_enable":
