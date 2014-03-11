@@ -13,7 +13,6 @@
 #include "mozilla/dom/TabParent.h"
 #include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/battery/Types.h"
-#include "mozilla/dom/hardwarekeyboard/Types.h"
 #include "mozilla/dom/network/Types.h"
 #include "mozilla/dom/ScreenOrientation.h"
 #include "mozilla/Observer.h"
@@ -83,18 +82,6 @@ void
 GetCurrentBatteryInformation(BatteryInformation* aBatteryInfo)
 {
   Hal()->SendGetCurrentBatteryInformation(aBatteryInfo);
-}
-
-void
-EnableHardwareKeyboardNotifications()
-{
-  Hal()->SendEnableHardwareKeyboardNotifications();
-}
-
-void
-DisableHardwareKeyboardNotifications()
-{
-  Hal()->SendDisableHardwareKeyboardNotifications();
 }
 
 void
@@ -446,7 +433,6 @@ StopDiskSpaceWatcher()
 
 class HalParent : public PHalParent
                 , public BatteryObserver
-                , public HardwareKeyboardObserver
                 , public NetworkObserver
                 , public ISensorObserver
                 , public WakeLockObserver
@@ -462,7 +448,6 @@ public:
     // NB: you *must* unconditionally unregister your observer here,
     // if it *may* be registered below.
     hal::UnregisterBatteryObserver(this);
-    hal::UnregisterHardwareKeyboardObserver(this);
     hal::UnregisterNetworkObserver(this);
     hal::UnregisterScreenConfigurationObserver(this);
     for (int32_t sensor = SENSOR_UNKNOWN + 1;
@@ -527,23 +512,6 @@ public:
   void Notify(const BatteryInformation& aBatteryInfo) MOZ_OVERRIDE {
     unused << SendNotifyBatteryChange(aBatteryInfo);
   }
-
-  virtual bool
-  RecvEnableHardwareKeyboardNotifications() MOZ_OVERRIDE {
-    hal::RegisterHardwareKeyboardObserver(this);
-    return true;
-  }
-
-  virtual bool
-  RecvDisableHardwareKeyboardNotifications() MOZ_OVERRIDE {
-    hal::UnregisterHardwareKeyboardObserver(this);
-    return true;
-  }
-
-  void Notify(const HardwareKeyboardList& aList) MOZ_OVERRIDE {
-    //unused << SendNotifyHardwareKeyboardChange(aInfo);
-  }
-
 
   virtual bool
   RecvEnableNetworkNotifications() MOZ_OVERRIDE {

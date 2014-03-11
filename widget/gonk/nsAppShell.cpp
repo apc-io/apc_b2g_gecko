@@ -129,8 +129,7 @@ struct UserInputData {
     uint64_t timeMs;
     enum {
         MOTION_DATA,
-        KEY_DATA,
-        HARDWARE_KEYBOARD_RESET
+        KEY_DATA
     } type;
     int32_t action;
     int32_t flags;
@@ -648,9 +647,6 @@ GeckoInputDispatcher::dispatchOnce()
         dispatcher.Dispatch();
         break;
     }
-    case UserInputData::HARDWARE_KEYBOARD_RESET:
-        gAppShell->NotifyHardwareKeyboardChange(data.deviceId, data.action);
-        break;
     }
 }
 
@@ -744,23 +740,6 @@ void GeckoInputDispatcher::notifySwitch(const NotifySwitchArgs* args)
 
 void GeckoInputDispatcher::notifyDeviceReset(const NotifyDeviceResetArgs* args)
 {
-    int32_t deviceId = args->deviceId;
-    uint32_t classes = args->classes;
-    ResetAction resetAction = args->resetAction;
-    //Process action Added and Removed of EXTERNAL HW Keyboard
-    if (((resetAction == RESET_ACTION_ADDED) || (resetAction == RESET_ACTION_REMOVED))
-        && (classes & INPUT_DEVICE_CLASS_ALPHAKEY) && (classes & INPUT_DEVICE_CLASS_EXTERNAL)) {
-        UserInputData data;
-        data.timeMs = nanosecsToMillisecs(args->eventTime);
-        data.type = UserInputData::HARDWARE_KEYBOARD_RESET;
-        data.deviceId = deviceId;
-        data.action = resetAction;
-        {
-            MutexAutoLock lock(mQueueLock);
-            mEventQueue.push(data);
-        }
-        gAppShell->NotifyNativeEvent();
-    }
 }
 
 int32_t GeckoInputDispatcher::injectInputEvent(
@@ -1002,11 +981,4 @@ nsAppShell::NotifyScreenRotation()
     gAppShell->mReader->requestRefreshConfiguration(InputReaderConfiguration::CHANGE_DISPLAY_INFO);
 
     hal::NotifyScreenConfigurationChange(nsScreenGonk::GetConfiguration());
-}
-
-/* static */ void
-nsAppShell::NotifyHardwareKeyboardChange(int32_t deviceId, int32_t action)
-{
-    hal::NotifyHardwareKeyboardChange(hal::HardwareKeyboardInformation(deviceId,
-                                            (action == RESET_ACTION_ADDED)));
 }

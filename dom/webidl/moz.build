@@ -109,7 +109,6 @@ WEBIDL_FILES = [
     'GainNode.webidl',
     'Geolocation.webidl',
     'GetUserMediaRequest.webidl',
-    'HardwareKeyboardManager.webidl',
     'History.webidl',
     'HTMLAnchorElement.webidl',
     'HTMLAppletElement.webidl',

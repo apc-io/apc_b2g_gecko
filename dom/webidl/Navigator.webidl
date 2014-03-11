@@ -112,15 +112,6 @@ interface NavigatorBattery {
 };
 Navigator implements NavigatorBattery;
 
-[NoInterfaceObject]
-interface NavigatorHardwareKeyboard {
-    // XXXbz Per spec this should be non-nullable, but we return null in
-    // torn-down windows.  See bug 884925.
-    [Throws]
-    readonly attribute HardwareKeyboardManager? hardwareKeyboardManager;
-};
-Navigator implements NavigatorHardwareKeyboard;
-
 // https://wiki.mozilla.org/WebAPI/DataStore
 [NoInterfaceObject]
 interface NavigatorDataStore {

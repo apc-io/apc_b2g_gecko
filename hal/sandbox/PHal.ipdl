@@ -32,15 +32,6 @@ struct BatteryInformation {
   double remainingTime;
 };
 
-struct HardwareKeyboardInformation {
-  int32_t deviceId;
-  bool   isConnected;
-};
-
-struct HardwareKeyboardList {
-  HardwareKeyboardInformation[] hwKeyboards;
-};
-
 struct LightConfiguration {
   LightType light;
   LightMode mode;
@@ -128,9 +119,6 @@ parent:
     DisableBatteryNotifications();
     sync GetCurrentBatteryInformation()
       returns (BatteryInformation aBatteryInfo);
-
-    EnableHardwareKeyboardNotifications();
-    DisableHardwareKeyboardNotifications();
 
     EnableNetworkNotifications();
     DisableNetworkNotifications();
