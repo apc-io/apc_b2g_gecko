@@ -42,7 +42,7 @@ XPCOMUtils.defineLazyServiceGetter(this, "gSettingsService",
                                    "@mozilla.org/settingsService;1",
                                    "nsISettingsService");
 
-var DEBUG = true; // set to true to show debug messages
+var DEBUG = false; // set to true to show debug messages
 
 let debug;
 if (DEBUG) {
@@ -71,8 +71,6 @@ this.EthernetManager = {
   	this.idgen = 0;
   	this.controlCallbacks = {};
   	this.settingEnabled = false;
-  	this._isConnected = false;
-    this.callbackObj = null;
 
     // preferences
     this.getStartupPreferences();
@@ -158,10 +156,6 @@ this.EthernetManager = {
     }
     this.controlWorker.postMessage(params);
   },
-  // callback object, this is called by EthernetWorker
-  setCallbackObject: function EthernetManager_setCallbackObject(obj) {
-    this.callbackObj = obj;
-  },
 
   // preferences
   getStartupPreferences: function EthernetManager_getStartupPerferences() {
@@ -235,16 +229,6 @@ this.EthernetManager = {
   getCurrentInterface: function EthernetManager_getCurrentInterface() {
     debug("EthernetManager_getCurrentInterface");
     return this.getInterface(this.currentIfname);
-  },
-  
-  setConnected: function EthernetManager_setConnected(isConnected) {
-    this._isConnected = isConnected;
-    this.callbackObj.onConnectedChanged(isConnected);
-  },
-  
-  getConnected: function EthernetManager_getConnected() {
-    debug("get connected== " + this._isConnected);
-    return this._isConnected;
   },
 
   enableInterface: function EthernetManager_enableInterface(ifname) {
@@ -532,7 +516,6 @@ this.NetUtilsCallbacks = {
         EthernetManager.currentIfname = ifname;
       }
     }
-    EthernetManager.setConnected(true);
   },
 
   onDhcpDisconnected: function NetUtilsCallbacks_onDhcpDisconnected(result) {
@@ -559,7 +542,6 @@ this.NetUtilsCallbacks = {
       gNetworkManager.unregisterNetworkInterface(iface);
       // gNetworkManager.overrideActive(null); // ok, assume that only us using this feature
     }
-    EthernetManager.setConnected(false);
   },
 };
 

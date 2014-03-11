@@ -24,7 +24,6 @@ var EthernetWorker = (function() {
   const messages = ["EthernetManager:enable", "EthernetManager:disable",
                     "EthernetManager:connect", "EthernetManager:disconnect",
                     "EthernetManager:getEnabled", "EthernetManager:getConnected",
-                    "EthernetManager:onConnected", "EthernetManager:onDisconnected",
                     "EthernetManager:getConnection"];
                     // "child-process-shutdown"];
 
@@ -32,7 +31,6 @@ var EthernetWorker = (function() {
     this._mm.addMessageListener(msgName, this);
   }).bind(this));
 
-  EthernetManager.setCallbackObject(this);
 });
 
 EthernetWorker.prototype = {
@@ -49,43 +47,15 @@ EthernetWorker.prototype = {
                                          Ci.nsIMessageListener,
                                          Ci.nsIEthernet,
                                          Ci.nsISettingsServiceCallback]),
-  _domManagers: [],
-  _fireEvent: function(message, data) {
-    this._domManagers.forEach(function(manager) {
-      // Note: We should never have a dead message manager here because we
-      // observe our child message managers shutting down, below.
-      manager.sendAsyncMessage("EthernetManager:" + message, data);
-    });
-  },
 
   receiveMessage: function MessageManager_receiveMessage(aMessage) {
     debug("receiveMessage: " + aMessage.data + " with target : " + aMessage.target);
-    let msg = aMessage.data || {};
-    msg.manager = aMessage.target;
-
-    // Note: By the time we receive child-process-shutdown, the child process
-    // has already forgotten its permissions so we do this before the
-    // permissions check.
-    if (aMessage.name === "child-process-shutdown") {
-      let i;
-      if ((i = this._domManagers.indexOf(msg.manager)) != -1) {
-        this._domManagers.splice(i, 1);
-      }
-      return;
-    }
     for (let k in aMessage) {
       debug(",,,,,,,, aMessage." + k + ": " + aMessage[k]);
     }
     switch (aMessage.name) {
-      case "EthernetManager:getEnabled": {
-        let i;
-        if ((i = this._domManagers.indexOf(msg.manager)) === -1) {
-          this._domManagers.push(msg.manager);
-        }
+      case "EthernetManager:getEnabled":
         return this.getEnabled();
-      }
-      case "EthernetManager:getConnected":
-        return this.getConnected();
     }
   },
 
@@ -96,18 +66,6 @@ EthernetWorker.prototype = {
 
   getEnabled: function() {
     return true;
-  },
-  
-  getConnected: function() {
-    return EthernetManager.getConnected();
-  },
-
-  onConnectedChanged: function(connected) {
-    if (connected) {
-      this._fireEvent("onConnected", {});
-    } else {
-      this._fireEvent("onDisconnected", {});
-    }
   }
 };
 
