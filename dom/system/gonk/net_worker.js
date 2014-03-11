@@ -15,7 +15,7 @@
 
 "use strict";
 
-const DEBUG = true;
+const DEBUG = false;
 
 const PERSIST_SYS_USB_CONFIG_PROPERTY = "persist.sys.usb.config";
 const SYS_USB_CONFIG_PROPERTY         = "sys.usb.config";
@@ -164,42 +164,6 @@ function networkInterfaceAlarmFail(params) {
 function networkInterfaceAlarmSuccess(params) {
   // Notify the main thread.
   params.error = parseFloat(params.resultReason);
-  postMessage(params);
-  return true;
-}
-
-function getEthernetStatsSuccess(params) {
-  debug("Ok, getEthernetStatsSuccess and got the result: " + params.resultReason + " of " + params.ifname);
-  params.config = params.resultReason;
-  params.up = params.resultReason.indexOf("up") >= 0;
-  params.cableConnected = params.resultReason.indexOf("running") >= 0;
-  let otherConfigs = params.config.trim().split(" ");
-
-  for (let i in otherConfigs) {
-    debug("**** otherConfigs[" + i + "] = " + otherConfigs[i]);
-  }
-  if (otherConfigs.length > 0) {
-    // mac address is the first one
-    params.hwaddr = otherConfigs[0];
-  }
-
-  if (params.cableConnected) {
-    params.ip = libcutils.property_get("dhcp." + params.ifname + ".ipaddress");
-    params.gateway = libcutils.property_get("dhcp." + params.ifname + ".gateway");
-    params.dns1 = libcutils.property_get("net.dns1");
-    params.dns2 = libcutils.property_get("net.dns2");
-  }
-
-  for (let k in params) {
-    debug("^^^ params." + k + " = " + params[k]);
-  }
-  debug("Ok, good, send the result back to the main thread");
-  postMessage(params);
-  return true;
-}
-
-function getEthernetStatsFail(params) {
-  debug("getEthernetStatsFail ..... _>+");
   postMessage(params);
   return true;
 }
@@ -680,21 +644,6 @@ function setAlarm(params, callback) {
   return doCommand(command, callback);
 }
 
-// ok, here we use 2 new functions instead of 1 new and modifying 1 old
-function requestGetIfaceCfg(params, callback) {
-  let command = "interface getcfg " + params.ifname;
-  return doCommand(command, callback);
-}
-
-function parseGetIfaceCfg(params) {
-  params.config = params.resultReason;
-  if (params.config.indexOf("running") >= 0) {
-    params.running = 1;
-  } else {
-    params.running = 0;
-  }
-}
-
 function escapeQuote(str) {
   str = str.replace(/\\/g, "\\\\");
   return str.replace(/"/g, "\\\"");
@@ -1044,27 +993,6 @@ let gWifiOperationModeChain = [wifiFirmwareReload,
 function setWifiOperationMode(params) {
   debug("setWifiOperationMode: " + params.ifname + " " + params.mode);
   chain(params, gWifiOperationModeChain, wifiOperationModeFail);
-  return true;
-}
-
-let gEthernetStatsChain = [requestGetIfaceCfg,
-                           getEthernetStatsSuccess];
-
-
-function getEthernetStats(params) {
-  debug("getEthernetStats: " + params.ifname);
-
-  params.up = false;
-  params.cableConnected = false;
-  params.config = "";
-  params.hwaddr = "";
-  params.ip = "";
-  params.gateway = "";
-  params.dns1 = "";
-  params.dns2 = "";
-  params.date = new Date();
-  chain(params, gEthernetStatsChain, getEthernetStatsFail);
-
   return true;
 }
 

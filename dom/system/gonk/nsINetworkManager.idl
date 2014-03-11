@@ -17,8 +17,6 @@ interface nsINetworkInterface : nsISupports
   const long NETWORK_STATE_CONNECTED = 1;
   const long NETWORK_STATE_DISCONNECTING = 2;
   const long NETWORK_STATE_DISCONNECTED = 3;
-/*  const long NETWORK_STATE_UP = 4;*/ /* this is for ethernet where we got cable but not connected */
-/*  const long NETWORK_STATE_DOWN = 5;*/ /* this is for ethernet wheren cable is not connected */
 
   /**
    * Current network state, one of the NETWORK_STATE_* constants.
@@ -33,7 +31,6 @@ interface nsINetworkInterface : nsISupports
   const long NETWORK_TYPE_MOBILE      = 1;
   const long NETWORK_TYPE_MOBILE_MMS  = 2;
   const long NETWORK_TYPE_MOBILE_SUPL = 3;
-  const long NETWORK_TYPE_ETHERNET    = 4;
 
   /**
    * Network type. One of the NETWORK_TYPE_* constants.

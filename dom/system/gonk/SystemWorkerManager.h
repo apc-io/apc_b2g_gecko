@@ -60,13 +60,11 @@ private:
   ~SystemWorkerManager();
 
   nsresult InitNetd(JSContext *cx);
-  nsresult InitEthernet(JSContext *cx);
   nsresult InitWifi(JSContext *cx);
   nsresult InitKeyStore(JSContext *cx);
 
   nsCOMPtr<nsIWorkerHolder> mNetdWorker;
   nsCOMPtr<nsIWorkerHolder> mWifiWorker;
-  nsCOMPtr<nsIWorkerHolder> mEthernetWorker;
 
   nsRefPtr<ipc::KeyStore> mKeyStore;
 

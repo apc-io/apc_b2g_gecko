@@ -217,6 +217,4 @@ interface nsIDOMWifiManager : nsISupports
      */
     attribute nsIDOMEventListener onenabled;
     attribute nsIDOMEventListener ondisabled;
-
-    void sayIt();
 };

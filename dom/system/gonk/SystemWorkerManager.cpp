@@ -21,7 +21,6 @@
 #include "nsIWifi.h"
 #include "nsIWorkerHolder.h"
 #include "nsIXPConnect.h"
-#include "nsIEthernet.h"
 
 #include "jsfriendapi.h"
 #include "mozilla/dom/workers/Workers.h"
@@ -43,7 +42,6 @@
 #include "nsRadioInterfaceLayer.h"
 #include "WifiWorker.h"
 #include "mozilla/Services.h"
-#include "EthernetWorker.h"
 
 USING_WORKERS_NAMESPACE
 
@@ -54,8 +52,6 @@ using namespace mozilla::system;
 namespace {
 
 NS_DEFINE_CID(kWifiWorkerCID, NS_WIFIWORKER_CID);
-// NS_DEFINE_CID(kNetworkManagerCID, NS_NETWORKMANAGER_CID);
-NS_DEFINE_CID(kEthernetWorkerCID, NS_ETHERNETWORKER_CID);
 NS_DEFINE_CID(kNetworkServiceCID, NS_INETWORKSERVICE_IID);
 
 // Doesn't carry a reference, we're owned by services.
@@ -250,12 +246,6 @@ SystemWorkerManager::Init()
   nsCOMPtr<nsIAudioManager> audioManager =
     do_GetService(NS_AUDIOMANAGER_CONTRACTID);
 
-  rv = InitEthernet(cx);
-  if (NS_FAILED(rv)) {
-    NS_WARNING("Failed to initialize Ethernet Networking!");
-    return rv;
-  }
-
   nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
   if (!obs) {
     NS_WARNING("Failed to get observer service!");
@@ -297,13 +287,6 @@ SystemWorkerManager::Shutdown()
     wifi = nullptr;
   }
   mWifiWorker = nullptr;
-
-  nsCOMPtr<nsIEthernet> ethernet(do_QueryInterface(mEthernetWorker));
-  if (ethernet) {
-    ethernet->Shutdown();
-    ethernet = nullptr;
-  }
-  mEthernetWorker = nullptr;
 
   nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
   if (obs) {
@@ -352,11 +335,6 @@ SystemWorkerManager::GetInterface(const nsIID &aIID, void **aResult)
   if (aIID.Equals(NS_GET_IID(nsINetworkService))) {
     return CallQueryInterface(mNetdWorker,
                               reinterpret_cast<nsINetworkService**>(aResult));
-  }
-
-  if (aIID.Equals(NS_GET_IID(nsIEthernet))) {
-    return CallQueryInterface(mEthernetWorker,
-                              reinterpret_cast<nsIEthernet**>(aResult));
   }
 
   NS_WARNING("Got nothing for the requested IID!");
@@ -438,16 +416,6 @@ SystemWorkerManager::InitNetd(JSContext *cx)
   mozilla::RefPtr<NetdReceiver> receiver = new NetdReceiver(wctd);
   StartNetd(receiver);
   mNetdWorker = worker;
-  return NS_OK;
-}
-
-nsresult
-SystemWorkerManager::InitEthernet(JSContext *cx)
-{
-  nsCOMPtr<nsIWorkerHolder> worker = do_CreateInstance(kEthernetWorkerCID);
-  NS_ENSURE_TRUE(worker, NS_ERROR_FAILURE);
-
-  mEthernetWorker = worker;
   return NS_OK;
 }
 
