@@ -1890,11 +1890,9 @@ RadioInterface.prototype = {
       }
       return;
     }
-    // ethernet and wifi, can be consider as the same here, right?
     let wifi_active = false;
     if (gNetworkManager.active &&
-        (gNetworkManager.active.type == Ci.nsINetworkInterface.NETWORK_TYPE_WIFI) ||
-        (gNetworkManager.active.type == Ci.nsINetworkInterface.NETWORK_TYPE_ETHERNET) ){
+        gNetworkManager.active.type == Ci.nsINetworkInterface.NETWORK_TYPE_WIFI) {
       wifi_active = true;
     }
 
