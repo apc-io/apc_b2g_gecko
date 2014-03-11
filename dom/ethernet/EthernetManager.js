@@ -34,10 +34,6 @@ XPCOMUtils.defineLazyServiceGetter(this, "gNetworkManager",
                                    "@mozilla.org/network/manager;1",
                                    "nsINetworkManager");
 
-XPCOMUtils.defineLazyServiceGetter(this, "gNetworkService",
-                                   "@mozilla.org/network/service;1",
-                                   "nsINetworkService");
-
 XPCOMUtils.defineLazyServiceGetter(this, "gSettingsService",
                                    "@mozilla.org/settingsService;1",
                                    "nsISettingsService");
@@ -157,7 +153,7 @@ this.EthernetManager = {
     this.controlWorker.postMessage(params);
   },
 
-  // preferences
+  // preferences 
   getStartupPreferences: function EthernetManager_getStartupPerferences() {
     debug("EthernetManager_getStartupPerferences");
     this.settingEnabled = true;
@@ -176,7 +172,7 @@ this.EthernetManager = {
   // network interface related
   initInterface: function EthernetManager_initInterface(ifname) {
   	debug("EthernetManager_initInterface: " + ifname);
-  	gNetworkService.getEthernetStats(ifname, this);
+  	gNetworkManager.getEthernetStats(ifname, this);
   },
 
   // checkEthernetState: function EthernetManager_checkEthernetStats(ifname) {
@@ -471,7 +467,7 @@ this.Utils = {
   }
 };
 
-// Ok, so we separate these functions to a new Obj because inside them,
+// Ok, so we separate these functions to a new Obj because inside them, 
 // we can not access EthernetManager as this => safe to move them outside
 // to make stuff clear
 this.NetUtilsCallbacks = {

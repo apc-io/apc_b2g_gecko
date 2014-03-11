@@ -123,32 +123,6 @@ NetworkService.prototype = {
     });
   },
 
-  getEthernetStats: function getEthernetStats(iface, callback) {
-    if (!iface || !callback) {
-      debug("Invalid parameters");
-      return false;
-    }
-
-    let params = {
-      cmd: "getEthernetStats",
-      ifname: iface
-    };
-
-    params.report = true; // what for?
-    params.isAsync = true;
-
-    this.controlMessage(params, function(result) {
-      debug("Got the result from net_worker for cable stats" + result);
-      for (let k in result) {
-        debug("--- result." + k + ": " + result[k]);
-      }
-      let success = result.resultCode >= NETD_COMMAND_OKAY && result.resultCode < NETD_COMMAND_ERROR;
-      callback.ethernetStatsAvailable(success, result);
-    });
-
-    return true;
-  },
-
   setNetworkInterfaceAlarm: function setNetworkInterfaceAlarm(networkName, threshold, callback) {
     if (!networkName) {
       callback.networkUsageAlarmResult(-1);
