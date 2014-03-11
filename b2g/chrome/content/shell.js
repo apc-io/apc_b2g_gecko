@@ -354,11 +354,11 @@ var shell = {
   filterHardwareKeys: function shell_filterHardwareKeys(evt) {
     var type;
     switch (evt.keyCode) {
-      // case evt.DOM_VK_HOME:         // Home button
-      //   type = 'home-button';
-      //   break;
+      case evt.DOM_VK_HOME:         // Home button
+        type = 'home-button';
+        break;
       case evt.DOM_VK_SLEEP:        // Sleep button
-      // case evt.DOM_VK_END:          // On desktop we don't have a sleep button
+      case evt.DOM_VK_END:          // On desktop we don't have a sleep button
         type = 'sleep-button';
         break;
       case evt.DOM_VK_PAGE_UP:      // Volume up button
