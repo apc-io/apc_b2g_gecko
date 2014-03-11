@@ -79,7 +79,6 @@ XPIDL_SOURCES += [
     'nsIIdleService.idl',
     'nsIIdleServiceInternal.idl',
     'nsIIMEPicker.idl',
-    'nsIMouseController.idl',
     'nsIPrintOptions.idl',
     'nsIPrintSession.idl',
     'nsIPrintSettings.idl',
