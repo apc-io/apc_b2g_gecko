@@ -6,7 +6,6 @@
 package org.mozilla.gecko.home;
 
 import org.mozilla.gecko.EditBookmarkDialog;
-import org.mozilla.gecko.favicons.Favicons;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoEvent;
 import org.mozilla.gecko.GeckoProfile;
@@ -15,14 +14,13 @@ import org.mozilla.gecko.ReaderModeUtils;
 import org.mozilla.gecko.Tabs;
 import org.mozilla.gecko.db.BrowserContract.Combined;
 import org.mozilla.gecko.db.BrowserDB;
-import org.mozilla.gecko.home.HomeListView.HomeContextMenuInfo;
+import org.mozilla.gecko.favicons.Favicons;
 import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.gecko.util.UiAsyncTask;
 
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
-import android.graphics.Bitmap;
 import android.os.Bundle;
 import android.support.v4.app.Fragment;
 import android.util.Log;
@@ -42,7 +40,7 @@ abstract class HomeFragment extends Fragment {
     private static final String LOGTAG="GeckoHomeFragment";
 
     // Share MIME type.
-    private static final String SHARE_MIME_TYPE = "text/plain";
+    protected static final String SHARE_MIME_TYPE = "text/plain";
 
     // Default value for "can load" hint
     static final boolean DEFAULT_CAN_LOAD_HINT = false;
@@ -89,12 +87,12 @@ abstract class HomeFragment extends Fragment {
 
         // Hide the "Edit" menuitem if this item isn't a bookmark,
         // or if this is a reading list item.
-        if (info.bookmarkId < 0 || info.inReadingList) {
+        if (!info.hasBookmarkId() || info.isInReadingList()) {
             menu.findItem(R.id.home_edit_bookmark).setVisible(false);
         }
 
-        // Hide the "Remove" menuitem if this item doesn't have a bookmark or history ID.
-        if (info.bookmarkId < 0 && info.historyId < 0) {
+        // Hide the "Remove" menuitem if this item not removable.
+        if (!info.canRemove()) {
             menu.findItem(R.id.home_remove).setVisible(false);
         }
 
@@ -117,15 +115,17 @@ abstract class HomeFragment extends Fragment {
         }
 
         final HomeContextMenuInfo info = (HomeContextMenuInfo) menuInfo;
-        final Context context = getActivity().getApplicationContext();
+        final Context context = getActivity();
 
         final int itemId = item.getItemId();
         if (itemId == R.id.home_share) {
             if (info.url == null) {
                 Log.e(LOGTAG, "Can't share because URL is null");
+                return false;
             } else {
                 GeckoAppShell.openUriExternal(info.url, SHARE_MIME_TYPE, "", "",
                                               Intent.ACTION_SEND, info.getDisplayTitle());
+                return true;
             }
         }
 
@@ -135,8 +135,8 @@ abstract class HomeFragment extends Fragment {
                 return false;
             }
 
-            // Fetch the largest cacheable icon size.
-            Favicons.getLargestFaviconForPage(info.url, new GeckoAppShell.CreateShortcutFaviconLoadedListener(info.url, info.getDisplayTitle()));
+            // Fetch an icon big enough for use as a home screen icon.
+            Favicons.getPreferredSizeFaviconForPage(info.url, new GeckoAppShell.CreateShortcutFaviconLoadedListener(info.url, info.getDisplayTitle()));
             return true;
         }
 
@@ -150,7 +150,7 @@ abstract class HomeFragment extends Fragment {
             if (item.getItemId() == R.id.home_open_private_tab)
                 flags |= Tabs.LOADURL_PRIVATE;
 
-            final String url = (info.inReadingList ? ReaderModeUtils.getAboutReaderForUrl(info.url) : info.url);
+            final String url = (info.isInReadingList() ? ReaderModeUtils.getAboutReaderForUrl(info.url) : info.url);
             Tabs.getInstance().loadUrl(url, flags);
             Toast.makeText(context, R.string.new_tab_opened, Toast.LENGTH_SHORT).show();
             return true;
@@ -158,7 +158,7 @@ abstract class HomeFragment extends Fragment {
 
         if (itemId == R.id.home_edit_bookmark) {
             // UI Dialog associates to the activity context, not the applications'.
-            new EditBookmarkDialog(getActivity()).show(info.url);
+            new EditBookmarkDialog(context).show(info.url);
             return true;
         }
 
@@ -170,15 +170,18 @@ abstract class HomeFragment extends Fragment {
 
         if (itemId == R.id.home_remove) {
             // Prioritize removing a history entry over a bookmark in the case of a combined item.
-            final int historyId = info.historyId;
-            if (historyId > -1) {
-                new RemoveHistoryTask(context, historyId).execute();
+            if (info.hasHistoryId()) {
+                new RemoveHistoryTask(context, info.historyId).execute();
                 return true;
             }
 
-            final int bookmarkId = info.bookmarkId;
-            if (bookmarkId > -1) {
-                new RemoveBookmarkTask(context, bookmarkId, info.url, info.inReadingList).execute();
+            if (info.hasBookmarkId()) {
+                new RemoveBookmarkTask(context, info.bookmarkId).execute();
+                return true;
+            }
+
+            if (info.isInReadingList()) {
+                (new RemoveReadingListItemTask(context, info.readingListItemId, info.url)).execute();
                 return true;
             }
         }
@@ -225,37 +228,49 @@ abstract class HomeFragment extends Fragment {
     private static class RemoveBookmarkTask extends UiAsyncTask<Void, Void, Void> {
         private final Context mContext;
         private final int mId;
-        private final String mUrl;
-        private final boolean mInReadingList;
 
-        public RemoveBookmarkTask(Context context, int id, String url, boolean inReadingList) {
+        public RemoveBookmarkTask(Context context, int id) {
             super(ThreadUtils.getBackgroundHandler());
 
             mContext = context;
             mId = id;
-            mUrl = url;
-            mInReadingList = inReadingList;
         }
 
         @Override
         public Void doInBackground(Void... params) {
             ContentResolver cr = mContext.getContentResolver();
             BrowserDB.removeBookmark(cr, mId);
-            if (mInReadingList) {
-                GeckoEvent e = GeckoEvent.createBroadcastEvent("Reader:Remove", mUrl);
-                GeckoAppShell.sendEventToGecko(e);
-
-                int count = BrowserDB.getReadingListCount(cr);
-                e = GeckoEvent.createBroadcastEvent("Reader:ListCountUpdated", Integer.toString(count));
-                GeckoAppShell.sendEventToGecko(e);
-            }
             return null;
         }
 
         @Override
         public void onPostExecute(Void result) {
-            int messageId = mInReadingList ? R.string.reading_list_removed : R.string.bookmark_removed;
-            Toast.makeText(mContext, messageId, Toast.LENGTH_SHORT).show();
+            Toast.makeText(mContext, R.string.bookmark_removed, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+
+    private static class RemoveReadingListItemTask extends UiAsyncTask<Void, Void, Void> {
+        private final int mId;
+        private final String mUrl;
+        private final Context mContext;
+
+        public RemoveReadingListItemTask(Context context, int id, String url) {
+            super(ThreadUtils.getBackgroundHandler());
+            mId = id;
+            mUrl = url;
+            mContext = context;
+        }
+
+        @Override
+        public Void doInBackground(Void... params) {
+            ContentResolver cr = mContext.getContentResolver();
+            BrowserDB.removeReadingListItem(cr, mId);
+
+            GeckoEvent e = GeckoEvent.createBroadcastEvent("Reader:Remove", mUrl);
+            GeckoAppShell.sendEventToGecko(e);
+
+            return null;
         }
     }
 

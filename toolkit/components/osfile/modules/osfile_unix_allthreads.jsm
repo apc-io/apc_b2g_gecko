@@ -39,34 +39,20 @@ let LOG = SharedAll.LOG.bind(SharedAll, "Unix", "allthreads");
 let Const = SharedAll.Constants.libc;
 
 // Open libc
-let libc;
-let libc_candidates =  [ "libSystem.B.dylib",
-                         "libc.so.6",
-                         "libc.so" ];
-for (let i = 0; i < libc_candidates.length; ++i) {
-  try {
-    libc = ctypes.open(libc_candidates[i]);
-    break;
-  } catch (x) {
-    LOG("Could not open libc ", libc_candidates[i]);
-  }
-}
-
-if (!libc) {
-  // Note: If you change the string here, please adapt tests accordingly
-  throw new Error("Could not open system library: no libc");
-}
+let libc = new SharedAll.Library("libc",
+                                 "libc.so", "libSystem.B.dylib", "a.out");
 exports.libc = libc;
 
 // Define declareFFI
 let declareFFI = SharedAll.declareFFI.bind(null, libc);
 exports.declareFFI = declareFFI;
 
-// Define Error
-let strerror = libc.declare("strerror",
-  ctypes.default_abi,
-  /*return*/ ctypes.char.ptr,
-  /*errnum*/ ctypes.int);
+// Define lazy binding
+let LazyBindings = {};
+libc.declareLazy(LazyBindings, "strerror",
+                 "strerror", ctypes.default_abi,
+                 /*return*/ ctypes.char.ptr,
+                 /*errnum*/ ctypes.int);
 
 /**
  * A File-related error.
@@ -87,20 +73,24 @@ let strerror = libc.declare("strerror",
  * @param {number=} lastError The OS-specific constant detailing the
  * reason of the error. If unspecified, this is fetched from the system
  * status.
+ * @param {string=} path The file path that manipulated. If unspecified,
+ * assign the empty string.
  *
  * @constructor
  * @extends {OS.Shared.Error}
  */
-let OSError = function OSError(operation, errno) {
-  operation = operation || "unknown operation";
-  SharedAll.OSError.call(this, operation);
-  this.unixErrno = errno || ctypes.errno;
+let OSError = function OSError(operation = "unknown operation",
+                               errno = ctypes.errno, path = "") {
+  operation = operation;
+  SharedAll.OSError.call(this, operation, path);
+  this.unixErrno = errno;
 };
 OSError.prototype = Object.create(SharedAll.OSError.prototype);
 OSError.prototype.toString = function toString() {
   return "Unix error " + this.unixErrno +
     " during operation " + this.operation +
-    " (" + strerror(this.unixErrno).readString() + ")";
+    (this.path? " on file " + this.path : "") +
+    " (" + LazyBindings.strerror(this.unixErrno).readString() + ")";
 };
 
 /**
@@ -157,7 +147,8 @@ Object.defineProperty(OSError.prototype, "becauseAccessDenied", {
 OSError.toMsg = function toMsg(error) {
   return {
     operation: error.operation,
-    unixErrno: error.unixErrno
+    unixErrno: error.unixErrno,
+    path: error.path
   };
 };
 
@@ -165,7 +156,7 @@ OSError.toMsg = function toMsg(error) {
  * Deserialize a message back to an instance of OSError
  */
 OSError.fromMsg = function fromMsg(msg) {
-  return new OSError(msg.operation, msg.unixErrno);
+  return new OSError(msg.operation, msg.unixErrno, msg.path);
 };
 exports.Error = OSError;
 
@@ -174,9 +165,10 @@ exports.Error = OSError;
  *
  * @constructor
 */
-let AbstractInfo = function AbstractInfo(isDir, isSymLink, size, lastAccessDate,
+let AbstractInfo = function AbstractInfo(path, isDir, isSymLink, size, lastAccessDate,
                                          lastModificationDate, unixLastStatusChangeDate,
                                          unixOwner, unixGroup, unixMode) {
+  this._path = path;
   this._isDir = isDir;
   this._isSymlLink = isSymLink;
   this._size = size;
@@ -189,6 +181,14 @@ let AbstractInfo = function AbstractInfo(isDir, isSymLink, size, lastAccessDate,
 };
 
 AbstractInfo.prototype = {
+  /**
+   * The path of the file, used for error-reporting.
+   *
+   * @type {string}
+   */
+  get path() {
+    return this._path;
+  },
   /**
    * |true| if this file is a directory, |false| otherwise
    */
@@ -319,16 +319,16 @@ Type.path = Type.cstring.withName("[in] path");
 Type.out_path = Type.out_cstring.withName("[out] path");
 
 // Special constructors that need to be defined on all threads
-OSError.closed = function closed(operation) {
-  return new OSError(operation, Const.EBADF);
+OSError.closed = function closed(operation, path) {
+  return new OSError(operation, Const.EBADF, path);
 };
 
-OSError.exists = function exists(operation) {
-  return new OSError(operation, Const.EEXIST);
+OSError.exists = function exists(operation, path) {
+  return new OSError(operation, Const.EEXIST, path);
 };
 
-OSError.noSuchFile = function noSuchFile(operation) {
-  return new OSError(operation, Const.ENOENT);
+OSError.noSuchFile = function noSuchFile(operation, path) {
+  return new OSError(operation, Const.ENOENT, path);
 };
 
 let EXPORTED_SYMBOLS = [

@@ -9,6 +9,7 @@ PARALLEL_DIRS += ['blink', 'test']
 TEST_TOOL_DIRS += ['compiledtest']
 
 EXPORTS += [
+    'AudioContext.h',
     'AudioParamTimeline.h',
     'MediaBufferDecoder.h',
     'ThreeDPoint.h',
@@ -35,7 +36,6 @@ EXPORTS.mozilla.dom += [
     'ConvolverNode.h',
     'DelayNode.h',
     'DynamicsCompressorNode.h',
-    'EnableWebAudioCheck.h',
     'GainNode.h',
     'MediaElementAudioSourceNode.h',
     'MediaStreamAudioDestinationNode.h',
@@ -62,10 +62,9 @@ UNIFIED_SOURCES += [
     'ChannelMergerNode.cpp',
     'ChannelSplitterNode.cpp',
     'ConvolverNode.cpp',
+    'DelayBuffer.cpp',
     'DelayNode.cpp',
-    'DelayProcessor.cpp',
     'DynamicsCompressorNode.cpp',
-    'EnableWebAudioCheck.cpp',
     'FFTBlock.cpp',
     'GainNode.cpp',
     'MediaBufferDecoder.cpp',

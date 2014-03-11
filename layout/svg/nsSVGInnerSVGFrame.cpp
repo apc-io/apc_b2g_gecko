@@ -57,7 +57,7 @@ nsSVGInnerSVGFrame::GetType() const
 //----------------------------------------------------------------------
 // nsISVGChildFrame methods
 
-NS_IMETHODIMP
+nsresult
 nsSVGInnerSVGFrame::PaintSVG(nsRenderingContext *aContext,
                              const nsIntRect *aDirtyRect,
                              nsIFrame* aTransformRoot)
@@ -162,7 +162,7 @@ nsSVGInnerSVGFrame::NotifySVGChanged(uint32_t aFlags)
   nsSVGInnerSVGFrameBase::NotifySVGChanged(aFlags);
 }
 
-NS_IMETHODIMP
+nsresult
 nsSVGInnerSVGFrame::AttributeChanged(int32_t  aNameSpaceID,
                                      nsIAtom* aAttribute,
                                      int32_t  aModType)
@@ -225,7 +225,7 @@ nsSVGInnerSVGFrame::AttributeChanged(int32_t  aNameSpaceID,
   return NS_OK;
 }
 
-NS_IMETHODIMP_(nsIFrame*)
+nsIFrame*
 nsSVGInnerSVGFrame::GetFrameForPoint(const nsPoint &aPoint)
 {
   NS_ASSERTION(!NS_SVGDisplayListHitTestingEnabled() ||
@@ -240,7 +240,7 @@ nsSVGInnerSVGFrame::GetFrameForPoint(const nsPoint &aPoint)
     float clipX, clipY, clipWidth, clipHeight;
     content->GetAnimatedLengthValues(&clipX, &clipY, &clipWidth, &clipHeight, nullptr);
 
-    if (!nsSVGUtils::HitTestRect(parent->GetCanvasTM(FOR_HIT_TESTING),
+    if (!nsSVGUtils::HitTestRect(gfx::ToMatrix(parent->GetCanvasTM(FOR_HIT_TESTING)),
                                  clipX, clipY, clipWidth, clipHeight,
                                  PresContext()->AppUnitsToDevPixels(aPoint.x),
                                  PresContext()->AppUnitsToDevPixels(aPoint.y))) {
@@ -293,7 +293,7 @@ nsSVGInnerSVGFrame::GetCanvasTM(uint32_t aFor, nsIFrame* aTransformRoot)
 }
 
 bool
-nsSVGInnerSVGFrame::HasChildrenOnlyTransform(gfxMatrix *aTransform) const
+nsSVGInnerSVGFrame::HasChildrenOnlyTransform(gfx::Matrix *aTransform) const
 {
   SVGSVGElement *content = static_cast<SVGSVGElement*>(mContent);
 

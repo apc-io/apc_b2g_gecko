@@ -266,7 +266,9 @@
           this.tabContainer._positionPinnedTabs();
           this.tabContainer.adjustTabstrip();
 
-          this.getBrowserForTab(aTab).docShell.isAppTab = true;
+          // Bug 961867 - [e10s] Implement the logic for app tabs
+          if (!gMultiProcessBrowser)
+            this.getBrowserForTab(aTab).docShell.isAppTab = true;
 
           if (aTab.selected)
             this._setCloseKeyState(false);
@@ -291,7 +293,9 @@
           this.tabContainer._positionPinnedTabs();
           this.tabContainer.adjustTabstrip();
 
-          this.getBrowserForTab(aTab).docShell.isAppTab = false;
+          // Bug 961867 - [e10s] Implement the logic for app tabs
+          if (!gMultiProcessBrowser)
+            this.getBrowserForTab(aTab).docShell.isAppTab = false;
 
           if (aTab.selected)
             this._setCloseKeyState(true);
@@ -1045,7 +1049,7 @@
 
             if (!this._previewMode) {
               this.mCurrentTab.removeAttribute("unread");
-              this.selectedTab.lastAccessed = Date.now();
+              oldTab.lastAccessed = Date.now();
 
               let oldFindBar = oldTab._findBar;
               if (oldFindBar &&
@@ -1088,8 +1092,13 @@
             // Focus is suppressed in the event that the main browser window is minimized - focusing a tab would restore the window
             if (!this._previewMode) {
               // We've selected the new tab, so go ahead and notify listeners.
-              let event = document.createEvent("Events");
-              event.initEvent("TabSelect", true, false);
+              let event = new CustomEvent("TabSelect", {
+                bubbles: true,
+                cancelable: false,
+                detail: {
+                  previousTab: oldTab
+                }
+              });
               this.mCurrentTab.dispatchEvent(event);
 
               this._tabAttrModified(oldTab);
@@ -1251,6 +1260,7 @@
             var aFromExternal;
             var aRelatedToCurrent;
             var aDisableMCB;
+            var aSkipAnimation;
             if (arguments.length == 2 &&
                 typeof arguments[1] == "object" &&
                 !(arguments[1] instanceof Ci.nsIURI)) {
@@ -1263,6 +1273,7 @@
               aFromExternal         = params.fromExternal;
               aRelatedToCurrent     = params.relatedToCurrent;
               aDisableMCB           = params.disableMCB;
+              aSkipAnimation        = params.skipAnimation;
             }
 
             var bgLoad = (aLoadInBackground != null) ? aLoadInBackground :
@@ -1276,6 +1287,7 @@
                                   allowThirdPartyFixup: aAllowThirdPartyFixup,
                                   fromExternal: aFromExternal,
                                   relatedToCurrent: aRelatedToCurrent,
+                                  skipAnimation: aSkipAnimation,
                                   disableMCB: aDisableMCB});
             if (!bgLoad)
               this.selectedTab = tab;
@@ -1338,13 +1350,15 @@
       </method>
 
 #ifdef MAKE_E10S_WORK
-      <method name="_updateBrowserRemoteness">
+      <method name="updateBrowserRemoteness">
         <parameter name="aBrowser"/>
-        <parameter name="aRemote"/>
+        <parameter name="aURL"/>
         <body>
           <![CDATA[
+            let shouldBeRemote = this._shouldBrowserBeRemote(aURL);
+
             let isRemote = aBrowser.getAttribute("remote") == "true";
-            if (isRemote == aRemote)
+            if (isRemote == shouldBeRemote)
               return false;
 
             let wasActive = document.activeElement == aBrowser;
@@ -1358,13 +1372,13 @@
             // Change the "remote" attribute.
             let parent = aBrowser.parentNode;
             parent.removeChild(aBrowser);
-            aBrowser.setAttribute("remote", aRemote ? "true" : "false");
+            aBrowser.setAttribute("remote", shouldBeRemote ? "true" : "false");
             parent.appendChild(aBrowser);
 
             // Restore the progress listener.
             aBrowser.webProgress.addProgressListener(filter, Ci.nsIWebProgress.NOTIFY_ALL);
 
-            if (aRemote)
+            if (shouldBeRemote)
               tab.setAttribute("remote", "true");
             else
               tab.removeAttribute("remote");
@@ -1583,6 +1597,8 @@
                 !PrivateBrowsingUtils.isWindowPrivate(window) &&
                 !gMultiProcessBrowser) {
               docShellsSwapped = gBrowserNewTabPreloader.newTab(t);
+            } else if (aURI == "about:customizing") {
+              docShellsSwapped = gCustomizationTabPreloader.newTab(t);
             }
 
             // Dispatch a new tab notification.  We do this once we're
@@ -1601,8 +1617,10 @@
                 b.userTypedValue = aURI;
 
               let flags = Ci.nsIWebNavigation.LOAD_FLAGS_NONE;
-              if (aAllowThirdPartyFixup)
+              if (aAllowThirdPartyFixup) {
                 flags |= Ci.nsIWebNavigation.LOAD_FLAGS_ALLOW_THIRD_PARTY_FIXUP;
+                flags |= Ci.nsIWebNavigation.LOAD_FLAGS_FIXUP_SCHEME_TYPOS;
+              }
               if (aFromExternal)
                 flags |= Ci.nsIWebNavigation.LOAD_FLAGS_FROM_EXTERNAL;
               if (aDisableMCB)
@@ -1700,11 +1718,13 @@
           // solve the problem of windows "obscuring" the prompt.
           // see bug #350299 for more details
           window.focus();
+          var warningMessage =
+            PluralForm.get(tabsToClose, bundle.getString("tabs.closeWarningMultiple"))
+                      .replace("#1", tabsToClose);
           var buttonPressed =
             ps.confirmEx(window,
                          bundle.getString("tabs.closeWarningTitle"),
-                         bundle.getFormattedString("tabs.closeWarningMultipleTabs",
-                                                   [tabsToClose]),
+                         warningMessage,
                          (ps.BUTTON_TITLE_IS_STRING * ps.BUTTON_POS_0)
                          + (ps.BUTTON_TITLE_CANCEL * ps.BUTTON_POS_1),
                          bundle.getString("tabs.closeButtonMultiple"),
@@ -1895,9 +1915,12 @@
               // the fast path.
               if (closeWindow &&
                   aCloseWindowFastpath &&
-                  this._removingTabs.length == 0 &&
-                  (this._windowIsClosing = window.closeWindow(true, window.warnAboutClosingWindow)))
+                  this._removingTabs.length == 0) {
+                // This call actually closes the window, unless the user
+                // cancels the operation.  We are finished here in both cases.
+                this._windowIsClosing = window.closeWindow(true, window.warnAboutClosingWindow);
                 return null;
+              }
 
               newTab = true;
             }
@@ -1923,7 +1946,7 @@
             evt.initUIEvent("TabClose", true, false, window, aTabWillBeMoved ? 1 : 0);
             aTab.dispatchEvent(evt);
 
-            if (!gMultiProcessBrowser) {
+            if (!aTabWillBeMoved && !gMultiProcessBrowser) {
               // Prevent this tab from showing further dialogs, since we're closing it
               var windowUtils = browser.contentWindow.QueryInterface(Ci.nsIInterfaceRequestor).
                                 getInterface(Ci.nsIDOMWindowUtils);
@@ -2474,6 +2497,15 @@
             if (this.tabs.length == 1)
               return null;
 
+            let event = new CustomEvent("TabBecomingWindow", {
+              bubbles: true,
+              cancelable: true
+            });
+            aTab.dispatchEvent(event);
+            if (event.defaultPrevented) {
+              return null;
+            }
+
             var options = "chrome,dialog=no,all";
             for (var name in aOptions)
               options += "," + name + "=" + aOptions[name];
@@ -2674,14 +2706,14 @@
         <body>
           <![CDATA[
 #ifdef MAKE_E10S_WORK
-            this._updateBrowserRemoteness(this.mCurrentBrowser, this._shouldBrowserBeRemote(aURI));
+            this.updateBrowserRemoteness(this.mCurrentBrowser, aURI);
             try {
 #endif
             return this.mCurrentBrowser.loadURI(aURI, aReferrerURI, aCharset);
 #ifdef MAKE_E10S_WORK
             } catch (e) {
               let url = this.mCurrentBrowser.currentURI.spec;
-              this._updateBrowserRemoteness(this.mCurrentBrowser, this._shouldBrowserBeRemote(url));
+              this.updateBrowserRemoteness(this.mCurrentBrowser, url);
               throw e;
             }
 #endif
@@ -2699,14 +2731,14 @@
         <body>
           <![CDATA[
 #ifdef MAKE_E10S_WORK
-            this._updateBrowserRemoteness(this.mCurrentBrowser, this._shouldBrowserBeRemote(aURI));
+            this.updateBrowserRemoteness(this.mCurrentBrowser, aURI);
             try {
 #endif
             return this.mCurrentBrowser.loadURIWithFlags(aURI, aFlags, aReferrerURI, aCharset, aPostData);
 #ifdef MAKE_E10S_WORK
             } catch (e) {
               let url = this.mCurrentBrowser.currentURI.spec;
-              this._updateBrowserRemoteness(this.mCurrentBrowser, this._shouldBrowserBeRemote(url));
+              this.updateBrowserRemoteness(this.mCurrentBrowser, url);
               throw e;
             }
 #endif
@@ -2827,6 +2859,18 @@
                 onget="return this.mCurrentBrowser.securityUI;"
                 readonly="true"/>
 
+      <property name="fullZoom"
+                onget="return this.mCurrentBrowser.fullZoom;"
+                onset="this.mCurrentBrowser.fullZoom = val;"/>
+
+      <property name="textZoom"
+                onget="return this.mCurrentBrowser.textZoom;"
+                onset="this.mCurrentBrowser.textZoom = val;"/>
+
+      <property name="isSyntheticDocument"
+                onget="return this.mCurrentBrowser.isSyntheticDocument;"
+                readonly="true"/>
+
       <method name="_handleKeyEvent">
         <parameter name="aEvent"/>
         <body><![CDATA[
@@ -2944,23 +2988,32 @@
           let browser = aMessage.target;
 
           switch (aMessage.name) {
-            case "DOMTitleChanged":
+            case "DOMTitleChanged": {
               let tab = this._getTabForBrowser(browser);
-              if (!tab)
+              if (!tab || tab.hasAttribute("pending"))
                 return;
               let titleChanged = this.setTabTitle(tab);
               if (titleChanged && !tab.selected && !tab.hasAttribute("busy"))
                 tab.setAttribute("titlechanged", "true");
               break;
-            case "contextmenu":
+            }
+            case "contextmenu": {
               gContextMenuContentData = { event: aMessage.objects.event,
                                           browser: browser };
               let popup = browser.ownerDocument.getElementById("contentAreaContextMenu");
-              popup.openPopup(browser, "overlap",
-                              gContextMenuContentData.event.clientX,
-                              gContextMenuContentData.event.clientY,
-                              true, false, null);
+              let event = gContextMenuContentData.event;
+              let pos = browser.mapScreenCoordinatesFromContent(event.screenX, event.screenY);
+              popup.openPopupAtScreen(pos.x, pos.y, true);
               break;
+            }
+            case "DOMWebNotificationClicked": {
+              let tab = this._getTabForBrowser(browser);
+              if (!tab)
+                return;
+              this.selectedTab = tab;
+              window.focus();
+              break;
+            }
           }
         ]]></body>
       </method>
@@ -2997,27 +3050,22 @@
           filter.addProgressListener(tabListener, nsIWebProgress.NOTIFY_ALL);
           this.mTabListeners[0] = tabListener;
           this.mTabFilters[0] = filter;
-
-          try {
-            // We assume this can only fail because mCurrentBrowser's docShell
-            // hasn't been created, yet. This may be caused by code accessing
-            // gBrowser before the window has finished loading.
-            this._addProgressListenerForInitialTab();
-          } catch (e) {
-            // The binding was constructed too early, wait until the initial
-            // tab's document is ready, then add the progress listener.
-            this._waitForInitialContentDocument();
-          }
+          this.webProgress.addProgressListener(filter, nsIWebProgress.NOTIFY_ALL);
 
           this.style.backgroundColor =
             Services.prefs.getBoolPref("browser.display.use_system_colors") ?
               "-moz-default-background-color" :
               Services.prefs.getCharPref("browser.display.background_color");
 
-          if (Services.appinfo.browserTabsRemote) {
+          let remote = window.QueryInterface(Ci.nsIInterfaceRequestor)
+            .getInterface(Ci.nsIWebNavigation)
+            .QueryInterface(Ci.nsILoadContext)
+            .useRemoteTabs;
+          if (remote) {
             messageManager.addMessageListener("DOMTitleChanged", this);
             messageManager.addMessageListener("contextmenu", this);
           }
+          messageManager.addMessageListener("DOMWebNotificationClicked", this);
         ]]>
       </constructor>
 
@@ -3038,31 +3086,6 @@
         ]]></body>
       </method>
 
-      <method name="_addProgressListenerForInitialTab">
-        <body><![CDATA[
-          this.webProgress.addProgressListener(this.mTabFilters[0], Ci.nsIWebProgress.NOTIFY_ALL);
-        ]]></body>
-      </method>
-
-      <method name="_waitForInitialContentDocument">
-        <body><![CDATA[
-          let obs = (subject, topic) => {
-            if (this.browsers[0].contentWindow == subject) {
-              Services.obs.removeObserver(obs, topic);
-              this._addProgressListenerForInitialTab();
-            }
-          };
-
-          // We use content-document-global-created as an approximation for
-          // "docShell is initialized". We can do this because in the
-          // mTabProgressListener we care most about the STATE_STOP notification
-          // that will reset mBlank. That means it's important to at least add
-          // the progress listener before the initial about:blank load stops
-          // if we can't do it before the load starts.
-          Services.obs.addObserver(obs, "content-document-global-created", false);
-        ]]></body>
-      </method>
-
       <destructor>
         <![CDATA[
           for (var i = 0; i < this.mTabListeners.length; ++i) {
@@ -3080,7 +3103,7 @@
           document.removeEventListener("keypress", this, false);
           window.removeEventListener("sizemodechange", this, false);
 
-          if (Services.appinfo.browserTabsRemote) {
+          if (gMultiProcessBrowser) {
             messageManager.removeMessageListener("DOMTitleChanged", this);
             messageManager.removeMessageListener("contextmenu", this);
           }
@@ -3177,6 +3200,9 @@
             return;
 
           var tab = this._getTabForContentWindow(contentWin);
+          if (tab.hasAttribute("pending"))
+            return;
+
           var titleChanged = this.setTabTitle(tab);
           if (titleChanged && !tab.selected && !tab.hasAttribute("busy"))
             tab.setAttribute("titlechanged", "true");
@@ -3192,7 +3218,7 @@
           let uri = browser.currentURI;
           let icon = browser.mIconURL;
 
-          this._updateBrowserRemoteness(browser, false);
+          this.updateBrowserRemoteness(browser, "about:tabcrashed");
 
           browser.setAttribute("crashedPageTitle", title);
           browser.docShell.displayLoadError(Cr.NS_ERROR_CONTENT_CRASHED, uri, null);
@@ -3974,6 +4000,10 @@
                   PrivateBrowsingUtils.isWindowPrivate(sourceNode.ownerDocument.defaultView))
                 return dt.effectAllowed = "none";
 
+              if (window.gMultiProcessBrowser !=
+                  sourceNode.ownerDocument.defaultView.gMultiProcessBrowser)
+                return dt.effectAllowed = "none";
+
 #ifdef XP_MACOSX
               return dt.effectAllowed = event.altKey ? "copy" : "move";
 #else
@@ -4480,7 +4510,10 @@
           } else {
             // Load in an existing tab.
             try {
-              this.tabbrowser.getBrowserForTab(tab).loadURIWithFlags(url, Ci.nsIWebNavigation.LOAD_FLAGS_ALLOW_THIRD_PARTY_FIXUP);
+              let webNav = Ci.nsIWebNavigation;
+              let flags = webNav.LOAD_FLAGS_ALLOW_THIRD_PARTY_FIXUP |
+                          webNav.LOAD_FLAGS_FIXUP_SCHEME_TYPOS;
+              this.tabbrowser.getBrowserForTab(tab).loadURIWithFlags(url, flags);
               if (!bgLoad)
                 this.selectedItem = tab;
             } catch(ex) {
@@ -4626,6 +4659,7 @@
                      role="presentation"
                      layer="true" />
           <xul:image xbl:inherits="src=image,fadein,pinned,selected"
+                     anonid="tab-icon-image"
                      class="tab-icon-image"
                      validate="never"
                      role="presentation"/>
@@ -4679,10 +4713,19 @@
         </getter>
       </property>
 
+      <property name="lastAccessed">
+        <getter>
+          return this.selected ? Date.now() : this._lastAccessed;
+        </getter>
+        <setter>
+          this._lastAccessed = val;
+        </setter>
+      </property>
+      <field name="_lastAccessed">0</field>
+
       <field name="mOverCloseButton">false</field>
       <field name="mCorrespondingMenuitem">null</field>
       <field name="closing">false</field>
-      <field name="lastAccessed">0</field>
 
       <method name="_mouseenter">
         <body><![CDATA[

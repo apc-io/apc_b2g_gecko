@@ -9,6 +9,7 @@
 #include "nsIScriptContext.h"
 
 #include "mozilla/ContentEvents.h"
+#include "mozilla/dom/ErrorEventBinding.h"
 #include "mozilla/dom/IDBOpenDBRequestBinding.h"
 #include "mozilla/dom/UnionTypes.h"
 #include "nsComponentManagerUtils.h"
@@ -30,6 +31,7 @@
 #include "IDBIndex.h"
 #include "IDBObjectStore.h"
 #include "IDBTransaction.h"
+#include "ReportInternalError.h"
 
 namespace {
 
@@ -41,10 +43,12 @@ uint64_t gNextRequestSerialNumber = 1;
 
 USING_INDEXEDDB_NAMESPACE
 using mozilla::dom::OwningIDBObjectStoreOrIDBIndexOrIDBCursor;
+using mozilla::dom::ErrorEventInit;
 using namespace mozilla;
 
-IDBRequest::IDBRequest()
-: mResultVal(JSVAL_VOID),
+IDBRequest::IDBRequest(IDBDatabase* aDatabase)
+: IDBWrapperCache(aDatabase),
+  mResultVal(JSVAL_VOID),
   mActorParent(nullptr),
 #ifdef MOZ_ENABLE_PROFILER_SPS
   mSerialNumber(gNextRequestSerialNumber++),
@@ -54,8 +58,20 @@ IDBRequest::IDBRequest()
   mHaveResultOrErrorCode(false)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
+}
 
-  SetIsDOMBinding();
+IDBRequest::IDBRequest(nsPIDOMWindow* aOwner)
+: IDBWrapperCache(aOwner),
+  mResultVal(JSVAL_VOID),
+  mActorParent(nullptr),
+#ifdef MOZ_ENABLE_PROFILER_SPS
+  mSerialNumber(gNextRequestSerialNumber++),
+#endif
+  mErrorCode(NS_OK),
+  mLineNo(0),
+  mHaveResultOrErrorCode(false)
+{
+  NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 }
 
 IDBRequest::~IDBRequest()
@@ -70,10 +86,9 @@ IDBRequest::Create(IDBDatabase* aDatabase,
                    IDBTransaction* aTransaction)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
-  nsRefPtr<IDBRequest> request(new IDBRequest());
+  nsRefPtr<IDBRequest> request(new IDBRequest(aDatabase));
 
   request->mTransaction = aTransaction;
-  request->BindToOwner(aDatabase);
   request->SetScriptOwner(aDatabase->GetScriptOwner());
 
   if (!aDatabase->Factory()->FromIPC()) {
@@ -175,7 +190,7 @@ IDBRequest::NotifyHelperCompleted(HelperBase* aHelper)
   // Otherwise we need to get the result from the helper.
   AutoPushJSContext cx(GetJSContext());
   if (!cx) {
-    NS_WARNING("Failed to get safe JSContext!");
+    IDB_WARNING("Failed to get safe JSContext!");
     rv = NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
     SetError(rv);
     return rv;
@@ -287,10 +302,10 @@ IDBRequest::CaptureCaller()
 }
 
 void
-IDBRequest::FillScriptErrorEvent(InternalScriptErrorEvent* aEvent) const
+IDBRequest::FillScriptErrorEvent(ErrorEventInit& aEventInit) const
 {
-  aEvent->lineNr = mLineNo;
-  aEvent->fileName = mFilename.get();
+  aEventInit.mLineno = mLineNo;
+  aEventInit.mFilename = mFilename;
 }
 
 mozilla::dom::IDBRequestReadyState
@@ -380,11 +395,10 @@ IDBRequest::PreHandleEvent(nsEventChainPreVisitor& aVisitor)
   return NS_OK;
 }
 
-IDBOpenDBRequest::IDBOpenDBRequest()
+IDBOpenDBRequest::IDBOpenDBRequest(nsPIDOMWindow* aOwner)
+  : IDBRequest(aOwner)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
-
-  SetIsDOMBinding();
 }
 
 IDBOpenDBRequest::~IDBOpenDBRequest()
@@ -401,9 +415,8 @@ IDBOpenDBRequest::Create(IDBFactory* aFactory,
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
   NS_ASSERTION(aFactory, "Null pointer!");
 
-  nsRefPtr<IDBOpenDBRequest> request = new IDBOpenDBRequest();
+  nsRefPtr<IDBOpenDBRequest> request = new IDBOpenDBRequest(aOwner);
 
-  request->BindToOwner(aOwner);
   request->SetScriptOwner(aScriptOwner);
   request->mFactory = aFactory;
 

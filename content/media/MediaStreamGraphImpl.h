@@ -187,6 +187,11 @@ public:
    */
   void PrepareUpdatesToMainThreadState(bool aFinalUpdate);
   /**
+   * Returns false if there is any stream that has finished but not yet finished
+   * playing out.
+   */
+  bool AllFinishedStreamsNotified();
+  /**
    * If we are rendering in non-realtime mode, we don't want to send messages to
    * the main thread at each iteration for performance reasons. We instead
    * notify the main thread at the same rate
@@ -365,6 +370,14 @@ public:
   {
     mStreamOrderDirty = true;
   }
+  /**
+   * Pause all AudioStreams being written to by MediaStreams
+   */
+  void PauseAllAudioOutputs();
+  /**
+   * Resume all AudioStreams being written to by MediaStreams
+   */
+  void ResumeAllAudioOutputs();
 
   // Data members
 
@@ -455,12 +468,13 @@ public:
    * creation after this point will create a new graph. An async event is
    * dispatched to Shutdown() the graph's threads and then delete the graph
    * object.
-   * 2) Forced shutdown at application shutdown. A flag is set, RunThread()
-   * detects the flag and exits, the next RunInStableState() detects the flag,
-   * and dispatches the async event to Shutdown() the graph's threads. However
-   * the graph object is not deleted. New messages for the graph are processed
-   * synchronously on the main thread if necessary. When the last stream is
-   * destroyed, the graph object is deleted.
+   * 2) Forced shutdown at application shutdown, or completion of a
+   * non-realtime graph. A flag is set, RunThread() detects the flag and
+   * exits, the next RunInStableState() detects the flag, and dispatches the
+   * async event to Shutdown() the graph's threads. However the graph object
+   * is not deleted. New messages for the graph are processed synchronously on
+   * the main thread if necessary. When the last stream is destroyed, the
+   * graph object is deleted.
    */
   enum LifecycleState {
     // The graph thread hasn't started yet.
@@ -478,8 +492,9 @@ public:
     // to shut down the graph thread(s).
     LIFECYCLE_WAITING_FOR_THREAD_SHUTDOWN,
     // Graph threads have shut down but we're waiting for remaining streams
-    // to be destroyed. Only happens during application shutdown since normally
-    // we'd only shut down a graph when it has no streams.
+    // to be destroyed. Only happens during application shutdown and on
+    // completed non-realtime graphs, since normally we'd only shut down a
+    // realtime graph when it has no streams.
     LIFECYCLE_WAITING_FOR_STREAM_DESTRUCTION
   };
   LifecycleState mLifecycleState;
@@ -500,9 +515,9 @@ public:
   };
   WaitState mWaitState;
   /**
-   * How many non-realtime ticks the graph should process.
+   * The graph should stop processing at or after this time.
    */
-  uint32_t mNonRealtimeTicksToProcess;
+  GraphTime mEndTime;
   /**
    * True when another iteration of the control loop is required.
    */
@@ -516,13 +531,6 @@ public:
    * RunInStableState() and the event hasn't run yet.
    */
   bool mPostedRunInStableStateEvent;
-  /**
-   * True when the non-realtime graph thread is processing, as a result of
-   * a request from the main thread.  When processing is finished, we post
-   * a message to the main thread in order to set mNonRealtimeProcessing
-   * back to false.
-   */
-  bool mNonRealtimeIsRunning;
 
   // Main thread only
 

@@ -6,44 +6,41 @@
 const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-585956-console-trace.html";
 
 function test() {
-  addTab("data:text/html;charset=utf8,<p>hello");
-  browser.addEventListener("load", tabLoaded, true);
+  Task.spawn(runner).then(finishTest);
 
-  function tabLoaded() {
-    browser.removeEventListener("load", tabLoaded, true);
+  function* runner() {
+    let {tab} = yield loadTab("data:text/html;charset=utf8,<p>hello");
+    let hud = yield openConsole(tab);
 
-    openConsole(null, function(hud) {
-      content.location = TEST_URI;
+    content.location = TEST_URI;
 
-      waitForMessages({
-        webconsole: hud,
-        messages: [{
-          name: "console.trace output",
-          consoleTrace: {
-            file: "test-bug-585956-console-trace.html",
-            fn: "window.foobar585956c",
-          },
-        }],
-      }).then(performChecks);
+    let [result] = yield waitForMessages({
+      webconsole: hud,
+      messages: [{
+        name: "console.trace output",
+        consoleTrace: {
+          file: "test-bug-585956-console-trace.html",
+          fn: "window.foobar585956c",
+        },
+      }],
     });
-  }
 
-  function performChecks(results) {
-    let node = [...results[0].matched][0];
+    let node = [...result.matched][0];
+    ok(node, "found trace log node");
+
+    let obj = node._messageObject;
+    ok(obj, "console.trace message object");
 
     // The expected stack trace object.
     let stacktrace = [
-      { filename: TEST_URI, lineNumber: 9, functionName: "window.foobar585956c", language: 2 },
-      { filename: TEST_URI, lineNumber: 14, functionName: "foobar585956b", language: 2 },
-      { filename: TEST_URI, lineNumber: 18, functionName: "foobar585956a", language: 2 },
-      { filename: TEST_URI, lineNumber: 21, functionName: null, language: 2 }
+      { filename: TEST_URI, functionName: "window.foobar585956c", language: 2, lineNumber: 9 },
+      { filename: TEST_URI, functionName: "foobar585956b", language: 2, lineNumber: 14 },
+      { filename: TEST_URI, functionName: "foobar585956a", language: 2, lineNumber: 18 },
+      { filename: TEST_URI, functionName: "", language: 2, lineNumber: 21 }
     ];
 
-    ok(node, "found trace log node");
-    ok(node._stacktrace, "found stacktrace object");
-    is(node._stacktrace.toSource(), stacktrace.toSource(), "stacktrace is correct");
+    ok(obj._stacktrace, "found stacktrace object");
+    is(obj._stacktrace.toSource(), stacktrace.toSource(), "stacktrace is correct");
     isnot(node.textContent.indexOf("bug-585956"), -1, "found file name");
-
-    finishTest();
   }
 }

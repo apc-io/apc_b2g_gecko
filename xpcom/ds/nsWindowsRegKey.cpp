@@ -80,7 +80,7 @@ nsWindowsRegKey::Open(uint32_t rootKey, const nsAString &path, uint32_t mode)
 {
   Close();
 
-  LONG rv = RegOpenKeyExW((HKEY) rootKey, PromiseFlatString(path).get(), 0,
+  LONG rv = RegOpenKeyExW((HKEY)(intptr_t) rootKey, PromiseFlatString(path).get(), 0,
                           (REGSAM) mode, &mKey);
 
   return (rv == ERROR_SUCCESS) ? NS_OK : NS_ERROR_FAILURE;
@@ -92,7 +92,7 @@ nsWindowsRegKey::Create(uint32_t rootKey, const nsAString &path, uint32_t mode)
   Close();
 
   DWORD disposition;
-  LONG rv = RegCreateKeyExW((HKEY) rootKey, PromiseFlatString(path).get(), 0,
+  LONG rv = RegCreateKeyExW((HKEY)(intptr_t) rootKey, PromiseFlatString(path).get(), 0,
                             nullptr, REG_OPTION_NON_VOLATILE, (REGSAM) mode, nullptr,
                             &mKey, &disposition);
 
@@ -333,7 +333,7 @@ nsWindowsRegKey::ReadStringValue(const nsAString &name, nsAString &result)
         return NS_ERROR_OUT_OF_MEMORY;
 
       resultLen = ExpandEnvironmentStringsW(flatSource.get(),
-                                            begin.get(),
+                                            wwc(begin.get()),
                                             resultLen + 1);
       if (resultLen <= 0) {
         rv = ERROR_UNKNOWN_FEATURE;
@@ -410,7 +410,7 @@ nsWindowsRegKey::WriteStringValue(const nsAString &name, const nsAString &value)
 
   LONG rv = RegSetValueExW(mKey, PromiseFlatString(name).get(), 0, REG_SZ,
                            (const BYTE *) flatValue.get(),
-                           (flatValue.Length() + 1) * sizeof(PRUnichar));
+                           (flatValue.Length() + 1) * sizeof(char16_t));
 
   return (rv == ERROR_SUCCESS) ? NS_OK : NS_ERROR_FAILURE;
 }

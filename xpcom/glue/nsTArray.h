@@ -20,7 +20,7 @@
 #include "nscore.h"
 #include "nsQuickSort.h"
 #include "nsDebug.h"
-#include "nsTraceRefcnt.h"
+#include "nsISupportsImpl.h"
 #include <new>
 
 namespace JS {
@@ -524,6 +524,11 @@ public:
   // Invoke the copy-constructor in place.
   template<class A>
   static inline void Construct(E *e, const A &arg) {
+    typedef typename mozilla::RemoveCV<E>::Type E_NoCV;
+    typedef typename mozilla::RemoveCV<A>::Type A_NoCV;
+    static_assert(!mozilla::IsSame<E_NoCV*, A_NoCV>::value,
+                  "For safety, we disallow constructing nsTArray<E> elements "
+                  "from E* pointers. See bug 960591.");
     new (static_cast<void *>(e)) E(arg);
   }
   // Invoke the destructor in place.
@@ -1383,14 +1388,14 @@ public:
   // @return        True if the operation succeeded; false otherwise.
   // See also TruncateLength if the new length is guaranteed to be
   // smaller than the old.
-  bool SetLength(size_type newLen) {
+  typename Alloc::ResultType SetLength(size_type newLen) {
     size_type oldLen = Length();
     if (newLen > oldLen) {
-      return InsertElementsAt(oldLen, newLen - oldLen) != nullptr;
+      return Alloc::ConvertBoolToResultType(InsertElementsAt(oldLen, newLen - oldLen) != nullptr);
     }
 
     TruncateLength(newLen);
-    return true;
+    return Alloc::ConvertBoolToResultType(true);
   }
 
   // This method modifies the length of the array, but may only be
@@ -1712,9 +1717,9 @@ protected:
   // implicit copy-constructors.  If we don't have this method, those
   // copy-constructors will call nsAutoArrayBase's implicit copy-constructor,
   // which won't call Init() and set up the auto buffer!
-  nsAutoArrayBase(const TArrayBase &aOther) {
+  nsAutoArrayBase(const self_type &aOther) {
     Init();
-    AppendElements(aOther);
+    this->AppendElements(aOther);
   }
 
 private:

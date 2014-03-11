@@ -185,13 +185,21 @@ HttpChannelParentListener::OnRedirectResult(bool succeeded)
     mRedirectChannelId = 0;
   }
 
+  if (!redirectChannel) {
+    succeeded = false;
+  }
+
   nsCOMPtr<nsIParentRedirectingChannel> activeRedirectingChannel =
       do_QueryInterface(mActiveChannel);
   MOZ_ASSERT(activeRedirectingChannel,
     "Channel finished a redirect response, but doesn't implement "
     "nsIParentRedirectingChannel to complete it.");
 
-  activeRedirectingChannel->CompleteRedirect(succeeded);
+  if (activeRedirectingChannel) {
+    activeRedirectingChannel->CompleteRedirect(succeeded);
+  } else {
+    succeeded = false;
+  }
 
   if (succeeded) {
     // Switch to redirect channel and delete the old one.

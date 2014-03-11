@@ -4,19 +4,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifdef MOZ_WIDGET_QT
-#include <QWidget>
-#include <QKeyEvent>
-#if defined(MOZ_X11)
-#if defined(Q_WS_X11)
-#include <QX11Info>
-#else
-#include "gfxQtPlatform.h"
-#endif
-#endif
-#undef slots
-#endif
-
 #ifdef MOZ_X11
 #include <cairo-xlib.h>
 #include "gfxXlibSurface.h"
@@ -168,29 +155,29 @@ nsPluginInstanceOwner::GetImageContainer()
   // for what we do on other versions.
   if (AndroidBridge::Bridge()->GetAPIVersion() < 11)
     return nullptr;
+
+  LayoutDeviceRect r = GetPluginRect();
+
+  // NotifySize() causes Flash to do a bunch of stuff like ask for surfaces to render
+  // into, set y-flip flags, etc, so we do this at the beginning.
+  gfxSize resolution = mObjectFrame->PresContext()->PresShell()->GetCumulativeResolution();
+  ScreenSize screenSize = (r * LayoutDeviceToScreenScale(resolution.width, resolution.height)).Size();
+  mInstance->NotifySize(nsIntSize(screenSize.width, screenSize.height));
   
   container = LayerManager::CreateImageContainer();
 
-  ImageFormat format = ImageFormat::SHARED_TEXTURE;
-  nsRefPtr<Image> img = container->CreateImage(&format, 1);
+  nsRefPtr<Image> img = container->CreateImage(ImageFormat::SHARED_TEXTURE);
 
   SharedTextureImage::Data data;
+  data.mSize = gfx::IntSize(r.width, r.height);
   data.mHandle = mInstance->CreateSharedHandle();
-  data.mShareType = mozilla::gl::SameProcess;
+  data.mShareType = mozilla::gl::SharedTextureShareType::SameProcess;
   data.mInverted = mInstance->Inverted();
-
-  LayoutDeviceRect r = GetPluginRect();
-  data.mSize = gfxIntSize(r.width, r.height);
 
   SharedTextureImage* pluginImage = static_cast<SharedTextureImage*>(img.get());
   pluginImage->SetData(data);
 
   container->SetCurrentImageInTransaction(img);
-
-  float xResolution = mObjectFrame->PresContext()->GetRootPresContext()->PresShell()->GetXResolution();
-  float yResolution = mObjectFrame->PresContext()->GetRootPresContext()->PresShell()->GetYResolution();
-  ScreenSize screenSize = (r * LayoutDeviceToScreenScale(xResolution, yResolution)).Size();
-  mInstance->NotifySize(nsIntSize(screenSize.width, screenSize.height));
 
   return container.forget();
 #endif
@@ -547,7 +534,7 @@ NS_IMETHODIMP nsPluginInstanceOwner::ShowStatus(const char *aStatusMsg)
   return rv;
 }
 
-NS_IMETHODIMP nsPluginInstanceOwner::ShowStatus(const PRUnichar *aStatusMsg)
+NS_IMETHODIMP nsPluginInstanceOwner::ShowStatus(const char16_t *aStatusMsg)
 {
   nsresult  rv = NS_ERROR_FAILURE;
 
@@ -654,7 +641,7 @@ NS_IMETHODIMP nsPluginInstanceOwner::GetNetscapeWindow(void *value)
     return NS_ERROR_FAILURE;
   }
   
-#if defined(XP_WIN) || defined(XP_OS2)
+#if defined(XP_WIN)
   void** pvalue = (void**)value;
   nsViewManager* vm = mObjectFrame->PresContext()->GetPresShell()->GetViewManager();
   if (!vm)
@@ -1498,21 +1485,20 @@ already_AddRefed<ImageContainer> nsPluginInstanceOwner::GetImageContainerForVide
 {
   nsRefPtr<ImageContainer> container = LayerManager::CreateImageContainer();
 
-  ImageFormat format = ImageFormat::SHARED_TEXTURE;
-  nsRefPtr<Image> img = container->CreateImage(&format, 1);
+  nsRefPtr<Image> img = container->CreateImage(ImageFormat::SHARED_TEXTURE);
 
   SharedTextureImage::Data data;
 
-  data.mShareType = gl::SameProcess;
+  data.mShareType = gl::SharedTextureShareType::SameProcess;
   data.mHandle = gl::CreateSharedHandle(mInstance->GLContext(),
                                         data.mShareType,
                                         aVideoInfo->mSurfaceTexture,
-                                        gl::SurfaceTexture);
+                                        gl::SharedTextureBufferType::SurfaceTexture);
 
   // The logic below for Honeycomb is just a guess, but seems to work. We don't have a separate
   // inverted flag for video.
   data.mInverted = AndroidBridge::Bridge()->IsHoneycomb() ? true : mInstance->Inverted();
-  data.mSize = gfxIntSize(aVideoInfo->mDimensions.width, aVideoInfo->mDimensions.height);
+  data.mSize = gfx::IntSize(aVideoInfo->mDimensions.width, aVideoInfo->mDimensions.height);
 
   SharedTextureImage* pluginImage = static_cast<SharedTextureImage*>(img.get());
   pluginImage->SetData(data);
@@ -1568,10 +1554,10 @@ void nsPluginInstanceOwner::ExitFullScreen() {
 void nsPluginInstanceOwner::ExitFullScreen(jobject view) {
   JNIEnv* env = AndroidBridge::GetJNIEnv();
 
-  if (env && sFullScreenInstance && sFullScreenInstance->mInstance &&
+  if (sFullScreenInstance && sFullScreenInstance->mInstance &&
       env->IsSameObject(view, (jobject)sFullScreenInstance->mInstance->GetJavaSurface())) {
     sFullScreenInstance->ExitFullScreen();
-  } 
+  }
 }
 
 #endif
@@ -2151,46 +2137,6 @@ nsEventStatus nsPluginInstanceOwner::ProcessEvent(const WidgetGUIEvent& anEvent)
             }
 #endif
 
-#ifdef MOZ_WIDGET_QT
-          const WidgetKeyboardEvent& keyEvent = *anEvent.AsKeyboardEvent();
-
-          memset( &event, 0, sizeof(event) );
-          event.time = anEvent.time;
-
-          QWidget* qWidget = static_cast<QWidget*>(widget->GetNativeData(NS_NATIVE_WINDOW));
-
-          if (qWidget)
-#if defined(Q_WS_X11)
-            event.root = qWidget->x11Info().appRootWindow();
-#else
-            event.root = RootWindowOfScreen(DefaultScreenOfDisplay(gfxQtPlatform::GetXDisplay(qWidget)));
-#endif
-
-          // deduce keycode from the information in the attached QKeyEvent
-          const QKeyEvent* qtEvent = static_cast<const QKeyEvent*>(anEvent.pluginEvent);
-          if (qtEvent) {
-
-            if (qtEvent->nativeModifiers())
-              event.state = qtEvent->nativeModifiers();
-            else // fallback
-              event.state = XInputEventState(keyEvent);
-
-            if (qtEvent->nativeScanCode())
-              event.keycode = qtEvent->nativeScanCode();
-            else // fallback
-              event.keycode = XKeysymToKeycode( (widget ? static_cast<Display*>(widget->GetNativeData(NS_NATIVE_DISPLAY)) : nullptr), qtEvent->key());
-          }
-
-          switch (anEvent.message)
-            {
-            case NS_KEY_DOWN:
-              event.type = XKeyPress;
-              break;
-            case NS_KEY_UP:
-              event.type = KeyRelease;
-              break;
-           }
-#endif
           // Information that could be obtained from pluginEvent but we may not
           // want to promise to provide:
           event.subwindow = None;
@@ -2451,32 +2397,6 @@ void nsPluginInstanceOwner::Paint(const RECT& aDirty, HDC aDC)
 }
 #endif
 
-#ifdef XP_OS2
-void nsPluginInstanceOwner::Paint(const nsRect& aDirtyRect, HPS aHPS)
-{
-  if (!mInstance || !mObjectFrame)
-    return;
-
-  NPWindow *window;
-  GetWindow(window);
-  nsIntRect relDirtyRect = aDirtyRect.ToOutsidePixels(mObjectFrame->PresContext()->AppUnitsPerDevPixel());
-
-  // we got dirty rectangle in relative window coordinates, but we
-  // need it in absolute units and in the (left, top, right, bottom) form
-  RECTL rectl;
-  rectl.xLeft   = relDirtyRect.x + window->x;
-  rectl.yBottom = relDirtyRect.y + window->y;
-  rectl.xRight  = rectl.xLeft + relDirtyRect.width;
-  rectl.yTop    = rectl.yBottom + relDirtyRect.height;
-
-  NPEvent pluginEvent;
-  pluginEvent.event = WM_PAINT;
-  pluginEvent.wParam = (uint32_t)aHPS;
-  pluginEvent.lParam = (uint32_t)&rectl;
-  mInstance->HandleEvent(&pluginEvent, nullptr);
-}
-#endif
-
 #ifdef MOZ_WIDGET_ANDROID
 
 void nsPluginInstanceOwner::Paint(gfxContext* aContext,
@@ -2506,7 +2426,7 @@ void nsPluginInstanceOwner::Paint(gfxContext* aContext,
       aFrameRect.height != pluginSurface->Height()) {
 
     pluginSurface = new gfxImageSurface(gfxIntSize(aFrameRect.width, aFrameRect.height), 
-                                        gfxImageFormatARGB32);
+                                        gfxImageFormat::ARGB32);
     if (!pluginSurface)
       return;
   }

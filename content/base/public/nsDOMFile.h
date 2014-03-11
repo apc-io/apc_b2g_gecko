@@ -296,7 +296,7 @@ public:
   // Overrides
   NS_IMETHOD GetSize(uint64_t* aSize) MOZ_OVERRIDE;
   NS_IMETHOD GetType(nsAString& aType) MOZ_OVERRIDE;
-  NS_IMETHOD GetLastModifiedDate(JSContext* cx, JS::Value* aLastModifiedDate) MOZ_OVERRIDE;
+  NS_IMETHOD GetLastModifiedDate(JSContext* cx, JS::MutableHandle<JS::Value> aLastModifiedDate) MOZ_OVERRIDE;
   NS_IMETHOD GetMozLastModifiedDate(uint64_t* aLastModifiedDate) MOZ_OVERRIDE;
   NS_IMETHOD GetMozFullPathInternal(nsAString& aFullPath) MOZ_OVERRIDE;
   NS_IMETHOD GetInternalStream(nsIInputStream**) MOZ_OVERRIDE;
@@ -379,6 +379,8 @@ public:
   }
 
   NS_IMETHOD GetInternalStream(nsIInputStream**) MOZ_OVERRIDE;
+
+  NS_IMETHOD_(bool) IsMemoryFile(void) MOZ_OVERRIDE;
 
 protected:
   // Create slice

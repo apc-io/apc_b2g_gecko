@@ -7,7 +7,8 @@
 
 .circularprogressindicator-progressButton,
 .circularprogressindicator-progressRing,
-.circularprogressindicator-progressTrack {
+.circularprogressindicator-progressTrack,
+.circularprogressindicator-progressNotification {
   margin: 0 @toolbar_horizontal_spacing@;
 }
 
@@ -25,7 +26,24 @@
   background-image: url(chrome://browser/skin/images/progresscircle-bg.png);
 }
 
+.circularprogressindicator-progressNotification {
+    width: 40px;
+    height: 40px;
+    background-image: url(chrome://browser/skin/images/navbar-download-finished.png);
+    visibility: hidden;
+}
+
+.circularprogressindicator-progressNotification.progressNotification-active {
+  visibility: visible;
+  opacity: 0;
+  transform: scale(2);
+  transition: opacity @metro_animation_duration@,
+              transform @metro_animation_duration@;
+}
+
 .circularprogressindicator-progressRing:not([progress]),
-.circularprogressindicator-progressTrack:not([progress]) {
+.circularprogressindicator-progressRing[progress="100"],
+.circularprogressindicator-progressTrack:not([progress]),
+.circularprogressindicator-progressTrack[progress="100"] {
   visibility: hidden;
 }

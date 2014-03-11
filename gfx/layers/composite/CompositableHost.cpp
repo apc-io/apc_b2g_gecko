@@ -14,7 +14,7 @@
 #include "mozilla/layers/TextureHost.h"  // for TextureHost, etc
 #include "nsAutoPtr.h"                  // for nsRefPtr
 #include "nsDebug.h"                    // for NS_WARNING
-#include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
+#include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "gfxPlatform.h"                // for gfxPlatform
 
 namespace mozilla {
@@ -36,6 +36,9 @@ CompositableHost::CompositableHost(const TextureInfo& aTextureInfo)
 CompositableHost::~CompositableHost()
 {
   MOZ_COUNT_DTOR(CompositableHost);
+  if (mBackendData) {
+    mBackendData->ClearData();
+  }
 }
 
 void
@@ -46,6 +49,24 @@ CompositableHost::UseTextureHost(TextureHost* aTexture)
   }
   aTexture->SetCompositor(GetCompositor());
   aTexture->SetCompositableBackendSpecificData(GetCompositableBackendSpecificData());
+}
+
+void
+CompositableHost::UseComponentAlphaTextures(TextureHost* aTextureOnBlack,
+                                            TextureHost* aTextureOnWhite)
+{
+  MOZ_ASSERT(aTextureOnBlack && aTextureOnWhite);
+  aTextureOnBlack->SetCompositor(GetCompositor());
+  aTextureOnBlack->SetCompositableBackendSpecificData(GetCompositableBackendSpecificData());
+  aTextureOnWhite->SetCompositor(GetCompositor());
+  aTextureOnWhite->SetCompositableBackendSpecificData(GetCompositableBackendSpecificData());
+}
+
+void
+CompositableHost::RemoveTextureHost(TextureHost* aTexture)
+{
+  // Clear strong refrence to CompositableBackendSpecificData
+  aTexture->SetCompositableBackendSpecificData(nullptr);
 }
 
 void
@@ -153,7 +174,9 @@ CompositableHost::Create(const TextureInfo& aTextureInfo)
   default:
     MOZ_CRASH("Unknown CompositableType");
   }
-  if (result) {
+  // We know that Tiled buffers don't use the compositable backend-specific
+  // data, so don't bother creating it.
+  if (result && aTextureInfo.mCompositableType != BUFFER_TILED) {
     RefPtr<CompositableBackendSpecificData> data = CreateCompositableBackendSpecificDataOGL();
     result->SetCompositableBackendSpecificData(data);
   }

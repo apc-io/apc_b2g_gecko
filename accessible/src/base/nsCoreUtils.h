@@ -10,7 +10,6 @@
 #include "nsIDocument.h"
 #include "nsIPresShell.h"
 
-#include "nsIDOMDOMStringList.h"
 #include "nsPoint.h"
 #include "nsTArray.h"
 
@@ -307,32 +306,11 @@ public:
   /**
    * Returns true if the given character is whitespace symbol.
    */
-  static bool IsWhitespace(PRUnichar aChar)
+  static bool IsWhitespace(char16_t aChar)
   {
     return aChar == ' ' || aChar == '\n' ||
       aChar == '\r' || aChar == '\t' || aChar == 0xa0;
   }
-};
-
-
-/**
- * nsIDOMDOMStringList implementation.
- */
-class nsAccessibleDOMStringList : public nsIDOMDOMStringList
-{
-public:
-  nsAccessibleDOMStringList() {}
-  virtual ~nsAccessibleDOMStringList() {}
-
-  NS_DECL_ISUPPORTS
-  NS_DECL_NSIDOMDOMSTRINGLIST
-
-  bool Add(const nsAString& aName) {
-    return mNames.AppendElement(aName) != nullptr;
-  }
-
-private:
-  nsTArray<nsString> mNames;
 };
 
 #endif

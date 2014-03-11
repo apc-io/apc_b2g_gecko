@@ -24,12 +24,14 @@ using namespace mozilla::dom;
 //----------------------------------------------------------------------
 // Helper classes
 
-class nsSVGGradientFrame::AutoGradientReferencer
+class MOZ_STACK_CLASS nsSVGGradientFrame::AutoGradientReferencer
 {
 public:
-  AutoGradientReferencer(nsSVGGradientFrame *aFrame)
+  AutoGradientReferencer(nsSVGGradientFrame *aFrame
+                         MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
     : mFrame(aFrame)
   {
+    MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     // Reference loops should normally be detected in advance and handled, so
     // we're not expecting to encounter them here
     NS_ABORT_IF_FALSE(!mFrame->mLoopFlag, "Undetected reference loop!");
@@ -40,6 +42,7 @@ public:
   }
 private:
   nsSVGGradientFrame *mFrame;
+  MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
 //----------------------------------------------------------------------
@@ -57,7 +60,7 @@ NS_IMPL_FRAMEARENA_HELPERS(nsSVGGradientFrame)
 //----------------------------------------------------------------------
 // nsIFrame methods:
 
-NS_IMETHODIMP
+nsresult
 nsSVGGradientFrame::AttributeChanged(int32_t         aNameSpaceID,
                                      nsIAtom*        aAttribute,
                                      int32_t         aModType)
@@ -414,7 +417,7 @@ nsSVGLinearGradientFrame::GetType() const
   return nsGkAtoms::svgLinearGradientFrame;
 }
 
-NS_IMETHODIMP
+nsresult
 nsSVGLinearGradientFrame::AttributeChanged(int32_t         aNameSpaceID,
                                            nsIAtom*        aAttribute,
                                            int32_t         aModType)
@@ -523,7 +526,7 @@ nsSVGRadialGradientFrame::GetType() const
   return nsGkAtoms::svgRadialGradientFrame;
 }
 
-NS_IMETHODIMP
+nsresult
 nsSVGRadialGradientFrame::AttributeChanged(int32_t         aNameSpaceID,
                                            nsIAtom*        aAttribute,
                                            int32_t         aModType)

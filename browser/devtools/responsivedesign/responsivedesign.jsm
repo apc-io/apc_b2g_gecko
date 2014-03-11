@@ -11,7 +11,7 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource:///modules/devtools/gDevTools.jsm");
 Cu.import("resource:///modules/devtools/FloatingScrollbars.jsm");
-Cu.import("resource:///modules/devtools/shared/event-emitter.js");
+Cu.import("resource://gre/modules/devtools/event-emitter.js");
 
 var require = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools.require;
 let Telemetry = require("devtools/shared/telemetry");
@@ -238,7 +238,10 @@ ResponsiveUI.prototype = {
      }
    },
 
-   onPageUnload: function() {
+   onPageUnload: function(evt) {
+     // Ignore sub frames unload events
+     if (evt.target != this.browser.contentDocument)
+       return;
      if (this.closing)
        return;
      if (this.touchEventHandler) {

@@ -48,7 +48,7 @@ public class MenuItemDefault extends TextView
         int stateIconSize = res.getDimensionPixelSize(R.dimen.menu_item_state_icon);
         Rect stateIconBounds = new Rect(0, 0, stateIconSize, stateIconSize);
 
-        mState = res.getDrawable(R.drawable.menu_item_state);
+        mState = res.getDrawable(R.drawable.menu_item_state).mutate();
         mState.setBounds(stateIconBounds);
 
         if (sIconBounds == null) {
@@ -102,12 +102,7 @@ public class MenuItemDefault extends TextView
     }
 
     void setIcon(int icon) {
-        Drawable drawable = null;
-
-        if (icon != 0)
-            drawable = getResources().getDrawable(icon);
-         
-        setIcon(drawable);
+        setIcon((icon == 0) ? null : getResources().getDrawable(icon));
     }
 
     void setTitle(CharSequence title) {

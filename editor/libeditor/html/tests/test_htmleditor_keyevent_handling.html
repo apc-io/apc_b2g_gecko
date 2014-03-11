@@ -173,7 +173,7 @@ function runTests()
 
     reset("");
     synthesizeKey("VK_BACK_SPACE", { altKey: true });
-    check(aDescription + "Alt+Backspace", true, true, aIsReadonly);
+    check(aDescription + "Alt+Backspace", true, true, aIsReadonly || kIsMac);
 
     reset("");
     synthesizeKey("VK_BACK_SPACE", { metaKey: true });
@@ -189,11 +189,11 @@ function runTests()
     //   Otherwise, editor doesn't consume the event.
     reset("");
     synthesizeKey("VK_DELETE", { });
-    check(aDescription + "Delete", true, true, !aIsReadonly);
+    check(aDescription + "Delete", true, true, !aIsReadonly || kIsMac);
 
     reset("");
     synthesizeKey("VK_DELETE", { shiftKey: true });
-    check(aDescription + "Shift+Delete", true, true, false);
+    check(aDescription + "Shift+Delete", true, true, kIsMac);
 
     reset("");
     synthesizeKey("VK_DELETE", { ctrlKey: true });
@@ -201,7 +201,7 @@ function runTests()
 
     reset("");
     synthesizeKey("VK_DELETE", { altKey: true });
-    check(aDescription + "Alt+Delete", true, true, false);
+    check(aDescription + "Alt+Delete", true, true, kIsMac);
 
     reset("");
     synthesizeKey("VK_DELETE", { metaKey: true });
@@ -249,45 +249,6 @@ function runTests()
     synthesizeKey("VK_RETURN", { osKey: true });
     check(aDescription + "OS+Return", true, true, false);
     is(aElement.innerHTML, "a", aDescription + "OS+Return");
-
-    // Enter key (same as Return key):
-    //   If editor is readonly, it doesn't consume.
-    //   If editor is editable and not single line editor, it consumes Return
-    //   and Shift+Return.
-    //   Otherwise, editor doesn't consume the event.
-    reset("a");
-    synthesizeKey("VK_ENTER", { });
-    check(aDescription + "Enter",
-          true, true, !aIsReadonly);
-    is(aElement.innerHTML, aIsReadonly ? "a" : "a<br><br>",
-       aDescription + "Enter");
-
-    reset("a");
-    synthesizeKey("VK_ENTER", { shiftKey: true });
-    check(aDescription + "Shift+Enter",
-          true, true, !aIsReadonly);
-    is(aElement.innerHTML, aIsReadonly ? "a" : "a<br><br>",
-       aDescription + "Shift+Enter");
-
-    reset("a");
-    synthesizeKey("VK_ENTER", { ctrlKey: true });
-    check(aDescription + "Ctrl+Enter", true, true, false);
-    is(aElement.innerHTML, "a", aDescription + "Ctrl+Enter");
-
-    reset("a");
-    synthesizeKey("VK_ENTER", { altKey: true });
-    check(aDescription + "Alt+Enter", true, true, false);
-    is(aElement.innerHTML, "a", aDescription + "Alt+Enter");
-
-    reset("a");
-    synthesizeKey("VK_ENTER", { metaKey: true });
-    check(aDescription + "Meta+Enter", true, true, false);
-    is(aElement.innerHTML, "a", aDescription + "Meta+Enter");
-
-    reset("a");
-    synthesizeKey("VK_ENTER", { osKey: true });
-    check(aDescription + "OS+Enter", true, true, false);
-    is(aElement.innerHTML, "a", aDescription + "OS+Enter");
 
     // Tab key:
     //   If editor is tabbable, editor doesn't consume all tab key events.

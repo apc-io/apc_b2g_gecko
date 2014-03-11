@@ -22,6 +22,7 @@
 #include "js/GCAPI.h"
 #include "vm/ObjectImpl.h"
 #include "vm/Shape.h"
+#include "vm/Xdr.h"
 
 namespace JS {
 struct ObjectsExtraSizes;
@@ -288,10 +289,6 @@ class JSObject : public js::ObjectImpl
     }
 
     bool isBoundFunction() const {
-        // Note: This function can race when it is called during off thread compilation.
-        js::AutoThreadSafeAccess ts0(this);
-        js::AutoThreadSafeAccess ts1(lastProperty());
-        js::AutoThreadSafeAccess ts2(lastProperty()->base());
         return lastProperty()->hasObjectFlag(js::BaseShape::BOUND_FUNCTION);
     }
 
@@ -353,10 +350,6 @@ class JSObject : public js::ObjectImpl
         return lastProperty()->entryCount();
     }
 
-    uint32_t propertyCountForCompilation() const {
-        return lastProperty()->entryCountForCompilation();
-    }
-
     bool hasShapeTable() const {
         return lastProperty()->hasTable();
     }
@@ -375,13 +368,13 @@ class JSObject : public js::ObjectImpl
 
     /* Whether a slot is at a fixed offset from this object. */
     bool isFixedSlot(size_t slot) {
-        return slot < numFixedSlotsForCompilation();
+        return slot < numFixedSlots();
     }
 
     /* Index into the dynamic slots array to use for a dynamic slot. */
     size_t dynamicSlotIndex(size_t slot) {
-        JS_ASSERT(slot >= numFixedSlotsForCompilation());
-        return slot - numFixedSlotsForCompilation();
+        JS_ASSERT(slot >= numFixedSlots());
+        return slot - numFixedSlots();
     }
 
     /*
@@ -416,7 +409,8 @@ class JSObject : public js::ObjectImpl
             elements[i].js::HeapSlot::~HeapSlot();
     }
 
-    void rollbackProperties(js::ExclusiveContext *cx, uint32_t slotSpan);
+    static bool rollbackProperties(js::ExclusiveContext *cx, js::HandleObject obj,
+                                   uint32_t slotSpan);
 
     void nativeSetSlot(uint32_t slot, const js::Value &value) {
         JS_ASSERT(isNative());
@@ -433,7 +427,12 @@ class JSObject : public js::ObjectImpl
         return getSlot(index);
     }
 
-    inline js::HeapSlot &getReservedSlotRef(uint32_t index) {
+    const js::HeapSlot &getReservedSlotRef(uint32_t index) const {
+        JS_ASSERT(index < JSSLOT_FREE(getClass()));
+        return getSlotRef(index);
+    }
+
+    js::HeapSlot &getReservedSlotRef(uint32_t index) {
         JS_ASSERT(index < JSSLOT_FREE(getClass()));
         return getSlotRef(index);
     }
@@ -499,6 +498,9 @@ class JSObject : public js::ObjectImpl
      * to recover this information in the object's type information after it
      * is purged on GC.
      */
+    bool isIteratedSingleton() const {
+        return lastProperty()->hasObjectFlag(js::BaseShape::ITERATED_SINGLETON);
+    }
     bool setIteratedSingleton(js::ExclusiveContext *cx) {
         return setFlag(cx, js::BaseShape::ITERATED_SINGLETON);
     }
@@ -507,6 +509,9 @@ class JSObject : public js::ObjectImpl
      * Mark an object as requiring its default 'new' type to have unknown
      * properties.
      */
+    bool isNewTypeUnknown() const {
+        return lastProperty()->hasObjectFlag(js::BaseShape::NEW_TYPE_UNKNOWN);
+    }
     static bool setNewTypeUnknown(JSContext *cx, const js::Class *clasp, JS::HandleObject obj);
 
     /* Set a new prototype for an object with a singleton type. */
@@ -667,6 +672,12 @@ class JSObject : public js::ObjectImpl
     static inline void removeDenseElementForSparseIndex(js::ExclusiveContext *cx,
                                                         js::HandleObject obj, uint32_t index);
 
+    inline js::Value getDenseOrTypedArrayElement(uint32_t idx);
+    inline bool setDenseOrTypedArrayElementIfHasType(js::ThreadSafeContext *cx, uint32_t index,
+                                                     const js::Value &val);
+    inline bool setDenseOrTypedArrayElementWithType(js::ExclusiveContext *cx, uint32_t index,
+                                                    const js::Value &val);
+
     void copyDenseElements(uint32_t dstStart, const js::Value *src, uint32_t count) {
         JS_ASSERT(dstStart + count <= getDenseCapacity());
         JSRuntime *rt = runtimeFromMainThread();
@@ -754,6 +765,7 @@ class JSObject : public js::ObjectImpl
     }
 
     inline void setShouldConvertDoubleElements();
+    inline void clearShouldConvertDoubleElements();
 
     /* Packed information for this object's elements. */
     inline bool writeToIndexWouldMarkNotPacked(uint32_t index);
@@ -824,7 +836,7 @@ class JSObject : public js::ObjectImpl
     }
 
     inline void finish(js::FreeOp *fop);
-    JS_ALWAYS_INLINE void finalize(js::FreeOp *fop);
+    MOZ_ALWAYS_INLINE void finalize(js::FreeOp *fop);
 
     static inline bool hasProperty(JSContext *cx, js::HandleObject obj,
                                    js::HandleId id, bool *foundp, unsigned flags = 0);
@@ -890,8 +902,7 @@ class JSObject : public js::ObjectImpl
     addPropertyInternal(typename js::ExecutionModeTraits<mode>::ExclusiveContextType cx,
                         JS::HandleObject obj, JS::HandleId id,
                         JSPropertyOp getter, JSStrictPropertyOp setter,
-                        uint32_t slot, unsigned attrs,
-                        unsigned flags, int shortid, js::Shape **spp,
+                        uint32_t slot, unsigned attrs, unsigned flags, js::Shape **spp,
                         bool allowDictionary);
 
   private:
@@ -907,7 +918,7 @@ class JSObject : public js::ObjectImpl
     static js::Shape *addProperty(js::ExclusiveContext *cx, JS::HandleObject, JS::HandleId id,
                                   JSPropertyOp getter, JSStrictPropertyOp setter,
                                   uint32_t slot, unsigned attrs, unsigned flags,
-                                  int shortid, bool allowDictionary = true);
+                                  bool allowDictionary = true);
 
     /* Add a data property whose id is not yet in this scope. */
     js::Shape *addDataProperty(js::ExclusiveContext *cx,
@@ -922,14 +933,14 @@ class JSObject : public js::ObjectImpl
                 JS::HandleObject obj, JS::HandleId id,
                 JSPropertyOp getter, JSStrictPropertyOp setter,
                 uint32_t slot, unsigned attrs,
-                unsigned flags, int shortid);
+                unsigned flags);
     template <js::ExecutionMode mode>
     static inline js::Shape *
     putProperty(typename js::ExecutionModeTraits<mode>::ExclusiveContextType cx,
                 JS::HandleObject obj, js::PropertyName *name,
                 JSPropertyOp getter, JSStrictPropertyOp setter,
                 uint32_t slot, unsigned attrs,
-                unsigned flags, int shortid);
+                unsigned flags);
 
     /* Change the given property into a sibling with the same id in this scope. */
     template <js::ExecutionMode mode>
@@ -1201,18 +1212,27 @@ class JSObject : public js::ObjectImpl
     void operator=(const JSObject &other) MOZ_DELETE;
 };
 
+template <class U>
+MOZ_ALWAYS_INLINE JS::Handle<U*>
+js::RootedBase<JSObject*>::as() const
+{
+    const JS::Rooted<JSObject*> &self = *static_cast<const JS::Rooted<JSObject*>*>(this);
+    JS_ASSERT(self->is<U>());
+    return Handle<U*>::fromMarkedLocation(reinterpret_cast<U* const*>(self.address()));
+}
+
 /*
  * The only sensible way to compare JSObject with == is by identity. We use
  * const& instead of * as a syntactic way to assert non-null. This leads to an
  * abundance of address-of operators to identity. Hence this overload.
  */
-static JS_ALWAYS_INLINE bool
+static MOZ_ALWAYS_INLINE bool
 operator==(const JSObject &lhs, const JSObject &rhs)
 {
     return &lhs == &rhs;
 }
 
-static JS_ALWAYS_INLINE bool
+static MOZ_ALWAYS_INLINE bool
 operator!=(const JSObject &lhs, const JSObject &rhs)
 {
     return &lhs != &rhs;
@@ -1248,10 +1268,10 @@ GetOuterObject(JSContext *cx, js::HandleObject obj)
 
 class JSValueArray {
   public:
-    jsval *array;
+    const jsval *array;
     size_t length;
 
-    JSValueArray(jsval *v, size_t c) : array(v), length(c) {}
+    JSValueArray(const jsval *v, size_t c) : array(v), length(c) {}
 };
 
 class ValueArray {
@@ -1276,6 +1296,10 @@ DenseRangeRef::mark(JSTracer *trc)
                        owner->getDenseElements() + clampedStart, "element");
 }
 #endif
+
+/* Set *resultp to tell whether obj has an own property with the given id. */
+bool
+HasOwnProperty(JSContext *cx, HandleObject obj, HandleId id, bool *resultp);
 
 template <AllowGC allowGC>
 extern bool
@@ -1312,23 +1336,27 @@ js_PopulateObject(JSContext *cx, js::HandleObject newborn, js::HandleObject prop
  * Fast access to immutable standard objects (constructors and prototypes).
  */
 extern bool
-js_GetClassObject(js::ExclusiveContext *cx, JSObject *obj, JSProtoKey key,
+js_GetClassObject(js::ExclusiveContext *cx, JSProtoKey key,
                   js::MutableHandleObject objp);
 
-/*
- * Determine if the given object is a prototype for a standard class. If so,
- * return the associated JSProtoKey. If not, return JSProto_Null.
- */
-extern JSProtoKey
-js_IdentifyClassPrototype(JSObject *obj);
+extern bool
+js_GetClassPrototype(js::ExclusiveContext *cx, JSProtoKey key,
+                     js::MutableHandleObject objp);
 
 /*
- * If protoKey is not JSProto_Null, then clasp is ignored. If protoKey is
- * JSProto_Null, clasp must non-null.
+ * Property-lookup-based access to interface and prototype objects for classes.
+ * If the class is built-in (and has a non-null JSProtoKey), these forward to
+ * js_GetClass{Object,Prototype}.
  */
+
 bool
-js_FindClassObject(js::ExclusiveContext *cx, JSProtoKey protoKey, js::MutableHandleValue vp,
-                   const js::Class *clasp = nullptr);
+js_FindClassObject(js::ExclusiveContext *cx, js::MutableHandleObject protop,
+                   const js::Class *clasp);
+
+extern bool
+js_FindClassPrototype(js::ExclusiveContext *cx, js::MutableHandleObject protop,
+                      const js::Class *clasp);
+
 
 namespace js {
 
@@ -1395,8 +1423,11 @@ CreateThis(JSContext *cx, const js::Class *clasp, js::HandleObject callee);
 extern JSObject *
 CloneObject(JSContext *cx, HandleObject obj, Handle<js::TaggedProto> proto, HandleObject parent);
 
+extern JSObject *
+DeepCloneObjectLiteral(JSContext *cx, HandleObject obj, NewObjectKind newKind = GenericObject);
+
 /*
- * Flags for the defineHow parameter of js_DefineNativeProperty.
+ * Flags for the defineHow parameter of DefineNativeProperty.
  */
 const unsigned DNP_DONT_PURGE   = 1;   /* suppress js_PurgeScopeChain */
 const unsigned DNP_UNQUALIFIED  = 2;   /* Unqualified property set.  Only used in
@@ -1409,7 +1440,7 @@ const unsigned DNP_UNQUALIFIED  = 2;   /* Unqualified property set.  Only used i
 extern bool
 DefineNativeProperty(ExclusiveContext *cx, HandleObject obj, HandleId id, HandleValue value,
                      PropertyOp getter, StrictPropertyOp setter, unsigned attrs,
-                     unsigned flags, int shortid, unsigned defineHow = 0);
+                     unsigned flags, unsigned defineHow = 0);
 
 /*
  * Specialized subroutine that allows caller to preset JSRESOLVE_* flags.
@@ -1522,11 +1553,12 @@ HasDataProperty(JSContext *cx, JSObject *obj, PropertyName *name, Value *vp)
 }
 
 extern bool
-CheckAccess(JSContext *cx, JSObject *obj, HandleId id, JSAccessMode mode,
-            MutableHandleValue v, unsigned *attrsp);
-
-extern bool
 IsDelegate(JSContext *cx, HandleObject obj, const Value &v, bool *result);
+
+// obj is a JSObject*, but we root it immediately up front. We do it
+// that way because we need a Rooted temporary in this method anyway.
+extern bool
+IsDelegateOfObject(JSContext *cx, HandleObject protoObj, JSObject* obj, bool *result);
 
 bool
 GetObjectElementOperationPure(ThreadSafeContext *cx, JSObject *obj, const Value &prop, Value *vp);
@@ -1548,7 +1580,7 @@ extern JSObject *
 ToObjectSlow(JSContext *cx, HandleValue vp, bool reportScanStack);
 
 /* For object conversion in e.g. native functions. */
-JS_ALWAYS_INLINE JSObject *
+MOZ_ALWAYS_INLINE JSObject *
 ToObject(JSContext *cx, HandleValue vp)
 {
     if (vp.isObject())
@@ -1557,13 +1589,17 @@ ToObject(JSContext *cx, HandleValue vp)
 }
 
 /* For converting stack values to objects. */
-JS_ALWAYS_INLINE JSObject *
+MOZ_ALWAYS_INLINE JSObject *
 ToObjectFromStack(JSContext *cx, HandleValue vp)
 {
     if (vp.isObject())
         return &vp.toObject();
     return ToObjectSlow(cx, vp, true);
 }
+
+template<XDRMode mode>
+bool
+XDRObjectLiteral(XDRState<mode> *xdr, MutableHandleObject obj);
 
 extern JSObject *
 CloneObjectLiteral(JSContext *cx, HandleObject parent, HandleObject srcObj);
@@ -1580,18 +1616,10 @@ extern unsigned
 js_InferFlags(JSContext *cx, unsigned defaultFlags);
 
 
-/*
- * If protoKey is not JSProto_Null, then clasp is ignored. If protoKey is
- * JSProto_Null, clasp must non-null.
- *
- * If protoKey is constant and scope is non-null, use GlobalObject's prototype
- * methods instead.
- */
-extern bool
-js_GetClassPrototype(js::ExclusiveContext *cx, JSProtoKey protoKey, js::MutableHandleObject protop,
-                     const js::Class *clasp = nullptr);
-
 namespace js {
+
+const Class *
+ProtoKeyToClass(JSProtoKey key);
 
 JSObject *
 GetClassPrototypePure(GlobalObject *global, JSProtoKey protoKey);

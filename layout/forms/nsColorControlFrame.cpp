@@ -31,6 +31,7 @@ NS_NewColorControlFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 NS_IMPL_FRAMEARENA_HELPERS(nsColorControlFrame)
 
 NS_QUERYFRAME_HEAD(nsColorControlFrame)
+  NS_QUERYFRAME_ENTRY(nsColorControlFrame)
   NS_QUERYFRAME_ENTRY(nsIAnonymousContentCreator)
 NS_QUERYFRAME_TAIL_INHERITING(nsColorControlFrameSuper)
 
@@ -48,8 +49,8 @@ nsColorControlFrame::GetType() const
   return nsGkAtoms::colorControlFrame;
 }
 
-#ifdef DEBUG
-NS_IMETHODIMP
+#ifdef DEBUG_FRAME_DUMP
+nsresult
 nsColorControlFrame::GetFrameName(nsAString& aResult) const
 {
   return MakeFrameName(NS_LITERAL_STRING("ColorControl"), aResult);
@@ -105,7 +106,7 @@ nsColorControlFrame::UpdateColor()
       NS_LITERAL_STRING("background-color:") + color, true);
 }
 
-NS_IMETHODIMP
+nsresult
 nsColorControlFrame::AttributeChanged(int32_t  aNameSpaceID,
                                       nsIAtom* aAttribute,
                                       int32_t  aModType)

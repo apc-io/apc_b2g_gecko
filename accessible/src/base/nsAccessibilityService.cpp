@@ -64,6 +64,7 @@
 #include "nsXBLPrototypeBinding.h"
 #include "nsXBLBinding.h"
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/dom/DOMStringList.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "nsDeckFrame.h"
@@ -87,6 +88,7 @@
 
 using namespace mozilla;
 using namespace mozilla::a11y;
+using namespace mozilla::dom;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Statics
@@ -162,7 +164,7 @@ NS_IMPL_ISUPPORTS_INHERITED4(nsAccessibilityService,
 
 NS_IMETHODIMP
 nsAccessibilityService::Observe(nsISupports *aSubject, const char *aTopic,
-                         const PRUnichar *aData)
+                         const char16_t *aData)
 {
   if (!nsCRT::strcmp(aTopic, NS_XPCOM_SHUTDOWN_OBSERVER_ID))
     Shutdown();
@@ -575,10 +577,9 @@ nsAccessibilityService::GetStringRole(uint32_t aRole, nsAString& aString)
 
 NS_IMETHODIMP
 nsAccessibilityService::GetStringStates(uint32_t aState, uint32_t aExtraState,
-                                        nsIDOMDOMStringList **aStringStates)
+                                        nsISupports **aStringStates)
 {
-  nsAccessibleDOMStringList* stringStates = new nsAccessibleDOMStringList();
-  NS_ENSURE_TRUE(stringStates, NS_ERROR_OUT_OF_MEMORY);
+  nsRefPtr<DOMStringList> stringStates = new DOMStringList();
 
   uint64_t state = nsAccUtils::To64State(aState, aExtraState);
 
@@ -681,12 +682,10 @@ nsAccessibilityService::GetStringStates(uint32_t aState, uint32_t aExtraState,
     stringStates->Add(NS_LITERAL_STRING("expandable"));
 
   //unknown states
-  uint32_t stringStatesLength = 0;
-  stringStates->GetLength(&stringStatesLength);
-  if (!stringStatesLength)
+  if (!stringStates->Length())
     stringStates->Add(NS_LITERAL_STRING("unknown"));
 
-  NS_ADDREF(*aStringStates = stringStates);
+  stringStates.forget(aStringStates);
   return NS_OK;
 }
 
@@ -1085,7 +1084,7 @@ nsAccessibilityService::Init()
 
   observerService->AddObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID, false);
 
-  static const PRUnichar kInitIndicator[] = { '1', 0 };
+  static const char16_t kInitIndicator[] = { '1', 0 };
   observerService->NotifyObservers(nullptr, "a11y-init-or-shutdown", kInitIndicator);
 
 #ifdef A11Y_LOG
@@ -1123,7 +1122,7 @@ nsAccessibilityService::Shutdown()
   if (observerService) {
     observerService->RemoveObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID);
 
-    static const PRUnichar kShutdownIndicator[] = { '0', 0 };
+    static const char16_t kShutdownIndicator[] = { '0', 0 };
     observerService->NotifyObservers(nullptr, "a11y-init-or-shutdown", kShutdownIndicator);
   }
 

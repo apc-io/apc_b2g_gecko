@@ -10,7 +10,7 @@
 #include "nsPresContext.h"
 #include "nsStyleContext.h"
 #include "nsCSSRendering.h"
-#include "nsINameSpaceManager.h"
+#include "nsNameSpaceManager.h"
 #include "nsIDocument.h"
 #include "nsGkAtoms.h"
 #include "nsMenuFrame.h"
@@ -149,12 +149,7 @@ nsMenuBarFrame::ToggleMenuActiveState()
     if (firstFrame) {
       // Activate the menu bar
       SetActive(true);
-
-#if (MOZ_WIDGET_GTK == 2)
-      firstFrame->OpenMenu(true);
-#else
       firstFrame->SelectMenu(true);
-#endif
       
       // Track this item for keyboard navigation.
       mCurrentMenu = firstFrame;
@@ -213,8 +208,8 @@ nsMenuBarFrame::FindMenuWithShortcut(nsIDOMKeyEvent* aKeyEvent)
       current->GetAttr(kNameSpaceID_None, nsGkAtoms::accesskey, shortcutKey);
       if (!shortcutKey.IsEmpty()) {
         ToLowerCase(shortcutKey);
-        const PRUnichar* start = shortcutKey.BeginReading();
-        const PRUnichar* end = shortcutKey.EndReading();
+        const char16_t* start = shortcutKey.BeginReading();
+        const char16_t* end = shortcutKey.EndReading();
         uint32_t ch = UTF16CharEnumerator::NextChar(&start, end);
         uint32_t index = accessKeys.IndexOf(ch);
         if (index != accessKeys.NoIndex &&
@@ -296,7 +291,7 @@ public:
   {
   }
 
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() MOZ_OVERRIDE
   {
     nsXULPopupManager* pm = nsXULPopupManager::GetInstance();
     if (!pm)

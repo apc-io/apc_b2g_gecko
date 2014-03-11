@@ -21,12 +21,13 @@
 
 using namespace js;
 
-using mozilla::DoubleIsInt32;
+using mozilla::NumberEqualsInt32;
 using mozilla::Forward;
 using mozilla::IsNaN;
 using mozilla::Move;
 using mozilla::ArrayLength;
 using JS::DoubleNaNValue;
+using JS::ForOfIterator;
 
 
 /*** OrderedHashTable ****************************************************************************/
@@ -783,7 +784,7 @@ HashableValue::setValue(JSContext *cx, HandleValue v)
     } else if (v.isDouble()) {
         double d = v.toDouble();
         int32_t i;
-        if (DoubleIsInt32(d, &i)) {
+        if (NumberEqualsInt32(d, &i)) {
             // Normalize int32_t-valued doubles to int32_t for faster hashing and testing.
             value = Int32Value(i);
         } else if (IsNaN(d)) {
@@ -896,7 +897,7 @@ MapIteratorObject::kind() const
 bool
 GlobalObject::initMapIteratorProto(JSContext *cx, Handle<GlobalObject *> global)
 {
-    JSObject *base = global->getOrCreateIteratorPrototype(cx);
+    JSObject *base = GlobalObject::getOrCreateIteratorPrototype(cx, global);
     if (!base)
         return false;
     Rooted<JSObject*> proto(cx,
@@ -915,7 +916,7 @@ MapIteratorObject::create(JSContext *cx, HandleObject mapobj, ValueMap *data,
                           MapObject::IteratorKind kind)
 {
     Rooted<GlobalObject *> global(cx, &mapobj->global());
-    Rooted<JSObject*> proto(cx, global->getOrCreateMapIteratorPrototype(cx));
+    Rooted<JSObject*> proto(cx, GlobalObject::getOrCreateMapIteratorPrototype(cx, global));
     if (!proto)
         return nullptr;
 
@@ -970,10 +971,11 @@ MapIteratorObject::next_impl(JSContext *cx, CallArgs args)
             break;
 
           case MapObject::Entries: {
-            Value pair[2] = { range->front().key.get(), range->front().value };
-            AutoValueArray root(cx, pair, ArrayLength(pair));
+            JS::AutoValueArray<2> pair(cx);
+            pair[0].set(range->front().key.get());
+            pair[1].set(range->front().value);
 
-            JSObject *pairobj = NewDenseCopiedArray(cx, ArrayLength(pair), pair);
+            JSObject *pairobj = NewDenseCopiedArray(cx, pair.length(), pair.begin());
             if (!pairobj)
                 return false;
             value.setObject(*pairobj);
@@ -1014,7 +1016,6 @@ const Class MapObject::class_ = {
     JS_ResolveStub,
     JS_ConvertStub,
     finalize,
-    nullptr,                 // checkAccess
     nullptr,                 // call
     nullptr,                 // hasInstance
     nullptr,                 // construct
@@ -1047,7 +1048,7 @@ InitClass(JSContext *cx, Handle<GlobalObject*> global, const Class *clasp, JSPro
         return nullptr;
     proto->setPrivate(nullptr);
 
-    Rooted<JSFunction*> ctor(cx, global->createConstructor(cx, construct, ClassName(key, cx), 1));
+    Rooted<JSFunction*> ctor(cx, global->createConstructor(cx, construct, ClassName(key, cx), 0));
     if (!ctor ||
         !LinkConstructorAndPrototype(cx, ctor, proto) ||
         !DefinePropertiesAndBrand(cx, proto, properties, methods) ||
@@ -1492,7 +1493,7 @@ SetIteratorObject::kind() const
 bool
 GlobalObject::initSetIteratorProto(JSContext *cx, Handle<GlobalObject*> global)
 {
-    JSObject *base = global->getOrCreateIteratorPrototype(cx);
+    JSObject *base = GlobalObject::getOrCreateIteratorPrototype(cx, global);
     if (!base)
         return false;
     RootedObject proto(cx, NewObjectWithGivenProto(cx, &SetIteratorObject::class_, base, global));
@@ -1510,7 +1511,7 @@ SetIteratorObject::create(JSContext *cx, HandleObject setobj, ValueSet *data,
                           SetObject::IteratorKind kind)
 {
     Rooted<GlobalObject *> global(cx, &setobj->global());
-    Rooted<JSObject*> proto(cx, global->getOrCreateSetIteratorPrototype(cx));
+    Rooted<JSObject*> proto(cx, GlobalObject::getOrCreateSetIteratorPrototype(cx, global));
     if (!proto)
         return nullptr;
 
@@ -1561,10 +1562,11 @@ SetIteratorObject::next_impl(JSContext *cx, CallArgs args)
             break;
 
           case SetObject::Entries: {
-            Value pair[2] = { range->front().get(), range->front().get() };
-            AutoValueArray root(cx, pair, 2);
+            JS::AutoValueArray<2> pair(cx);
+            pair[0].set(range->front().get());
+            pair[1].set(range->front().get());
 
-            JSObject *pairObj = NewDenseCopiedArray(cx, 2, pair);
+            JSObject *pairObj = NewDenseCopiedArray(cx, 2, pair.begin());
             if (!pairObj)
               return false;
             value.setObject(*pairObj);
@@ -1605,7 +1607,6 @@ const Class SetObject::class_ = {
     JS_ResolveStub,
     JS_ConvertStub,
     finalize,
-    nullptr,                 // checkAccess
     nullptr,                 // call
     nullptr,                 // hasInstance
     nullptr,                 // construct

@@ -136,10 +136,13 @@ nsDOMFileBase::GetPath(nsAString &aPath)
 }
 
 NS_IMETHODIMP
-nsDOMFileBase::GetLastModifiedDate(JSContext* cx, JS::Value *aLastModifiedDate)
+nsDOMFileBase::GetLastModifiedDate(JSContext* cx, JS::MutableHandle<JS::Value> aLastModifiedDate)
 {
-  JSObject* date = JS_NewDateObjectMsec(cx, JS_Now() / PR_USEC_PER_MSEC);
-  aLastModifiedDate->setObject(*date);
+  JS::Rooted<JSObject*> date(cx, JS_NewDateObjectMsec(cx, JS_Now() / PR_USEC_PER_MSEC));
+  if (!date) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+  aLastModifiedDate.setObject(*date);
   return NS_OK;
 }
 
@@ -256,29 +259,6 @@ nsDOMFileBase::Slice(int64_t aStart, int64_t aEnd,
                        aContentType).get();
 
   return *aBlob ? NS_OK : NS_ERROR_UNEXPECTED;
-}
-
-NS_IMETHODIMP
-nsDOMFileBase::MozSlice(int64_t aStart, int64_t aEnd,
-                        const nsAString& aContentType, 
-                        JSContext* aCx,
-                        uint8_t optional_argc,
-                        nsIDOMBlob **aBlob)
-{
-  MOZ_ASSERT(NS_IsMainThread());
-
-  nsIScriptGlobalObject* sgo = nsJSUtils::GetDynamicScriptGlobal(aCx);
-  if (sgo) {
-    nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(sgo);
-    if (window) {
-      nsCOMPtr<nsIDocument> document = window->GetExtantDoc();
-      if (document) {
-        document->WarnOnceAbout(nsIDocument::eMozSlice);
-      }
-    }
-  }
-
-  return Slice(aStart, aEnd, aContentType, optional_argc, aBlob);
 }
 
 NS_IMETHODIMP
@@ -440,6 +420,12 @@ nsDOMFileBase::SetMutable(bool aMutable)
   return rv;
 }
 
+NS_IMETHODIMP_(bool)
+nsDOMFileBase::IsMemoryFile(void)
+{
+  return false;
+}
+
 ////////////////////////////////////////////////////////////////////////////
 // nsDOMFile implementation
 
@@ -502,7 +488,7 @@ nsDOMFileFile::GetMozFullPathInternal(nsAString &aFilename)
 }
 
 NS_IMETHODIMP
-nsDOMFileFile::GetLastModifiedDate(JSContext* cx, JS::Value* aLastModifiedDate)
+nsDOMFileFile::GetLastModifiedDate(JSContext* cx, JS::MutableHandle<JS::Value> aLastModifiedDate)
 {
   NS_ASSERTION(mIsFile, "Should only be called on files");
 
@@ -517,11 +503,11 @@ nsDOMFileFile::GetLastModifiedDate(JSContext* cx, JS::Value* aLastModifiedDate)
 
   JSObject* date = JS_NewDateObjectMsec(cx, msecs);
   if (date) {
-    aLastModifiedDate->setObject(*date);
+    aLastModifiedDate.setObject(*date);
   }
   else {
     date = JS_NewDateObjectMsec(cx, JS_Now() / PR_USEC_PER_MSEC);
-    aLastModifiedDate->setObject(*date);
+    aLastModifiedDate.setObject(*date);
   }
 
   return NS_OK;
@@ -607,7 +593,7 @@ void
 nsDOMFileFile::SetPath(const nsAString& aPath)
 {
   MOZ_ASSERT(aPath.IsEmpty() ||
-             aPath[aPath.Length() - 1] == PRUnichar('/'),
+             aPath[aPath.Length() - 1] == char16_t('/'),
              "Path must end with a path separator");
   mPath = aPath;
 }
@@ -631,6 +617,12 @@ nsDOMMemoryFile::GetInternalStream(nsIInputStream **aStream)
     return NS_ERROR_FAILURE;
 
   return DataOwnerAdapter::Create(mDataOwner, mStart, mLength, aStream);
+}
+
+NS_IMETHODIMP_(bool)
+nsDOMMemoryFile::IsMemoryFile(void)
+{
+  return true;
 }
 
 /* static */ StaticMutex
@@ -688,9 +680,7 @@ public:
           nsPrintfCString(
             "explicit/dom/memory-file-data/large/file(length=%llu, sha1=%s)",
             owner->mLength, digestString.get()),
-          nsIMemoryReporter::KIND_HEAP,
-          nsIMemoryReporter::UNITS_BYTES,
-          size,
+          KIND_HEAP, UNITS_BYTES, size,
           nsPrintfCString(
             "Memory used to back a memory file of length %llu bytes.  The file "
             "has a sha1 of %s.\n\n"
@@ -707,9 +697,7 @@ public:
       nsresult rv = aCallback->Callback(
         /* process */ NS_LITERAL_CSTRING(""),
         NS_LITERAL_CSTRING("explicit/dom/memory-file-data/small"),
-        nsIMemoryReporter::KIND_HEAP,
-        nsIMemoryReporter::UNITS_BYTES,
-        smallObjectsTotal,
+        KIND_HEAP, UNITS_BYTES, smallObjectsTotal,
         nsPrintfCString(
           "Memory used to back small memory files (less than %d bytes each).\n\n"
           "Note that the allocator may round up a memory file's length -- "

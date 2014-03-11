@@ -58,8 +58,6 @@ public:
   nsresult GetInputStream(nsIInputStream** aInputStream);
   nsresult GetSize(uint64_t* aSize);
 
-  static bool PrefEnabled();
-
 public: // for the ArchiveRequest:
   nsresult RegisterRequest(ArchiveRequest* aRequest);
 
@@ -81,7 +79,7 @@ protected:
   nsCOMPtr<nsIDOMBlob> mBlob;
 
   // The window is needed by the requests
-  nsCOMPtr<nsIDOMWindow> mWindow;
+  nsCOMPtr<nsPIDOMWindow> mWindow;
 
   // Are we ready to return data?
   enum {

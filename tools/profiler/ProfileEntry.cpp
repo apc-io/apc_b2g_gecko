@@ -340,9 +340,11 @@ void ThreadProfile::BuildJSObject(Builder& b,
   typename Builder::RootedArray samples(b.context(), b.CreateArray());
   b.DefineProperty(profile, "samples", samples);
 
+  typename Builder::RootedArray markers(b.context(), b.CreateArray());
+  b.DefineProperty(profile, "markers", markers);
+
   typename Builder::RootedObject sample(b.context());
   typename Builder::RootedArray frames(b.context());
-  typename Builder::RootedArray markers(b.context());
 
   int readPos = mReadPos;
   while (readPos != mLastFlushPos) {
@@ -363,24 +365,9 @@ void ThreadProfile::BuildJSObject(Builder& b,
     }
 
     switch (entry.mTagName) {
-      case 's':
-        sample = b.CreateObject();
-        b.DefineProperty(sample, "name", tagStringData);
-        frames = b.CreateArray();
-        b.DefineProperty(sample, "frames", frames);
-        b.ArrayPush(samples, sample);
-        // Created lazily
-        markers = nullptr;
-        break;
       case 'm':
         {
-          if (sample) {
-            if (!markers) {
-              markers = b.CreateArray();
-              b.DefineProperty(sample, "marker", markers);
-            }
-            entry.getMarker()->BuildJSObject(b, markers);
-          }
+          entry.getMarker()->BuildJSObject(b, markers);
         }
         break;
       case 'r':
@@ -411,6 +398,13 @@ void ThreadProfile::BuildJSObject(Builder& b,
           }
         }
         break;
+      case 's':
+        sample = b.CreateObject();
+        b.DefineProperty(sample, "name", tagStringData);
+        frames = b.CreateArray();
+        b.DefineProperty(sample, "frames", frames);
+        b.ArrayPush(samples, sample);
+        // Fall though to create a label for the 's' tag
       case 'c':
       case 'l':
         {

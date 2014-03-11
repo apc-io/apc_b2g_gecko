@@ -8,6 +8,7 @@
 const {Cc, Ci, Cu} = require("chrome");
 
 loader.lazyImporter(this, "VariablesView", "resource:///modules/devtools/VariablesView.jsm");
+loader.lazyImporter(this, "escapeHTML", "resource:///modules/devtools/VariablesView.jsm");
 
 const Heritage = require("sdk/core/heritage");
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
@@ -65,6 +66,9 @@ const COMPAT = {
 
   // The indent of a console group in pixels.
   GROUP_INDENT: 12,
+
+  // The default indent in pixels, applied even without any groups.
+  GROUP_INDENT_DEFAULT: 6,
 };
 
 // A map from the console API call levels to the Web Console severities.
@@ -82,7 +86,8 @@ const CONSOLE_API_LEVELS_TO_SEVERITIES = {
   groupCollapsed: "log",
   groupEnd: "log",
   time: "log",
-  timeEnd: "log"
+  timeEnd: "log",
+  count: "log"
 };
 
 // Array of known message source URLs we need to hide from output.
@@ -143,6 +148,18 @@ ConsoleOutput.prototype = {
    */
   get webConsoleClient() {
     return this.owner.webConsoleClient;
+  },
+
+  /**
+   * Release an actor.
+   *
+   * @private
+   * @param string actorId
+   *        The actor ID you want to release.
+   */
+  _releaseObject: function(actorId)
+  {
+    this.owner._releaseObject(actorId);
   },
 
   /**
@@ -763,6 +780,12 @@ Messages.Simple.prototype = Heritage.extend(Messages.BaseMessage.prototype,
     let icon = this.document.createElementNS(XHTML_NS, "span");
     icon.className = "icon";
 
+    // Apply the current group by indenting appropriately.
+    // TODO: remove this once bug 778766 is fixed.
+    let iconMarginLeft = this._groupDepthCompat * COMPAT.GROUP_INDENT +
+                         COMPAT.GROUP_INDENT_DEFAULT;
+    icon.style.marginLeft = iconMarginLeft + "px";
+
     let body = this._renderBody();
     this._repeatID.textContent += "|" + body.textContent;
 
@@ -847,7 +870,7 @@ Messages.Simple.prototype = Heritage.extend(Messages.BaseMessage.prototype,
 
     let repeatNode = this.document.createElementNS(XHTML_NS, "span");
     repeatNode.setAttribute("value", "1");
-    repeatNode.className = "repeats";
+    repeatNode.className = "message-repeats";
     repeatNode.textContent = 1;
     repeatNode._uid = this.getRepeatID();
     return repeatNode;
@@ -980,30 +1003,130 @@ Messages.Extended.prototype = Heritage.extend(Messages.Simple.prototype,
       return piece(this);
     }
 
-    let isPrimitive = VariablesView.isPrimitive({ value: piece });
-    let isActorGrip = WebConsoleUtils.isActorGrip(piece);
+    return this._renderValueGrip(piece);
+  },
+
+  /**
+   * Render a grip that represents a value received from the server. This method
+   * picks the appropriate widget to render the value with.
+   *
+   * @private
+   * @param object grip
+   *        The value grip received from the server.
+   * @param object options
+   *        Options for displaying the value. Available options:
+   *        - noStringQuotes - boolean that tells the renderer to not use quotes
+   *        around strings.
+   *        - concise - boolean that tells the renderer to compactly display the
+   *        grip. This is typically set to true when the object needs to be
+   *        displayed in an array preview, or as a property value in object
+   *        previews, etc.
+   * @return DOMElement
+   *         The DOM element that displays the given grip.
+   */
+  _renderValueGrip: function(grip, options = {})
+  {
+    let isPrimitive = VariablesView.isPrimitive({ value: grip });
+    let isActorGrip = WebConsoleUtils.isActorGrip(grip);
+    let noStringQuotes = !this._quoteStrings;
+    if ("noStringQuotes" in options) {
+      noStringQuotes = options.noStringQuotes;
+    }
 
     if (isActorGrip) {
-      this._repeatID.actors.add(piece.actor);
+      this._repeatID.actors.add(grip.actor);
 
       if (!isPrimitive) {
-        let widget = new Widgets.JSObject(this, piece).render();
-        return widget.element;
+        return this._renderObjectActor(grip, options);
       }
-      if (piece.type == "longString") {
-        let widget = new Widgets.LongString(this, piece).render();
+      if (grip.type == "longString") {
+        let widget = new Widgets.LongString(this, grip, options).render();
         return widget.element;
       }
     }
 
-    let result = this.document.createDocumentFragment();
-    if (!isPrimitive || (!this._quoteStrings && typeof piece == "string")) {
-      result.textContent = piece;
+    let result = this.document.createElementNS(XHTML_NS, "span");
+    if (isPrimitive) {
+      let className = this.getClassNameForValueGrip(grip);
+      if (className) {
+        result.className = className;
+      }
+
+      result.textContent = VariablesView.getString(grip, {
+        noStringQuotes: noStringQuotes,
+        concise: options.concise,
+      });
     } else {
-      result.textContent = VariablesView.getString(piece);
+      result.textContent = grip;
     }
 
     return result;
+  },
+
+  /**
+   * Get a CodeMirror-compatible class name for a given value grip.
+   *
+   * @param object grip
+   *        Value grip from the server.
+   * @return string
+   *         The class name for the grip.
+   */
+  getClassNameForValueGrip: function(grip)
+  {
+    let map = {
+      "number": "cm-number",
+      "longstring": "cm-string",
+      "string": "cm-string",
+      "regexp": "cm-string-2",
+      "boolean": "cm-atom",
+      "-infinity": "cm-atom",
+      "infinity": "cm-atom",
+      "null": "cm-atom",
+      "undefined": "cm-atom",
+    };
+
+    let className = map[typeof grip];
+    if (!className && grip && grip.type) {
+      className = map[grip.type.toLowerCase()];
+    }
+    if (!className && grip && grip.class) {
+      className = map[grip.class.toLowerCase()];
+    }
+
+    return className;
+  },
+
+  /**
+   * Display an object actor with the appropriate renderer.
+   *
+   * @private
+   * @param object objectActor
+   *        The ObjectActor to display.
+   * @param object options
+   *        Options to use for displaying the ObjectActor.
+   * @see this._renderValueGrip for the available options.
+   * @return DOMElement
+   *         The DOM element that displays the object actor.
+   */
+  _renderObjectActor: function(objectActor, options = {})
+  {
+    let widget = null;
+    let {preview} = objectActor;
+
+    if (preview && preview.kind) {
+      widget = Widgets.ObjectRenderers.byKind[preview.kind];
+    }
+
+    if (!widget || (widget.canRender && !widget.canRender(objectActor))) {
+      widget = Widgets.ObjectRenderers.byClass[objectActor.class];
+    }
+
+    if (!widget || (widget.canRender && !widget.canRender(objectActor))) {
+      widget = Widgets.JSObject;
+    }
+
+    let instance = new widget(this, objectActor, options).render();
+    return instance.element;
   },
 }); // Messages.Extended.prototype
 
@@ -1032,6 +1155,7 @@ Messages.JavaScriptEvalOutput = function(evalResponse, errorMessage)
   }
 
   let options = {
+    className: "cm-s-mozilla",
     timestamp: evalResponse.timestamp,
     category: "output",
     severity: severity,
@@ -1053,6 +1177,7 @@ Messages.JavaScriptEvalOutput.prototype = Messages.Extended.prototype;
 Messages.ConsoleGeneric = function(packet)
 {
   let options = {
+    className: "cm-s-mozilla",
     timestamp: packet.timeStamp,
     category: "webdev",
     severity: CONSOLE_API_LEVELS_TO_SEVERITIES[packet.level],
@@ -1063,7 +1188,20 @@ Messages.ConsoleGeneric = function(packet)
       line: packet.lineNumber,
     },
   };
-  Messages.Extended.call(this, packet.arguments, options);
+  switch (packet.level) {
+    case "count": {
+      let counter = packet.counter, label = counter.label;
+      if (!label) {
+        label = l10n.getStr("noCounterLabel");
+      }
+      Messages.Extended.call(this, [label+ ": " + counter.count], options);
+      break;
+    }
+    default:
+      Messages.Extended.call(this, packet.arguments, options);
+      break;
+  }
+
   this._repeatID.consoleApiLevel = packet.level;
 };
 
@@ -1075,6 +1213,134 @@ Messages.ConsoleGeneric.prototype = Heritage.extend(Messages.Extended.prototype,
   },
 }); // Messages.ConsoleGeneric.prototype
 
+/**
+ * The ConsoleTrace message is used for console.trace() calls.
+ *
+ * @constructor
+ * @extends Messages.Simple
+ * @param object packet
+ *        The Console API call packet received from the server.
+ */
+Messages.ConsoleTrace = function(packet)
+{
+  let options = {
+    className: "consoleTrace cm-s-mozilla",
+    timestamp: packet.timeStamp,
+    category: "webdev",
+    severity: CONSOLE_API_LEVELS_TO_SEVERITIES[packet.level],
+    private: packet.private,
+    filterDuplicates: true,
+    location: {
+      url: packet.filename,
+      line: packet.lineNumber,
+    },
+  };
+
+  this._renderStack = this._renderStack.bind(this);
+  Messages.Simple.call(this, this._renderStack, options);
+
+  this._repeatID.consoleApiLevel = packet.level;
+  this._stacktrace = this._repeatID.stacktrace = packet.stacktrace;
+  this._arguments = packet.arguments;
+};
+
+Messages.ConsoleTrace.prototype = Heritage.extend(Messages.Simple.prototype,
+{
+  /**
+   * Holds the stackframes received from the server.
+   *
+   * @private
+   * @type array
+   */
+  _stacktrace: null,
+
+  /**
+   * Holds the arguments the content script passed to the console.trace()
+   * method. This array is cleared when the message is initialized, and
+   * associated actors are released.
+   *
+   * @private
+   * @type array
+   */
+  _arguments: null,
+
+  init: function()
+  {
+    let result = Messages.Simple.prototype.init.apply(this, arguments);
+
+    // We ignore console.trace() arguments. Release object actors.
+    if (Array.isArray(this._arguments)) {
+      for (let arg of this._arguments) {
+        if (WebConsoleUtils.isActorGrip(arg)) {
+          this.output._releaseObject(arg.actor);
+        }
+      }
+    }
+    this._arguments = null;
+
+    return result;
+  },
+
+  /**
+   * Render the stack frames.
+   *
+   * @private
+   * @return DOMElement
+   */
+  _renderStack: function()
+  {
+    let cmvar = this.document.createElementNS(XHTML_NS, "span");
+    cmvar.className = "cm-variable";
+    cmvar.textContent = "console";
+
+    let cmprop = this.document.createElementNS(XHTML_NS, "span");
+    cmprop.className = "cm-property";
+    cmprop.textContent = "trace";
+
+    let title = this.document.createElementNS(XHTML_NS, "span");
+    title.className = "title devtools-monospace";
+    title.appendChild(cmvar);
+    title.appendChild(this.document.createTextNode("."));
+    title.appendChild(cmprop);
+    title.appendChild(this.document.createTextNode("():"));
+
+    let repeatNode = Messages.Simple.prototype._renderRepeatNode.call(this);
+    let location = Messages.Simple.prototype._renderLocation.call(this);
+    if (location) {
+      location.target = "jsdebugger";
+    }
+
+    let widget = new Widgets.Stacktrace(this, this._stacktrace).render();
+
+    let body = this.document.createElementNS(XHTML_NS, "div");
+    body.appendChild(title);
+    if (repeatNode) {
+      body.appendChild(repeatNode);
+    }
+    if (location) {
+      body.appendChild(location);
+    }
+    body.appendChild(this.document.createTextNode("\n"));
+
+    let frag = this.document.createDocumentFragment();
+    frag.appendChild(body);
+    frag.appendChild(widget.element);
+
+    return frag;
+  },
+
+  _renderBody: function()
+  {
+    let body = Messages.Simple.prototype._renderBody.apply(this, arguments);
+    body.classList.remove("devtools-monospace");
+    return body;
+  },
+
+  // no-op for the message location and .repeats elements.
+  // |this._renderStack| handles customized message output.
+  _renderLocation: function() { },
+  _renderRepeatNode: function() { },
+}); // Messages.ConsoleTrace.prototype
 
 let Widgets = {};
 
@@ -1128,6 +1394,68 @@ Widgets.BaseWidget.prototype = {
    * Destroy this widget instance.
    */
   destroy: function() { },
+
+  /**
+   * Helper for creating DOM elements for widgets.
+   *
+   * Usage:
+   *   this.el("tag#id.class.names"); // create element "tag" with ID "id" and
+   *   two class names, .class and .names.
+   *
+   *   this.el("span", { attr1: "value1", ... }) // second argument can be an
+   *   object that holds element attributes and values for the new DOM element.
+   *
+   *   this.el("p", { attr1: "value1", ... }, "text content"); // the third
+   *   argument can include the default .textContent of the new DOM element.
+   *
+   *   this.el("p", "text content"); // if the second argument is not an object,
+   *   it will be used as .textContent for the new DOM element.
+   *
+   * @param string tagNameIdAndClasses
+   *        Tag name for the new element, optionally followed by an ID and/or
+   *        class names. Examples: "span", "div#fooId", "div.class.names",
+   *        "p#id.class".
+   * @param string|object [attributesOrTextContent]
+   *        If this argument is an object it will be used to set the attributes
+   *        of the new DOM element. Otherwise, the value becomes the
+   *        .textContent of the new DOM element.
+   * @param string [textContent]
+   *        If this argument is provided the value is used as the textContent of
+   *        the new DOM element.
+   * @return DOMElement
+   *         The new DOM element.
+   */
+  el: function(tagNameIdAndClasses)
+  {
+    let attrs, text;
+    if (typeof arguments[1] == "object") {
+      attrs = arguments[1];
+      text = arguments[2];
+    } else {
+      text = arguments[1];
+    }
+
+    let tagName = tagNameIdAndClasses.split(/#|\./)[0];
+
+    let elem = this.document.createElementNS(XHTML_NS, tagName);
+    for (let name of Object.keys(attrs || {})) {
+      elem.setAttribute(name, attrs[name]);
+    }
+    if (text !== undefined && text !== null) {
+      elem.textContent = text;
+    }
+
+    let idAndClasses = tagNameIdAndClasses.match(/([#.][^#.]+)/g);
+    for (let idOrClass of (idAndClasses || [])) {
+      if (idOrClass.charAt(0) == "#") {
+        elem.id = idOrClass.substr(1);
+      } else {
+        elem.classList.add(idOrClass.substr(1));
+      }
+    }
+
+    return elem;
+  },
 };
 
 /**
@@ -1163,29 +1491,29 @@ Widgets.MessageTimestamp.prototype = Heritage.extend(Widgets.BaseWidget.prototyp
     this.element.className = "timestamp devtools-monospace";
     this.element.textContent = l10n.timestampString(this.timestamp) + " ";
 
-    // Apply the current group by indenting appropriately.
-    // TODO: remove this once bug 778766 is fixed.
-    this.element.style.marginRight = this.message._groupDepthCompat *
-                                     COMPAT.GROUP_INDENT + "px";
-
     return this;
   },
 }); // Widgets.MessageTimestamp.prototype
 
 
 /**
- * The JavaScript object widget.
+ * Widget used for displaying ObjectActors that have no specialised renderers.
  *
  * @constructor
  * @param object message
  *        The owning message.
  * @param object objectActor
  *        The ObjectActor to display.
+ * @param object [options]
+ *        Options for displaying the given ObjectActor. See
+ *        Messages.Extended.prototype._renderValueGrip for the available
+ *        options.
  */
-Widgets.JSObject = function(message, objectActor)
+Widgets.JSObject = function(message, objectActor, options = {})
 {
   Widgets.BaseWidget.call(this, message);
   this.objectActor = objectActor;
+  this.options = options;
   this._onClick = this._onClick.bind(this);
 };
 
@@ -1199,17 +1527,65 @@ Widgets.JSObject.prototype = Heritage.extend(Widgets.BaseWidget.prototype,
 
   render: function()
   {
-    if (this.element) {
-      return this;
+    if (!this.element) {
+      this._render();
     }
 
-    let anchor = this.element = this.document.createElementNS(XHTML_NS, "a");
-    anchor.href = "#";
-    anchor.draggable = false;
-    anchor.textContent = VariablesView.getString(this.objectActor);
-    this.message._addLinkCallback(anchor, this._onClick);
-
     return this;
+  },
+
+  _render: function()
+  {
+    let str = VariablesView.getString(this.objectActor, this.options);
+    let className = this.message.getClassNameForValueGrip(this.objectActor);
+    if (!className && this.objectActor.class == "Object") {
+      className = "cm-variable";
+    }
+
+    this.element = this._anchor(str, { className: className });
+  },
+
+  /**
+   * Render an anchor with a given text content and link.
+   *
+   * @private
+   * @param string text
+   *        Text to show in the anchor.
+   * @param object [options]
+   *        Available options:
+   *        - onClick (function): "click" event handler.By default a click on
+   *        the anchor opens the variables view for the current object actor
+   *        (this.objectActor).
+   *        - href (string): if given the string is used as a link, and clicks
+   *        on the anchor open the link in a new tab.
+   *        - appendTo (DOMElement): append the element to the given DOM
+   *        element. If not provided, the anchor is appended to |this.element|
+   *        if it is available. If |appendTo| is provided and if it is a falsy
+   *        value, the anchor is not appended to any element.
+   * @return DOMElement
+   *         The DOM element of the new anchor.
+   */
+  _anchor: function(text, options = {})
+  {
+    if (!options.onClick && !options.href) {
+      options.onClick = this._onClick;
+    }
+
+    let anchor = this.el("a", {
+      class: options.className,
+      draggable: false,
+      href: options.href || "#",
+    }, text);
+
+    this.message._addLinkCallback(anchor, !options.href ? options.onClick : null);
+
+    if (options.appendTo) {
+      options.appendTo.appendChild(anchor);
+    } else if (!("appendTo" in options) && this.element) {
+      this.element.appendChild(anchor);
+    }
+
+    return anchor;
   },
 
   /**
@@ -1219,12 +1595,628 @@ Widgets.JSObject.prototype = Heritage.extend(Widgets.BaseWidget.prototype,
   _onClick: function()
   {
     this.output.openVariablesView({
-      label: this.element.textContent,
+      label: VariablesView.getString(this.objectActor, { concise: true }),
       objectActor: this.objectActor,
       autofocus: true,
     });
   },
+
+  /**
+   * Add a string to the message.
+   *
+   * @private
+   * @param string str
+   *        String to add.
+   * @param DOMElement [target = this.element]
+   *        Optional DOM element to append the string to. The default is
+   *        this.element.
+   */
+  _text: function(str, target = this.element)
+  {
+    target.appendChild(this.document.createTextNode(str));
+  },
 }); // Widgets.JSObject.prototype
+
+Widgets.ObjectRenderers = {};
+Widgets.ObjectRenderers.byKind = {};
+Widgets.ObjectRenderers.byClass = {};
+
+/**
+ * Add an object renderer.
+ *
+ * @param object obj
+ *        An object that represents the renderer. Properties:
+ *        - byClass (string, optional): this renderer will be used for the given
+ *        object class.
+ *        - byKind (string, optional): this renderer will be used for the given
+ *        object kind.
+ *        One of byClass or byKind must be provided.
+ *        - extends (object, optional): the renderer object extends the given
+ *        object. Default: Widgets.JSObject.
+ *        - canRender (function, optional): this method is invoked when
+ *        a candidate object needs to be displayed. The method is invoked as
+ *        a static method, as such, none of the properties of the renderer
+ *        object will be available. You get one argument: the object actor grip
+ *        received from the server. If the method returns true, then this
+ *        renderer is used for displaying the object, otherwise not.
+ *        - initialize (function, optional): the constructor of the renderer
+ *        widget. This function is invoked with the following arguments: the
+ *        owner message object instance, the object actor grip to display, and
+ *        an options object. See Messages.Extended.prototype._renderValueGrip()
+ *        for details about the options object.
+ *        - render (function, required): the method that displays the given
+ *        object actor.
+ */
+Widgets.ObjectRenderers.add = function(obj)
+{
+  let extendObj = obj.extends || Widgets.JSObject;
+
+  let constructor = function() {
+    if (obj.initialize) {
+      obj.initialize.apply(this, arguments);
+    } else {
+      extendObj.apply(this, arguments);
+    }
+  };
+
+  let proto = WebConsoleUtils.cloneObject(obj, false, function(key) {
+    if (key == "initialize" || key == "canRender" ||
+        (key == "render" && extendObj === Widgets.JSObject)) {
+      return false;
+    }
+    return true;
+  });
+
+  if (extendObj === Widgets.JSObject) {
+    proto._render = obj.render;
+  }
+
+  constructor.canRender = obj.canRender;
+  constructor.prototype = Heritage.extend(extendObj.prototype, proto);
+
+  if (obj.byClass) {
+    Widgets.ObjectRenderers.byClass[obj.byClass] = constructor;
+  } else if (obj.byKind) {
+    Widgets.ObjectRenderers.byKind[obj.byKind] = constructor;
+  } else {
+    throw new Error("You are adding an object renderer without any byClass or " +
+                    "byKind property.");
+  }
+};
+
+
+/**
+ * The widget used for displaying Date objects.
+ */
+Widgets.ObjectRenderers.add({
+  byClass: "Date",
+
+  render: function()
+  {
+    let {preview} = this.objectActor;
+    this.element = this.el("span.class-" + this.objectActor.class);
+
+    let anchorText = this.objectActor.class;
+    let anchorClass = "cm-variable";
+    if ("timestamp" in preview && typeof preview.timestamp != "number") {
+      anchorText = new Date(preview.timestamp).toString(); // invalid date
+      anchorClass = "";
+    }
+
+    this._anchor(anchorText, { className: anchorClass });
+
+    if (!("timestamp" in preview) || typeof preview.timestamp != "number") {
+      return;
+    }
+
+    this._text(" ");
+
+    let elem = this.el("span.cm-string-2", new Date(preview.timestamp).toISOString());
+    this.element.appendChild(elem);
+  },
+});
+
+/**
+ * The widget used for displaying Function objects.
+ */
+Widgets.ObjectRenderers.add({
+  byClass: "Function",
+
+  render: function()
+  {
+    let grip = this.objectActor;
+    this.element = this.el("span.class-" + this.objectActor.class);
+
+    // TODO: Bug 948484 - support arrow functions and ES6 generators
+    let name = grip.userDisplayName || grip.displayName || grip.name || "";
+    name = VariablesView.getString(name, { noStringQuotes: true });
+
+    let str = this.options.concise ? name || "function " : "function " + name;
+
+    if (this.options.concise) {
+      this._anchor(name || "function", {
+        className: name ? "cm-variable" : "cm-keyword",
+      });
+      if (!name) {
+        this._text(" ");
+      }
+    } else if (name) {
+      this.element.appendChild(this.el("span.cm-keyword", "function"));
+      this._text(" ");
+      this._anchor(name, { className: "cm-variable" });
+    } else {
+      this._anchor("function", { className: "cm-keyword" });
+      this._text(" ");
+    }
+
+    this._text("(");
+
+    // TODO: Bug 948489 - Support functions with destructured parameters and
+    // rest parameters
+    let params = grip.parameterNames || [];
+    let shown = 0;
+    for (let param of params) {
+      if (shown > 0) {
+        this._text(", ");
+      }
+      this.element.appendChild(this.el("span.cm-def", param));
+      shown++;
+    }
+
+    this._text(")");
+  },
+}); // Widgets.ObjectRenderers.byClass.Function
+
+/**
+ * The widget used for displaying ArrayLike objects.
+ */
+Widgets.ObjectRenderers.add({
+  byKind: "ArrayLike",
+
+  render: function()
+  {
+    let {preview} = this.objectActor;
+    let {items} = preview;
+    this.element = this.el("span.kind-" + preview.kind);
+
+    this._anchor(this.objectActor.class, { className: "cm-variable" });
+
+    if (!items || this.options.concise) {
+      this._text("[");
+      this.element.appendChild(this.el("span.cm-number", preview.length));
+      this._text("]");
+      return this;
+    }
+
+    this._text(" [ ");
+
+    let shown = 0;
+    for (let item of items) {
+      if (shown > 0) {
+        this._text(", ");
+      }
+
+      if (item !== null) {
+        let elem = this.message._renderValueGrip(item, { concise: true });
+        this.element.appendChild(elem);
+      } else if (shown == (items.length - 1)) {
+        this._text(", ");
+      }
+
+      shown++;
+    }
+
+    if (shown < preview.length) {
+      this._text(", ");
+
+      let n = preview.length - shown;
+      let str = VariablesView.stringifiers._getNMoreString(n);
+      this._anchor(str);
+    }
+
+    this._text(" ]");
+  },
+}); // Widgets.ObjectRenderers.byKind.ArrayLike
+
+/**
+ * The widget used for displaying MapLike objects.
+ */
+Widgets.ObjectRenderers.add({
+  byKind: "MapLike",
+
+  render: function()
+  {
+    let {preview} = this.objectActor;
+    let {entries} = preview;
+
+    let container = this.element = this.el("span.kind-" + preview.kind);
+    this._anchor(this.objectActor.class, { className: "cm-variable" });
+
+    if (!entries || this.options.concise) {
+      if (typeof preview.size == "number") {
+        this._text("[");
+        container.appendChild(this.el("span.cm-number", preview.size));
+        this._text("]");
+      }
+      return;
+    }
+
+    this._text(" { ");
+
+    let shown = 0;
+    for (let [key, value] of entries) {
+      if (shown > 0) {
+        this._text(", ");
+      }
+
+      let keyElem = this.message._renderValueGrip(key, {
+        concise: true,
+        noStringQuotes: true,
+      });
+
+      // Strings are property names.
+      if (keyElem.classList && keyElem.classList.contains("cm-string")) {
+        keyElem.classList.remove("cm-string");
+        keyElem.classList.add("cm-property");
+      }
+
+      container.appendChild(keyElem);
+
+      this._text(": ");
+
+      let valueElem = this.message._renderValueGrip(value, { concise: true });
+      container.appendChild(valueElem);
+
+      shown++;
+    }
+
+    if (typeof preview.size == "number" && shown < preview.size) {
+      this._text(", ");
+
+      let n = preview.size - shown;
+      let str = VariablesView.stringifiers._getNMoreString(n);
+      this._anchor(str);
+    }
+
+    this._text(" }");
+  },
+}); // Widgets.ObjectRenderers.byKind.MapLike
+
+/**
+ * The widget used for displaying objects with a URL.
+ */
+Widgets.ObjectRenderers.add({
+  byKind: "ObjectWithURL",
+
+  render: function()
+  {
+    this.element = this._renderElement(this.objectActor,
+                                       this.objectActor.preview.url);
+  },
+
+  _renderElement: function(objectActor, url)
+  {
+    let container = this.el("span.kind-" + objectActor.preview.kind);
+
+    this._anchor(objectActor.class, {
+      className: "cm-variable",
+      appendTo: container,
+    });
+
+    if (!VariablesView.isFalsy({ value: url })) {
+      this._text(" \u2192 ", container);
+      let shortUrl = WebConsoleUtils.abbreviateSourceURL(url, {
+        onlyCropQuery: !this.options.concise
+      });
+      this._anchor(shortUrl, { href: url, appendTo: container });
+    }
+
+    return container;
+  },
+}); // Widgets.ObjectRenderers.byKind.ObjectWithURL
+
+/**
+ * The widget used for displaying objects with a string next to them.
+ */
+Widgets.ObjectRenderers.add({
+  byKind: "ObjectWithText",
+
+  render: function()
+  {
+    let {preview} = this.objectActor;
+    this.element = this.el("span.kind-" + preview.kind);
+
+    this._anchor(this.objectActor.class, { className: "cm-variable" });
+
+    if (!this.options.concise) {
+      this._text(" ");
+      this.element.appendChild(this.el("span.cm-string",
+                                       VariablesView.getString(preview.text)));
+    }
+  },
+});
+
+/**
+ * The widget used for displaying DOM event previews.
+ */
+Widgets.ObjectRenderers.add({
+  byKind: "DOMEvent",
+
+  render: function()
+  {
+    let {preview} = this.objectActor;
+
+    let container = this.element = this.el("span.kind-" + preview.kind);
+
+    this._anchor(preview.type || this.objectActor.class,
+                 { className: "cm-variable" });
+
+    if (this.options.concise) {
+      return;
+    }
+
+    if (preview.eventKind == "key" && preview.modifiers &&
+        preview.modifiers.length) {
+      this._text(" ");
+
+      let mods = 0;
+      for (let mod of preview.modifiers) {
+        if (mods > 0) {
+          this._text("-");
+        }
+        container.appendChild(this.el("span.cm-keyword", mod));
+        mods++;
+      }
+    }
+
+    this._text(" { ");
+
+    let shown = 0;
+    if (preview.target) {
+      container.appendChild(this.el("span.cm-property", "target"));
+      this._text(": ");
+      let target = this.message._renderValueGrip(preview.target, { concise: true });
+      container.appendChild(target);
+      shown++;
+    }
+
+    for (let key of Object.keys(preview.properties || {})) {
+      if (shown > 0) {
+        this._text(", ");
+      }
+
+      container.appendChild(this.el("span.cm-property", key));
+      this._text(": ");
+
+      let value = preview.properties[key];
+      let valueElem = this.message._renderValueGrip(value, { concise: true });
+      container.appendChild(valueElem);
+
+      shown++;
+    }
+
+    this._text(" }");
+  },
+}); // Widgets.ObjectRenderers.byKind.DOMEvent
+
+/**
+ * The widget used for displaying DOM node previews.
+ */
+Widgets.ObjectRenderers.add({
+  byKind: "DOMNode",
+
+  canRender: function(objectActor) {
+    let {preview} = objectActor;
+    if (!preview) {
+      return false;
+    }
+
+    switch (preview.nodeType) {
+      case Ci.nsIDOMNode.DOCUMENT_NODE:
+      case Ci.nsIDOMNode.ATTRIBUTE_NODE:
+      case Ci.nsIDOMNode.TEXT_NODE:
+      case Ci.nsIDOMNode.COMMENT_NODE:
+      case Ci.nsIDOMNode.DOCUMENT_FRAGMENT_NODE:
+        return true;
+      default:
+        return false;
+    }
+  },
+
+  render: function()
+  {
+    switch (this.objectActor.preview.nodeType) {
+      case Ci.nsIDOMNode.DOCUMENT_NODE:
+        this._renderDocumentNode();
+        break;
+      case Ci.nsIDOMNode.ATTRIBUTE_NODE: {
+        let {preview} = this.objectActor;
+        this.element = this.el("span.attributeNode.kind-" + preview.kind);
+        let attr = this._renderAttributeNode(preview.nodeName, preview.value, true);
+        this.element.appendChild(attr);
+        break;
+      }
+      case Ci.nsIDOMNode.TEXT_NODE:
+        this._renderTextNode();
+        break;
+      case Ci.nsIDOMNode.COMMENT_NODE:
+        this._renderCommentNode();
+        break;
+      case Ci.nsIDOMNode.DOCUMENT_FRAGMENT_NODE:
+        this._renderDocumentFragmentNode();
+        break;
+      default:
+        throw new Error("Unsupported nodeType: " + preview.nodeType);
+    }
+  },
+
+  _renderDocumentNode: function()
+  {
+    let fn = Widgets.ObjectRenderers.byKind.ObjectWithURL.prototype._renderElement;
+    this.element = fn.call(this, this.objectActor,
+                           this.objectActor.preview.location);
+    this.element.classList.add("documentNode");
+  },
+
+  _renderAttributeNode: function(nodeName, nodeValue, addLink)
+  {
+    let value = VariablesView.getString(nodeValue, { noStringQuotes: true });
+
+    let fragment = this.document.createDocumentFragment();
+    if (addLink) {
+      this._anchor(nodeName, { className: "cm-attribute", appendTo: fragment });
+    } else {
+      fragment.appendChild(this.el("span.cm-attribute", nodeName));
+    }
+
+    this._text("=", fragment);
+    fragment.appendChild(this.el("span.cm-string", '"' + escapeHTML(value) + '"'));
+
+    return fragment;
+  },
+
+  _renderTextNode: function()
+  {
+    let {preview} = this.objectActor;
+    this.element = this.el("span.textNode.kind-" + preview.kind);
+
+    this._anchor(preview.nodeName, { className: "cm-variable" });
+    this._text(" ");
+
+    let text = VariablesView.getString(preview.textContent);
+    this.element.appendChild(this.el("span.cm-string", text));
+  },
+
+  _renderCommentNode: function()
+  {
+    let {preview} = this.objectActor;
+    let comment = "<!-- " + VariablesView.getString(preview.textContent, {
+      noStringQuotes: true,
+    }) + " -->";
+
+    this.element = this._anchor(comment, {
+      className: "kind-" + preview.kind + " commentNode cm-comment",
+    });
+  },
+
+  _renderDocumentFragmentNode: function()
+  {
+    let {preview} = this.objectActor;
+    let {childNodes} = preview;
+    let container = this.element = this.el("span.documentFragmentNode.kind-" +
+                                           preview.kind);
+
+    this._anchor(this.objectActor.class, { className: "cm-variable" });
+
+    if (!childNodes || this.options.concise) {
+      this._text("[");
+      container.appendChild(this.el("span.cm-number", preview.childNodesLength));
+      this._text("]");
+      return;
+    }
+
+    this._text(" [ ");
+
+    let shown = 0;
+    for (let item of childNodes) {
+      if (shown > 0) {
+        this._text(", ");
+      }
+
+      let elem = this.message._renderValueGrip(item, { concise: true });
+      container.appendChild(elem);
+      shown++;
+    }
+
+    if (shown < preview.childNodesLength) {
+      this._text(", ");
+
+      let n = preview.childNodesLength - shown;
+      let str = VariablesView.stringifiers._getNMoreString(n);
+      this._anchor(str);
+    }
+
+    this._text(" ]");
+  },
+}); // Widgets.ObjectRenderers.byKind.DOMNode
+
+/**
+ * The widget used for displaying generic JS object previews.
+ */
+Widgets.ObjectRenderers.add({
+  byKind: "Object",
+
+  render: function()
+  {
+    let {preview} = this.objectActor;
+    let {ownProperties, safeGetterValues} = preview;
+
+    if ((!ownProperties && !safeGetterValues) || this.options.concise) {
+      this.element = this._anchor(this.objectActor.class,
+                                  { className: "cm-variable" });
+      return;
+    }
+
+    let container = this.element = this.el("span.kind-" + preview.kind);
+    this._anchor(this.objectActor.class, { className: "cm-variable" });
+    this._text(" { ");
+
+    let addProperty = (str) => {
+      container.appendChild(this.el("span.cm-property", str));
+    };
+
+    let shown = 0;
+    for (let key of Object.keys(ownProperties || {})) {
+      if (shown > 0) {
+        this._text(", ");
+      }
+
+      let value = ownProperties[key];
+
+      addProperty(key);
+      this._text(": ");
+
+      if (value.get) {
+        addProperty("Getter");
+      } else if (value.set) {
+        addProperty("Setter");
+      } else {
+        let valueElem = this.message._renderValueGrip(value.value, { concise: true });
+        container.appendChild(valueElem);
+      }
+
+      shown++;
+    }
+
+    let ownPropertiesShown = shown;
+
+    for (let key of Object.keys(safeGetterValues || {})) {
+      if (shown > 0) {
+        this._text(", ");
+      }
+
+      addProperty(key);
+      this._text(": ");
+
+      let value = safeGetterValues[key].getterValue;
+      let valueElem = this.message._renderValueGrip(value, { concise: true });
+      container.appendChild(valueElem);
+
+      shown++;
+    }
+
+    if (typeof preview.ownPropertiesLength == "number" &&
+        ownPropertiesShown < preview.ownPropertiesLength) {
+      this._text(", ");
+
+      let n = preview.ownPropertiesLength - ownPropertiesShown;
+      let str = VariablesView.stringifiers._getNMoreString(n);
+      this._anchor(str);
+    }
+
+    this._text(" }");
+  },
+}); // Widgets.ObjectRenderers.byKind.Object
 
 /**
  * The long string widget.
@@ -1258,7 +2250,7 @@ Widgets.LongString.prototype = Heritage.extend(Widgets.BaseWidget.prototype,
     }
 
     let result = this.element = this.document.createElementNS(XHTML_NS, "span");
-    result.className = "longString";
+    result.className = "longString cm-string";
     this._renderString(this.longStringActor.initial);
     result.appendChild(this._renderEllipsis());
 
@@ -1273,11 +2265,10 @@ Widgets.LongString.prototype = Heritage.extend(Widgets.BaseWidget.prototype,
    */
   _renderString: function(str)
   {
-    if (this.message._quoteStrings) {
-      this.element.textContent = VariablesView.getString(str);
-    } else {
-      this.element.textContent = str;
-    }
+    this.element.textContent = VariablesView.getString(str, {
+      noStringQuotes: !this.message._quoteStrings,
+      noEllipsis: true,
+    });
   },
 
   /**
@@ -1351,6 +2342,91 @@ Widgets.LongString.prototype = Heritage.extend(Widgets.BaseWidget.prototype,
     this.output.addMessage(msg);
   },
 }); // Widgets.LongString.prototype
+
+
+/**
+ * The stacktrace widget.
+ *
+ * @constructor
+ * @extends Widgets.BaseWidget
+ * @param object message
+ *        The owning message.
+ * @param array stacktrace
+ *        The stacktrace to display, array of frames as supplied by the server,
+ *        over the remote protocol.
+ */
+Widgets.Stacktrace = function(message, stacktrace)
+{
+  Widgets.BaseWidget.call(this, message);
+  this.stacktrace = stacktrace;
+};
+
+Widgets.Stacktrace.prototype = Heritage.extend(Widgets.BaseWidget.prototype,
+{
+  /**
+   * The stackframes received from the server.
+   * @type array
+   */
+  stacktrace: null,
+
+  render: function()
+  {
+    if (this.element) {
+      return this;
+    }
+
+    let result = this.element = this.document.createElementNS(XHTML_NS, "ul");
+    result.className = "stacktrace devtools-monospace";
+
+    for (let frame of this.stacktrace) {
+      result.appendChild(this._renderFrame(frame));
+    }
+
+    return this;
+  },
+
+  /**
+   * Render a frame object received from the server.
+   *
+   * @param object frame
+   *        The stack frame to display. This object should have the following
+   *        properties: functionName, filename and lineNumber.
+   * @return DOMElement
+   *         The DOM element to display for the given frame.
+   */
+  _renderFrame: function(frame)
+  {
+    let fn = this.document.createElementNS(XHTML_NS, "span");
+    fn.className = "function";
+    if (frame.functionName) {
+      let span = this.document.createElementNS(XHTML_NS, "span");
+      span.className = "cm-variable";
+      span.textContent = frame.functionName;
+      fn.appendChild(span);
+      fn.appendChild(this.document.createTextNode("()"));
+    } else {
+      fn.classList.add("cm-comment");
+      fn.textContent = l10n.getStr("stacktrace.anonymousFunction");
+    }
+
+    let location = this.output.owner.createLocationNode(frame.filename,
+                                                        frame.lineNumber,
+                                                        "jsdebugger");
+
+    // .devtools-monospace sets font-size to 80%, however .body already has
+    // .devtools-monospace. If we keep it here, the location would be rendered
+    // smaller.
+    location.classList.remove("devtools-monospace");
+
+    let elem = this.document.createElementNS(XHTML_NS, "li");
+    elem.appendChild(fn);
+    elem.appendChild(location);
+    elem.appendChild(this.document.createTextNode("\n"));
+
+    return elem;
+  },
+
+}); // Widgets.Stacktrace.prototype
 
 
 function gSequenceId()

@@ -34,7 +34,8 @@ static JSObject*
 MmsAttachmentDataToJSObject(JSContext* aContext,
                             const MmsAttachmentData& aAttachment)
 {
-  JS::Rooted<JSObject*> obj(aContext, JS_NewObject(aContext, nullptr, nullptr, nullptr));
+  JS::Rooted<JSObject*> obj(aContext, JS_NewObject(aContext, nullptr, JS::NullPtr(),
+                                                   JS::NullPtr()));
   NS_ENSURE_TRUE(obj, nullptr);
 
   JSString* idStr = JS_NewUCStringCopyN(aContext,
@@ -77,7 +78,7 @@ GetParamsFromSendMmsMessageRequest(JSContext* aCx,
                                    const SendMmsMessageRequest& aRequest,
                                    JS::Value* aParam)
 {
-  JS::Rooted<JSObject*> paramsObj(aCx, JS_NewObject(aCx, nullptr, nullptr, nullptr));
+  JS::Rooted<JSObject*> paramsObj(aCx, JS_NewObject(aCx, nullptr, JS::NullPtr(), JS::NullPtr()));
   NS_ENSURE_TRUE(paramsObj, false);
 
   // smil
@@ -114,14 +115,12 @@ GetParamsFromSendMmsMessageRequest(JSContext* aCx,
 
   // attachments
   JS::Rooted<JSObject*> attachmentArray(aCx, JS_NewArrayObject(aCx,
-                                                               aRequest.attachments().Length(),
-                                                               nullptr));
+                                                               aRequest.attachments().Length()));
   for (uint32_t i = 0; i < aRequest.attachments().Length(); i++) {
     JS::Rooted<JSObject*> obj(aCx,
       MmsAttachmentDataToJSObject(aCx, aRequest.attachments().ElementAt(i)));
     NS_ENSURE_TRUE(obj, false);
-    JS::Rooted<JS::Value> val(aCx, JS::ObjectValue(*obj));
-    if (!JS_SetElement(aCx, attachmentArray, i, &val)) {
+    if (!JS_SetElement(aCx, attachmentArray, i, obj)) {
       return false;
     }
   }
@@ -179,7 +178,7 @@ SmsParent::ActorDestroy(ActorDestroyReason why)
 
 NS_IMETHODIMP
 SmsParent::Observe(nsISupports* aSubject, const char* aTopic,
-                   const PRUnichar* aData)
+                   const char16_t* aData)
 {
   if (!strcmp(aTopic, kSmsReceivedObserverTopic)) {
     MobileMessageData msgData;

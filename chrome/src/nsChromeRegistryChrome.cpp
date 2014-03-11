@@ -119,15 +119,14 @@ nsChromeRegistryChrome::Init()
   mSelectedLocale = NS_LITERAL_CSTRING("en-US");
   mSelectedSkin = NS_LITERAL_CSTRING("classic/1.0");
 
-  if (!PL_DHashTableInit(&mPackagesHash, &kTableOps,
-                         nullptr, sizeof(PackageEntry), 16))
-    return NS_ERROR_FAILURE;
+  PL_DHashTableInit(&mPackagesHash, &kTableOps,
+                    nullptr, sizeof(PackageEntry), 16);
 
   bool safeMode = false;
   nsCOMPtr<nsIXULRuntime> xulrun (do_GetService(XULAPPINFO_SERVICE_CONTRACTID));
   if (xulrun)
     xulrun->GetInSafeMode(&safeMode);
-  
+
   nsCOMPtr<nsIPrefService> prefserv (do_GetService(NS_PREFSERVICE_CONTRACTID));
   nsCOMPtr<nsIPrefBranch> prefs;
 
@@ -327,7 +326,7 @@ nsChromeRegistryChrome::SelectLocaleFromPref(nsIPrefBranch* prefs)
 
 NS_IMETHODIMP
 nsChromeRegistryChrome::Observe(nsISupports *aSubject, const char *aTopic,
-                                const PRUnichar *someData)
+                                const char16_t *someData)
 {
   nsresult rv = NS_OK;
 

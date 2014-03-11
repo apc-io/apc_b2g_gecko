@@ -9,7 +9,6 @@ import org.mozilla.gecko.R;
 import android.content.Context;
 import android.graphics.drawable.Drawable;
 import android.util.AttributeSet;
-import android.view.ViewGroup;
 import android.widget.ImageButton;
 
 public class MenuItemActionBar extends ImageButton
@@ -40,21 +39,16 @@ public class MenuItemActionBar extends ImageButton
     }
 
     void setIcon(Drawable icon) {
-        if (icon != null) {
-            setImageDrawable(icon);
-            setVisibility(VISIBLE);
-        } else {
+        if (icon == null) {
             setVisibility(GONE);
+        } else {
+            setVisibility(VISIBLE);
+            setImageDrawable(icon);
         }
     }
 
     void setIcon(int icon) {
-        if (icon != 0) {
-            setImageResource(icon);
-            setVisibility(VISIBLE);
-        } else {
-            setVisibility(GONE);
-        }
+        setIcon((icon == 0) ? null : getResources().getDrawable(icon));
     }
 
     void setTitle(CharSequence title) {

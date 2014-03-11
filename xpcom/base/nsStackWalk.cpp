@@ -23,6 +23,12 @@ struct CriticalAddress {
 };
 static CriticalAddress gCriticalAddress;
 
+// for _Unwind_Backtrace from libcxxrt or libunwind
+// cxxabi.h from libcxxrt implicitly includes unwind.h first
+#if defined(HAVE__UNWIND_BACKTRACE) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+
 #if defined(HAVE_DLOPEN) || defined(XP_MACOSX)
 #include <dlfcn.h>
 #endif
@@ -66,11 +72,21 @@ stack_callback(void *pc, void *sp, void *closure)
 }
 
 #ifdef DEBUG
-#include "nsCocoaFeatures.h"
+#define MAC_OS_X_VERSION_10_7_HEX 0x00001070
+
+static int32_t OSXVersion()
+{
+  static int32_t gOSXVersion = 0x0;
+  if (gOSXVersion == 0x0) {
+    OSErr err = ::Gestalt(gestaltSystemVersion, (SInt32*)&gOSXVersion);
+    MOZ_ASSERT(err == noErr);
+  }
+  return gOSXVersion;
+}
 
 static bool OnLionOrLater()
 {
-  return nsCocoaFeatures::OnLionOrLater();
+  return (OSXVersion() >= MAC_OS_X_VERSION_10_7_HEX);
 }
 #endif
 
@@ -220,7 +236,6 @@ CRITICAL_SECTION gDbgHelpCS;
 }
 
 // Routine to print an error message to standard error.
-// Will also call callback with error, if data supplied.
 void PrintError(const char *prefix)
 {
     LPVOID lpMsgBuf;
@@ -1213,9 +1228,6 @@ NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
 #elif defined(HAVE__UNWIND_BACKTRACE)
 
 // libgcc_s.so symbols _Unwind_Backtrace@@GCC_3.3 and _Unwind_GetIP@@GCC_3.0
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
 #include <unwind.h>
 
 struct unwind_info {
@@ -1331,11 +1343,11 @@ NS_FormatCodeAddressDetails(void *aPC, const nsCodeAddressDetails *aDetails,
   if (!aDetails->library[0]) {
     snprintf(aBuffer, aBufferSize, "UNKNOWN %p\n", aPC);
   } else if (!aDetails->function[0]) {
-    snprintf(aBuffer, aBufferSize, "UNKNOWN [%s +0x%08" PRIxPTR "]\n",
+    snprintf(aBuffer, aBufferSize, "UNKNOWN [%s +0x%08" PRIXPTR "]\n",
                                    aDetails->library, aDetails->loffset);
   } else {
-    snprintf(aBuffer, aBufferSize, "%s+0x%08" PRIxPTR
-                                   " [%s +0x%08" PRIxPTR "]\n",
+    snprintf(aBuffer, aBufferSize, "%s+0x%08" PRIXPTR
+                                   " [%s +0x%08" PRIXPTR "]\n",
                                    aDetails->function, aDetails->foffset,
                                    aDetails->library, aDetails->loffset);
   }

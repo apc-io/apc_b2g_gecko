@@ -5,18 +5,16 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "base/basictypes.h"
-#include "GeneratedEvents.h"
 #include "nsCxPusher.h"
 #include "nsDOMClassInfo.h"
-#include "nsIDOMBluetoothDeviceEvent.h"
-#include "nsIDOMBluetoothDiscoveryStateChangedEvent.h"
-#include "nsIDOMBluetoothStatusChangedEvent.h"
 #include "nsTArrayHelpers.h"
 #include "DOMRequest.h"
 #include "nsThreadUtils.h"
 
 #include "mozilla/dom/bluetooth/BluetoothTypes.h"
 #include "mozilla/dom/BluetoothAdapterBinding.h"
+#include "mozilla/dom/BluetoothDeviceEvent.h"
+#include "mozilla/dom/BluetoothStatusChangedEvent.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/LazyIdleThread.h"
 
@@ -306,12 +304,13 @@ BluetoothAdapter::Notify(const BluetoothSignal& aData)
   BluetoothValue v = aData.value();
   if (aData.name().EqualsLiteral("DeviceFound")) {
     nsRefPtr<BluetoothDevice> device = BluetoothDevice::Create(GetOwner(), mPath, aData.value());
-    nsCOMPtr<nsIDOMEvent> event;
-    NS_NewDOMBluetoothDeviceEvent(getter_AddRefs(event), this, nullptr, nullptr);
 
-    nsCOMPtr<nsIDOMBluetoothDeviceEvent> e = do_QueryInterface(event);
-    e->InitBluetoothDeviceEvent(NS_LITERAL_STRING("devicefound"),
-                                false, false, device);
+    BluetoothDeviceEventInit init;
+    init.mBubbles = false;
+    init.mCancelable = false;
+    init.mDevice = device;
+    nsRefPtr<BluetoothDeviceEvent> event =
+      BluetoothDeviceEvent::Constructor(this, NS_LITERAL_STRING("devicefound"), init);
     DispatchTrustedEvent(event);
   } else if (aData.name().EqualsLiteral("PropertyChanged")) {
     MOZ_ASSERT(v.type() == BluetoothValue::TArrayOfBluetoothNamedValue);
@@ -322,19 +321,6 @@ BluetoothAdapter::Notify(const BluetoothSignal& aData)
     for (uint32_t i = 0, propCount = arr.Length(); i < propCount; ++i) {
       SetPropertyByValue(arr[i]);
     }
-  } else if (aData.name().EqualsLiteral(DISCOVERY_STATE_CHANGED_ID)) {
-    MOZ_ASSERT(v.type() == BluetoothValue::Tbool);
-    bool isDiscovering = v.get_bool();
-
-    nsCOMPtr<nsIDOMEvent> event;
-    NS_NewDOMBluetoothDiscoveryStateChangedEvent(
-      getter_AddRefs(event), this, nullptr, nullptr);
-
-    nsCOMPtr<nsIDOMBluetoothDiscoveryStateChangedEvent> e =
-      do_QueryInterface(event);
-    e->InitBluetoothDiscoveryStateChangedEvent(aData.name(), false, false,
-                                               isDiscovering);
-    DispatchTrustedEvent(event);
   } else if (aData.name().EqualsLiteral(PAIRED_STATUS_CHANGED_ID) ||
              aData.name().EqualsLiteral(HFP_STATUS_CHANGED_ID) ||
              aData.name().EqualsLiteral(SCO_STATUS_CHANGED_ID) ||
@@ -349,13 +335,13 @@ BluetoothAdapter::Notify(const BluetoothSignal& aData)
     nsString address = arr[0].value().get_nsString();
     bool status = arr[1].value().get_bool();
 
-    nsCOMPtr<nsIDOMEvent> event;
-    NS_NewDOMBluetoothStatusChangedEvent(
-      getter_AddRefs(event), this, nullptr, nullptr);
-
-    nsCOMPtr<nsIDOMBluetoothStatusChangedEvent> e = do_QueryInterface(event);
-    e->InitBluetoothStatusChangedEvent(aData.name(), false, false,
-                                       address, status);
+    BluetoothStatusChangedEventInit init;
+    init.mBubbles = false;
+    init.mCancelable = false;
+    init.mAddress = address;
+    init.mStatus = status;
+    nsRefPtr<BluetoothStatusChangedEvent> event =
+      BluetoothStatusChangedEvent::Constructor(this, aData.name(), init);
     DispatchTrustedEvent(event);
   } else if (aData.name().EqualsLiteral(REQUEST_MEDIA_PLAYSTATUS_ID)) {
     nsCOMPtr<nsIDOMEvent> event;
@@ -753,20 +739,30 @@ BluetoothAdapter::SendFile(const nsAString& aDeviceAddress,
   nsRefPtr<BluetoothVoidReplyRunnable> results =
     new BluetoothVoidReplyRunnable(request);
 
-  BlobChild* actor =
-    ContentChild::GetSingleton()->GetOrCreateActorForBlob(aBlob);
-  if (!actor) {
-    BT_WARNING("Can't create actor");
-    aRv.Throw(NS_ERROR_FAILURE);
-    return nullptr;
-  }
-
   BluetoothService* bs = BluetoothService::Get();
   if (!bs) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
   }
-  bs->SendFile(aDeviceAddress, nullptr, actor, results);
+
+  if (XRE_GetProcessType() == GeckoProcessType_Default) {
+    // In-process transfer
+    bs->SendFile(aDeviceAddress, aBlob, results);
+  } else {
+    ContentChild *cc = ContentChild::GetSingleton();
+    if (!cc) {
+      aRv.Throw(NS_ERROR_FAILURE);
+      return nullptr;
+    }
+
+    BlobChild* actor = cc->GetOrCreateActorForBlob(aBlob);
+    if (!actor) {
+      aRv.Throw(NS_ERROR_FAILURE);
+      return nullptr;
+    }
+
+    bs->SendFile(aDeviceAddress, nullptr, actor, results);
+  }
 
   return request.forget();
 }

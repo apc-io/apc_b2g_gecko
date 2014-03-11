@@ -13,7 +13,6 @@ XPIDL_SOURCES += [
     'nsIHttpChannelAuthProvider.idl',
     'nsIHttpChannelChild.idl',
     'nsIHttpChannelInternal.idl',
-    'nsIHttpDataUsage.idl',
     'nsIHttpEventSink.idl',
     'nsIHttpHeaderVisitor.idl',
     'nsIHttpProtocolHandler.idl',
@@ -44,6 +43,10 @@ EXPORTS.mozilla.net += [
 SOURCES += [
     'ASpdySession.cpp',
     'ConnectionDiagnostics.cpp',
+    'Http2Compression.cpp',
+    'Http2Push.cpp',
+    'Http2Session.cpp',
+    'Http2Stream.cpp',
     'HttpBaseChannel.cpp',
     'HttpChannelChild.cpp',
     'HttpChannelParent.cpp',
@@ -90,11 +93,6 @@ EXTRA_JS_MODULES += [
     'UserAgentUpdates.jsm',
 ]
 
-EXTRA_COMPONENTS += [
-    'HttpDataUsage.js',
-    'HttpDataUsage.manifest',
-]
-
 FAIL_ON_WARNINGS = True
 
 MSVC_ENABLE_PGO = True
@@ -106,6 +104,6 @@ FINAL_LIBRARY = 'necko'
 LOCAL_INCLUDES += [
     '../../base/src',
     '/content/base/src',
-    '/content/events/src',
+    '/dom/events',
     '/xpcom/ds',
 ]

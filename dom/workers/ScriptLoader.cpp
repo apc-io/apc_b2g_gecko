@@ -177,6 +177,13 @@ private:
   virtual void
   PostRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate, bool aRunResult)
           MOZ_OVERRIDE;
+
+  NS_DECL_NSICANCELABLERUNNABLE
+
+  void
+  ShutdownScriptLoader(JSContext* aCx,
+                       WorkerPrivate* aWorkerPrivate,
+                       bool aResult);
 };
 
 class ScriptLoaderRunnable MOZ_FINAL : public WorkerFeature,
@@ -692,9 +699,6 @@ ScriptExecutorRunnable::WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
   JS::Rooted<JSObject*> global(aCx, JS::CurrentGlobalOrNull(aCx));
   NS_ASSERTION(global, "Must have a global by now!");
 
-  JSPrincipals* principal = GetWorkerPrincipal();
-  NS_ASSERTION(principal, "This should never be null!");
-
   for (uint32_t index = mFirstIndex; index <= mLastIndex; index++) {
     ScriptLoadInfo& loadInfo = loadInfos.ElementAt(index);
 
@@ -711,8 +715,7 @@ ScriptExecutorRunnable::WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
     NS_ConvertUTF16toUTF8 filename(loadInfo.mURL);
 
     JS::CompileOptions options(aCx);
-    options.setPrincipals(principal)
-           .setFileAndLine(filename.get(), 1);
+    options.setFileAndLine(filename.get(), 1);
     if (!JS::Evaluate(aCx, global, options, loadInfo.mScriptText.get(),
                       loadInfo.mScriptText.Length(), nullptr)) {
       return true;
@@ -740,9 +743,24 @@ ScriptExecutorRunnable::PostRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate,
       }
     }
 
-    aWorkerPrivate->RemoveFeature(aCx, &mScriptLoader);
-    aWorkerPrivate->StopSyncLoop(mSyncLoopTarget, result);
+    ShutdownScriptLoader(aCx, aWorkerPrivate, result);
   }
+}
+
+NS_IMETHODIMP
+ScriptExecutorRunnable::Cancel()
+{
+  ShutdownScriptLoader(mWorkerPrivate->GetJSContext(), mWorkerPrivate, false);
+  return MainThreadWorkerSyncRunnable::Cancel();
+}
+
+void
+ScriptExecutorRunnable::ShutdownScriptLoader(JSContext* aCx,
+                                             WorkerPrivate* aWorkerPrivate,
+                                             bool aResult)
+{
+  aWorkerPrivate->RemoveFeature(aCx, &mScriptLoader);
+  aWorkerPrivate->StopSyncLoop(mSyncLoopTarget, aResult);
 }
 
 bool
@@ -854,8 +872,7 @@ void ReportLoadError(JSContext* aCx, const nsAString& aURL,
       break;
 
     default:
-      JS_ReportError(aCx, "Failed to load script: %s (nsresult = 0x%x)",
-                     url.get(), aLoadResult);
+      JS_ReportError(aCx, "Failed to load script (nsresult = 0x%x)", aLoadResult);
   }
 }
 

@@ -12,6 +12,7 @@
 namespace mozilla {
 namespace dom {
 
+class Console;
 class Function;
 
 } // namespace dom
@@ -26,6 +27,7 @@ class WorkerNavigator;
 class WorkerGlobalScope : public nsDOMEventTargetHelper,
                           public nsIGlobalObject
 {
+  nsRefPtr<Console> mConsole;
   nsRefPtr<WorkerLocation> mLocation;
   nsRefPtr<WorkerNavigator> mNavigator;
 
@@ -58,10 +60,18 @@ public:
     return nsRefPtr<WorkerGlobalScope>(this).forget();
   }
 
+  already_AddRefed<Console>
+  GetConsole();
+
   already_AddRefed<WorkerLocation>
   Location();
+
   already_AddRefed<WorkerNavigator>
   Navigator();
+
+  already_AddRefed<WorkerNavigator>
+  GetExistingNavigator() const;
+
   void
   Close(JSContext* aCx);
 
@@ -78,7 +88,8 @@ public:
   SetTimeout(JSContext* aCx, Function& aHandler, const int32_t aTimeout,
              const Sequence<JS::Value>& aArguments, ErrorResult& aRv);
   int32_t
-  SetTimeout(const nsAString& aHandler, const int32_t aTimeout,
+  SetTimeout(JSContext* /* unused */, const nsAString& aHandler,
+             const int32_t aTimeout, const Sequence<JS::Value>& /* unused */,
              ErrorResult& aRv);
   void
   ClearTimeout(int32_t aHandle, ErrorResult& aRv);
@@ -87,8 +98,9 @@ public:
               const Optional<int32_t>& aTimeout,
               const Sequence<JS::Value>& aArguments, ErrorResult& aRv);
   int32_t
-  SetInterval(const nsAString& aHandler, const Optional<int32_t>& aTimeout,
-              ErrorResult& aRv);
+  SetInterval(JSContext* /* unused */, const nsAString& aHandler,
+              const Optional<int32_t>& aTimeout,
+              const Sequence<JS::Value>& /* unused */, ErrorResult& aRv);
   void
   ClearInterval(int32_t aHandle, ErrorResult& aRv);
 
@@ -97,6 +109,8 @@ public:
   void
   Btoa(const nsAString& aBtoa, nsAString& aOutput, ErrorResult& aRv) const;
 
+  IMPL_EVENT_HANDLER(online)
+  IMPL_EVENT_HANDLER(offline)
   IMPL_EVENT_HANDLER(close)
 
   void
@@ -126,12 +140,13 @@ public:
 
 class SharedWorkerGlobalScope MOZ_FINAL : public WorkerGlobalScope
 {
-  const nsString mName;
+  const nsCString mName;
 
   ~SharedWorkerGlobalScope() { }
 
 public:
-  SharedWorkerGlobalScope(WorkerPrivate* aWorkerPrivate, const nsString& aName);
+  SharedWorkerGlobalScope(WorkerPrivate* aWorkerPrivate,
+                          const nsCString& aName);
 
   static bool
   Visible(JSContext* aCx, JSObject* aObj);
@@ -140,7 +155,7 @@ public:
   WrapGlobalObject(JSContext* aCx) MOZ_OVERRIDE;
 
   void GetName(DOMString& aName) const {
-    aName.AsAString() = mName;
+    aName.AsAString() = NS_ConvertUTF8toUTF16(mName);
   }
 
   IMPL_EVENT_HANDLER(connect)

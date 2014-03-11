@@ -12,7 +12,7 @@ import org.mozilla.gecko.Tabs;
 import org.mozilla.gecko.ZoomConstraints;
 import org.mozilla.gecko.mozglue.RobocopTarget;
 import org.mozilla.gecko.mozglue.generatorannotations.WrapElementForJNI;
-import org.mozilla.gecko.util.EventDispatcher;
+import org.mozilla.gecko.EventDispatcher;
 import org.mozilla.gecko.util.FloatUtils;
 
 import android.content.Context;
@@ -121,8 +121,15 @@ public class GeckoLayerClient implements LayerView.Listener, PanZoomTarget
         DisplayMetrics displayMetrics = context.getResources().getDisplayMetrics();
         mViewportMetrics = new ImmutableViewportMetrics(displayMetrics)
                            .setViewportSize(view.getWidth(), view.getHeight());
-        mFrameMetrics = mViewportMetrics;
         mZoomConstraints = new ZoomConstraints(false);
+
+        Tab tab = Tabs.getInstance().getSelectedTab();
+        if (tab != null) {
+            mZoomConstraints = tab.getZoomConstraints();
+            mViewportMetrics = mViewportMetrics.setIsRTL(tab.getIsRTL());
+        }
+
+        mFrameMetrics = mViewportMetrics;
 
         mPanZoomController = PanZoomController.Factory.create(this, view, eventDispatcher);
         mMarginsAnimator = new LayerMarginsAnimator(this, view);
@@ -291,6 +298,15 @@ public class GeckoLayerClient implements LayerView.Listener, PanZoomTarget
         // The maximum margins are determined by the scrollable area of the page.
         float maxMarginWidth = Math.max(0, metrics.getPageWidth() - metrics.getWidthWithoutMargins());
         float maxMarginHeight = Math.max(0, metrics.getPageHeight() - metrics.getHeightWithoutMargins());
+
+        // If the margins can't fully hide, they're pinned on - in which case,
+        // fixed margins should always be zero.
+        if (maxMarginWidth < metrics.marginLeft + metrics.marginRight) {
+          maxMarginWidth = 0;
+        }
+        if (maxMarginHeight < metrics.marginTop + metrics.marginBottom) {
+          maxMarginHeight = 0;
+        }
 
         PointF offset = metrics.getMarginOffset();
         RectF overscroll = metrics.getOverscroll();
@@ -871,7 +887,7 @@ public class GeckoLayerClient implements LayerView.Listener, PanZoomTarget
      * You must hold the monitor while calling this.
      */
     @Override
-    public void onSubdocumentScrollBy(float dx, float dy) {
+    public void scrollMarginsBy(float dx, float dy) {
         ImmutableViewportMetrics newMarginsMetrics =
             mMarginsAnimator.scrollBy(mViewportMetrics, dx, dy);
         mViewportMetrics = mViewportMetrics.setMarginsFrom(newMarginsMetrics);

@@ -9,7 +9,7 @@
 #ifndef nsContentUtils_h___
 #define nsContentUtils_h___
 
-#if defined(XP_WIN) || defined(XP_OS2)
+#if defined(XP_WIN)
 #include <float.h>
 #endif
 
@@ -68,7 +68,7 @@ class nsIInterfaceRequestor;
 class nsIIOService;
 class nsIJSRuntimeService;
 class nsILineBreaker;
-class nsINameSpaceManager;
+class nsNameSpaceManager;
 class nsINodeInfo;
 class nsIObserver;
 class nsIParser;
@@ -86,7 +86,6 @@ class nsIURI;
 class nsIWidget;
 class nsIWordBreaker;
 class nsIXPConnect;
-class nsIXPConnectJSObjectHolder;
 class nsNodeInfoManager;
 class nsPIDOMWindow;
 class nsPresContext;
@@ -96,6 +95,7 @@ class nsStringHashKey;
 class nsTextFragment;
 class nsViewportInfo;
 class nsWrapperCache;
+class nsAttrValue;
 
 struct JSPropertyDescriptor;
 struct JSRuntime;
@@ -318,16 +318,16 @@ public:
 
   static uint32_t CopyNewlineNormalizedUnicodeTo(const nsAString& aSource,
                                                  uint32_t aSrcOffset,
-                                                 PRUnichar* aDest,
+                                                 char16_t* aDest,
                                                  uint32_t aLength,
                                                  bool& aLastCharCR);
 
-  static uint32_t CopyNewlineNormalizedUnicodeTo(nsReadingIterator<PRUnichar>& aSrcStart, const nsReadingIterator<PRUnichar>& aSrcEnd, nsAString& aDest);
+  static uint32_t CopyNewlineNormalizedUnicodeTo(nsReadingIterator<char16_t>& aSrcStart, const nsReadingIterator<char16_t>& aSrcEnd, nsAString& aDest);
 
   static const nsDependentSubstring TrimCharsInSet(const char* aSet,
                                                    const nsAString& aValue);
 
-  template<bool IsWhitespace(PRUnichar)>
+  template<bool IsWhitespace(char16_t)>
   static const nsDependentSubstring TrimWhitespace(const nsAString& aStr,
                                                    bool aTrimTrailing = true);
 
@@ -351,13 +351,13 @@ public:
    *
    * HTML 4.01 also lists U+200B (zero-width space).
    */
-  static bool IsHTMLWhitespace(PRUnichar aChar);
+  static bool IsHTMLWhitespace(char16_t aChar);
 
   /*
    * Returns whether the character is an HTML whitespace (see IsHTMLWhitespace)
    * or a nbsp character (U+00A0).
    */
-  static bool IsHTMLWhitespaceOrNBSP(PRUnichar aChar);
+  static bool IsHTMLWhitespaceOrNBSP(char16_t aChar);
 
   /**
    * Is the HTML local name a block element?
@@ -451,7 +451,7 @@ public:
 
   static nsIParserService* GetParserService();
 
-  static nsINameSpaceManager* NameSpaceManager()
+  static nsNameSpaceManager* NameSpaceManager()
   {
     return sNameSpaceManager;
   }
@@ -527,9 +527,15 @@ public:
   static bool CheckForBOM(const unsigned char* aBuffer, uint32_t aLength,
                           nsACString& aCharset);
 
+  /**
+   * Returns true if |aName| is a valid name to be registered via
+   * document.registerElement.
+   */
+  static bool IsCustomElementName(nsIAtom* aName);
+
   static nsresult CheckQName(const nsAString& aQualifiedName,
                              bool aNamespaceAware = true,
-                             const PRUnichar** aColon = nullptr);
+                             const char16_t** aColon = nullptr);
 
   static nsresult SplitQName(const nsIContent* aNamespaceResolver,
                              const nsAFlatString& aQName,
@@ -541,7 +547,7 @@ public:
                                        uint16_t aNodeType,
                                        nsINodeInfo** aNodeInfo);
 
-  static void SplitExpatName(const PRUnichar *aExpatName, nsIAtom **aPrefix,
+  static void SplitExpatName(const char16_t *aExpatName, nsIAtom **aPrefix,
                              nsIAtom **aTagName, int32_t *aNameSpaceID);
 
   // Get a permission-manager setting for the given principal and type.
@@ -813,7 +819,7 @@ public:
                                   nsIDocument* aDocument,
                                   PropertiesFile aFile,
                                   const char *aMessageName,
-                                  const PRUnichar **aParams = nullptr,
+                                  const char16_t **aParams = nullptr,
                                   uint32_t aParamsLength = 0,
                                   nsIURI* aURI = nullptr,
                                   const nsAFlatString& aSourceLine
@@ -832,10 +838,10 @@ public:
    * A helper function that parses a sandbox attribute (of an <iframe> or
    * a CSP directive) and converts it to the set of flags used internally.
    *
-   * @param aAttribute 	the value of the sandbox attribute
-   * @return 			the set of flags
+   * @param sandboxAttr   the sandbox attribute
+   * @return              the set of flags (0 if sandboxAttr is null)
    */
-  static uint32_t ParseSandboxAttributeToFlags(const nsAString& aSandboxAttr);
+  static uint32_t ParseSandboxAttributeToFlags(const nsAttrValue* sandboxAttr);
 
 
   /**
@@ -845,7 +851,7 @@ public:
 private:
   static nsresult FormatLocalizedString(PropertiesFile aFile,
                                         const char* aKey,
-                                        const PRUnichar** aParams,
+                                        const char16_t** aParams,
                                         uint32_t aParamsLength,
                                         nsXPIDLString& aResult);
   
@@ -853,7 +859,7 @@ public:
   template<uint32_t N>
   static nsresult FormatLocalizedString(PropertiesFile aFile,
                                         const char* aKey,
-                                        const PRUnichar* (&aParams)[N],
+                                        const char16_t* (&aParams)[N],
                                         nsXPIDLString& aResult)
   {
     return FormatLocalizedString(aFile, aKey, aParams, N, aResult);
@@ -1460,7 +1466,7 @@ public:
    * If offline-apps.allow_by_default is true, we set offline-app permission
    * for the principal and return true.  Otherwise false.
    */
-  static bool MaybeAllowOfflineAppByDefault(nsIPrincipal *aPrincipal);
+  static bool MaybeAllowOfflineAppByDefault(nsIPrincipal *aPrincipal, nsIDOMWindow *aWindow);
 
   /**
    * Increases the count of blockers preventing scripts from running.
@@ -1637,39 +1643,30 @@ public:
    */
   static bool CanAccessNativeAnon();
 
+  MOZ_WARN_UNUSED_RESULT
   static nsresult WrapNative(JSContext *cx, JS::Handle<JSObject*> scope,
                              nsISupports *native, const nsIID* aIID,
-                             JS::MutableHandle<JS::Value> vp,
-                             // If non-null aHolder will keep the Value alive
-                             // while there's a ref to it
-                             nsIXPConnectJSObjectHolder** aHolder = nullptr,
-                             bool aAllowWrapping = false)
+                             JS::MutableHandle<JS::Value> vp)
   {
-    return WrapNative(cx, scope, native, nullptr, aIID, vp, aHolder,
-                      aAllowWrapping);
+    return WrapNative(cx, scope, native, nullptr, aIID, vp, true);
   }
 
   // Same as the WrapNative above, but use this one if aIID is nsISupports' IID.
+  MOZ_WARN_UNUSED_RESULT
   static nsresult WrapNative(JSContext *cx, JS::Handle<JSObject*> scope,
                              nsISupports *native, JS::MutableHandle<JS::Value> vp,
-                             // If non-null aHolder will keep the Value alive
-                             // while there's a ref to it
-                             nsIXPConnectJSObjectHolder** aHolder = nullptr,
-                             bool aAllowWrapping = false)
+                             bool aAllowWrapping = true)
   {
-    return WrapNative(cx, scope, native, nullptr, nullptr, vp, aHolder,
-                      aAllowWrapping);
+    return WrapNative(cx, scope, native, nullptr, nullptr, vp, aAllowWrapping);
   }
+
+  MOZ_WARN_UNUSED_RESULT
   static nsresult WrapNative(JSContext *cx, JS::Handle<JSObject*> scope,
                              nsISupports *native, nsWrapperCache *cache,
                              JS::MutableHandle<JS::Value> vp,
-                             // If non-null aHolder will keep the Value alive
-                             // while there's a ref to it
-                             nsIXPConnectJSObjectHolder** aHolder = nullptr,
-                             bool aAllowWrapping = false)
+                             bool aAllowWrapping = true)
   {
-    return WrapNative(cx, scope, native, cache, nullptr, vp, aHolder,
-                      aAllowWrapping);
+    return WrapNative(cx, scope, native, cache, nullptr, vp, aAllowWrapping);
   }
 
   /**
@@ -2132,7 +2129,6 @@ private:
   static nsresult WrapNative(JSContext *cx, JS::Handle<JSObject*> scope,
                              nsISupports *native, nsWrapperCache *cache,
                              const nsIID* aIID, JS::MutableHandle<JS::Value> vp,
-                             nsIXPConnectJSObjectHolder** aHolder,
                              bool aAllowWrapping);
 
   static nsresult DispatchEvent(nsIDocument* aDoc,
@@ -2159,7 +2155,7 @@ private:
 
   static nsIParserService *sParserService;
 
-  static nsINameSpaceManager *sNameSpaceManager;
+  static nsNameSpaceManager *sNameSpaceManager;
 
   static nsIIOService *sIOService;
 
@@ -2274,6 +2270,22 @@ public:
     nsContentUtils::LeaveMicroTask();
   }
 };
+
+namespace mozilla {
+namespace dom {
+
+class TreeOrderComparator {
+public:
+  bool Equals(nsINode* aElem1, nsINode* aElem2) const {
+    return aElem1 == aElem2;
+  }
+  bool LessThan(nsINode* aElem1, nsINode* aElem2) const {
+    return nsContentUtils::PositionIsBefore(aElem1, aElem2);
+  }
+};
+
+} // namespace dom
+} // namespace mozilla
 
 #define NS_INTERFACE_MAP_ENTRY_TEAROFF(_interface, _allocator)                \
   if (aIID.Equals(NS_GET_IID(_interface))) {                                  \

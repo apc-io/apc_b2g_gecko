@@ -15,6 +15,9 @@
 #include <stagefright/OMXClient.h>
 #include <stagefright/OMXCodec.h>
 #include <OMX.h>
+#if MOZ_WIDGET_GONK && ANDROID_VERSION >= 17
+#include <ui/Fence.h>
+#endif
 
 #include "mozilla/Preferences.h"
 #include "mozilla/Types.h"
@@ -38,6 +41,7 @@ PRLogModuleInfo *gOmxDecoderLog;
 
 using namespace MPAPI;
 using namespace mozilla;
+using namespace mozilla::gfx;
 
 namespace mozilla {
 
@@ -200,9 +204,7 @@ VideoGraphicBuffer::VideoGraphicBuffer(const android::wp<android::OmxDecoder> aO
 
 VideoGraphicBuffer::~VideoGraphicBuffer()
 {
-  if (mMediaBuffer) {
-    mMediaBuffer->release();
-  }
+  MOZ_ASSERT(!mMediaBuffer);
 }
 
 void
@@ -214,7 +216,7 @@ VideoGraphicBuffer::Unlock()
     // The message is delivered to OmxDecoder on ALooper thread.
     // MediaBuffer::release() could take a very long time.
     // PostReleaseVideoBuffer() prevents long time locking.
-    omxDecoder->PostReleaseVideoBuffer(mMediaBuffer);
+    omxDecoder->PostReleaseVideoBuffer(mMediaBuffer, mReleaseFenceHandle);
   } else {
     NS_WARNING("OmxDecoder is not present");
     if (mMediaBuffer) {
@@ -501,6 +503,13 @@ bool OmxDecoder::IsWaitingMediaResources()
   return false;
 }
 
+static bool isInEmulator()
+{
+  char propQemu[PROPERTY_VALUE_MAX];
+  property_get("ro.kernel.qemu", propQemu, "");
+  return !strncmp(propQemu, "1", 1);
+}
+
 bool OmxDecoder::AllocateMediaResources()
 {
   // OMXClient::connect() always returns OK and abort's fatally if
@@ -525,9 +534,7 @@ bool OmxDecoder::AllocateMediaResources()
     // up.
     int flags = kHardwareCodecsOnly;
 
-    char propQemu[PROPERTY_VALUE_MAX];
-    property_get("ro.kernel.qemu", propQemu, "");
-    if (!strncmp(propQemu, "1", 1)) {
+    if (isInEmulator()) {
       // If we are in emulator, allow to fall back to software.
       flags = 0;
     }
@@ -790,7 +797,7 @@ bool OmxDecoder::ReadVideo(VideoFrame *aFrame, int64_t aTimeUs,
     {
       Mutex::Autolock autoLock(mSeekLock);
       mIsVideoSeeking = false;
-      ReleaseAllPendingVideoBuffersLocked();
+      PostReleaseVideoBuffer(nullptr, FenceHandle());
     }
 
     aDoSeek = false;
@@ -828,7 +835,7 @@ bool OmxDecoder::ReadVideo(VideoFrame *aFrame, int64_t aTimeUs,
       // GraphicBuffer's size and actual video size is different.
       // See Bug 850566.
       mozilla::layers::SurfaceDescriptorGralloc newDescriptor = descriptor->get_SurfaceDescriptorGralloc();
-      newDescriptor.size() = nsIntSize(mVideoWidth, mVideoHeight);
+      newDescriptor.size() = IntSize(mVideoWidth, mVideoHeight);
 
       mozilla::layers::SurfaceDescriptor descWrapper(newDescriptor);
       aFrame->mGraphicBuffer = new mozilla::layers::VideoGraphicBuffer(this, mVideoBuffer, descWrapper);
@@ -837,6 +844,9 @@ bool OmxDecoder::ReadVideo(VideoFrame *aFrame, int64_t aTimeUs,
       aFrame->mKeyFrame = keyFrame;
       aFrame->Y.mWidth = mVideoWidth;
       aFrame->Y.mHeight = mVideoHeight;
+      // Release to hold video buffer in OmxDecoder more.
+      // MediaBuffer's ref count is changed from 2 to 1.
+      ReleaseVideoBuffer();
     } else if (mVideoBuffer->range_length() > 0) {
       char *data = static_cast<char *>(mVideoBuffer->data()) + mVideoBuffer->range_offset();
       size_t length = mVideoBuffer->range_length();
@@ -967,6 +977,16 @@ nsresult OmxDecoder::Play()
 // We need to fix it until it is really happened.
 void OmxDecoder::Pause()
 {
+  /* The implementation of OMXCodec::pause is flawed.
+   * OMXCodec::start will not restore from the paused state and result in
+   * buffer timeout which causes timeouts in mochitests.
+   * Since there is not power consumption problem in emulator, we will just
+   * return when running in emulator to fix timeouts in mochitests.
+   */
+  if (isInEmulator()) {
+    return;
+  }
+
   if (mVideoPaused || mAudioPaused) {
     return;
   }
@@ -1008,11 +1028,13 @@ void OmxDecoder::onMessageReceived(const sp<AMessage> &msg)
   }
 }
 
-void OmxDecoder::PostReleaseVideoBuffer(MediaBuffer *aBuffer)
+void OmxDecoder::PostReleaseVideoBuffer(MediaBuffer *aBuffer, const FenceHandle& aReleaseFenceHandle)
 {
   {
     Mutex::Autolock autoLock(mPendingVideoBuffersLock);
-    mPendingVideoBuffers.push(aBuffer);
+    if (aBuffer) {
+      mPendingVideoBuffers.push(BufferItem(aBuffer, aReleaseFenceHandle));
+    }
   }
 
   sp<AMessage> notify =
@@ -1023,14 +1045,13 @@ void OmxDecoder::PostReleaseVideoBuffer(MediaBuffer *aBuffer)
 
 void OmxDecoder::ReleaseAllPendingVideoBuffersLocked()
 {
-  Vector<MediaBuffer *> releasingVideoBuffers;
+  Vector<BufferItem> releasingVideoBuffers;
   {
     Mutex::Autolock autoLock(mPendingVideoBuffersLock);
 
     int size = mPendingVideoBuffers.size();
     for (int i = 0; i < size; i++) {
-      MediaBuffer *buffer = mPendingVideoBuffers[i];
-      releasingVideoBuffers.push(buffer);
+      releasingVideoBuffers.push(mPendingVideoBuffers[i]);
     }
     mPendingVideoBuffers.clear();
   }
@@ -1038,7 +1059,28 @@ void OmxDecoder::ReleaseAllPendingVideoBuffersLocked()
   int size = releasingVideoBuffers.size();
   for (int i = 0; i < size; i++) {
     MediaBuffer *buffer;
-    buffer = releasingVideoBuffers[i];
+    buffer = releasingVideoBuffers[i].mMediaBuffer;
+#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
+    android::sp<Fence> fence;
+    int fenceFd = -1;
+    fence = releasingVideoBuffers[i].mReleaseFenceHandle.mFence;
+    if (fence.get() && fence->isValid()) {
+      fenceFd = fence->dup();
+    }
+    MOZ_ASSERT(buffer->refcount() == 1);
+    // This code expect MediaBuffer's ref count is 1.
+    // Return gralloc buffer to ANativeWindow
+    ANativeWindow* window = static_cast<ANativeWindow*>(mNativeWindowClient.get());
+    window->cancelBuffer(window,
+                         buffer->graphicBuffer().get(),
+                         fenceFd);
+    // Mark MediaBuffer as rendered.
+    // When gralloc buffer is directly returned to ANativeWindow,
+    // this mark is necesary.
+    sp<MetaData> metaData = buffer->meta_data();
+    metaData->setInt32(kKeyRendered, 1);
+#endif
+    // Return MediaBuffer to OMXCodec.
     buffer->release();
   }
   releasingVideoBuffers.clear();

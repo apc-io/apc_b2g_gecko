@@ -13,8 +13,10 @@ UNIFIED_SOURCES += [
     'TestAsyncPanZoomController.cpp',
     'TestBufferRotation.cpp',
     'TestColorNames.cpp',
+    'TestGfxPrefs.cpp',
     'TestLayers.cpp',
     'TestRegion.cpp',
+    'TestSkipChars.cpp',
     # Hangs on linux in ApplyGdkScreenFontOptions
     #'gfxFontSelectionTest.cpp',
     'TestTextures.cpp',

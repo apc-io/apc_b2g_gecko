@@ -8,25 +8,24 @@
 #include "FrameMetrics.h"               // for FrameMetrics
 #include "Units.h"                      // for CSSRect, LayerPixel, etc
 #include "gfx2DGlue.h"                  // for ToMatrix4x4
-#include "gfx3DMatrix.h"                // for gfx3DMatrix
 #include "gfxUtils.h"                   // for gfxUtils, etc
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
 #include "mozilla/gfx/Matrix.h"         // for Matrix4x4
 #include "mozilla/gfx/Point.h"          // for Point
 #include "mozilla/gfx/Rect.h"           // for RoundedToInt, Rect
-#include "mozilla/gfx/Types.h"          // for Filter::FILTER_LINEAR
+#include "mozilla/gfx/Types.h"          // for Filter::Filter::LINEAR
 #include "mozilla/layers/Compositor.h"  // for Compositor
 #include "mozilla/layers/ContentHost.h"  // for ContentHost
 #include "mozilla/layers/Effects.h"     // for EffectChain
 #include "mozilla/mozalloc.h"           // for operator delete
 #include "nsAString.h"
 #include "nsAutoPtr.h"                  // for nsRefPtr
+#include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "nsMathUtils.h"                // for NS_lround
 #include "nsPoint.h"                    // for nsIntPoint
 #include "nsRect.h"                     // for nsIntRect
 #include "nsSize.h"                     // for nsIntSize
 #include "nsString.h"                   // for nsAutoCString
-#include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
 #include "GeckoProfiler.h"
 
 namespace mozilla {
@@ -50,10 +49,21 @@ ThebesLayerComposite::~ThebesLayerComposite()
   CleanupResources();
 }
 
-void
+bool
 ThebesLayerComposite::SetCompositableHost(CompositableHost* aHost)
 {
-  mBuffer = static_cast<ContentHost*>(aHost);
+  switch (aHost->GetType()) {
+    case BUFFER_CONTENT:
+    case BUFFER_CONTENT_DIRECT:
+    case BUFFER_CONTENT_INC:
+    case BUFFER_TILED:
+    case COMPOSITABLE_CONTENT_SINGLE:
+    case COMPOSITABLE_CONTENT_DOUBLE:
+      mBuffer = static_cast<ContentHost*>(aHost);
+      return true;
+    default:
+      return false;
+  }
 }
 
 void
@@ -105,26 +115,18 @@ ThebesLayerComposite::RenderLayer(const nsIntRect& aClipRect)
              mBuffer->GetLayer() == this,
              "buffer is corrupted");
 
-  gfx::Matrix4x4 transform;
-  ToMatrix4x4(GetEffectiveTransform(), transform);
   gfx::Rect clipRect(aClipRect.x, aClipRect.y, aClipRect.width, aClipRect.height);
 
 #ifdef MOZ_DUMP_PAINTING
   if (gfxUtils::sDumpPainting) {
-    RefPtr<gfx::DataSourceSurface> dSurf = mBuffer->GetAsSurface();
-    if (dSurf) {
-      gfxPlatform *platform = gfxPlatform::GetPlatform();
-      RefPtr<gfx::DrawTarget> dt = platform->CreateDrawTargetForData(dSurf->GetData(),
-                                                                     dSurf->GetSize(),
-                                                                     dSurf->Stride(),
-                                                                     dSurf->GetFormat());
-      nsRefPtr<gfxASurface> surf = platform->GetThebesSurfaceForDrawTarget(dt);
+    RefPtr<gfx::DataSourceSurface> surf = mBuffer->GetAsSurface();
+    if (surf) {
       WriteSnapshotToDumpFile(this, surf);
     }
   }
 #endif
 
-  EffectChain effectChain;
+  EffectChain effectChain(this);
   LayerManagerComposite::AutoAddMaskEffect autoMaskEffect(mMaskLayer, effectChain);
 
   nsIntRegion visibleRegion = GetEffectiveVisibleRegion();
@@ -140,8 +142,8 @@ ThebesLayerComposite::RenderLayer(const nsIntRect& aClipRect)
 
   mBuffer->Composite(effectChain,
                      GetEffectiveOpacity(),
-                     transform,
-                     gfx::FILTER_LINEAR,
+                     GetEffectiveTransform(),
+                     gfx::Filter::LINEAR,
                      clipRect,
                      &visibleRegion,
                      mRequiresTiledProperties ? &tiledLayerProps

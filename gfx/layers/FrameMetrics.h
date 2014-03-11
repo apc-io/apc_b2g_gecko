@@ -7,10 +7,16 @@
 #define GFX_FRAMEMETRICS_H
 
 #include <stdint.h>                     // for uint32_t, uint64_t
+#include <string>                       // for std::string
 #include "Units.h"                      // for CSSRect, CSSPixel, etc
 #include "mozilla/gfx/BasePoint.h"      // for BasePoint
 #include "mozilla/gfx/Rect.h"           // for RoundedIn
 #include "mozilla/gfx/ScaleFactor.h"    // for ScaleFactor
+#include "mozilla/gfx/Logging.h"        // for Log
+
+namespace IPC {
+template <typename T> struct ParamTraits;
+} // namespace IPC
 
 namespace mozilla {
 namespace layers {
@@ -32,6 +38,7 @@ typedef gfx::ScaleFactor<ParentLayerPixel, ScreenPixel> ParentLayerToScreenScale
  * atomically with new pixels.
  */
 struct FrameMetrics {
+  friend struct IPC::ParamTraits<mozilla::layers::FrameMetrics>;
 public:
   // We use IDs to identify frames across processes.
   typedef uint64_t ViewID;
@@ -51,17 +58,20 @@ public:
     , mCumulativeResolution(1)
     , mZoom(1)
     , mDevPixelsPerCSSPixel(1)
-    , mMayHaveTouchListeners(false)
     , mPresShellId(-1)
+    , mMayHaveTouchListeners(false)
     , mIsRoot(false)
     , mHasScrollgrab(false)
     , mUpdateScrollOffset(false)
+    , mScrollGeneration(0)
   {}
 
   // Default copy ctor and operator= are fine
 
   bool operator==(const FrameMetrics& aOther) const
   {
+    // mContentDescription is not compared on purpose as it's only used
+    // for debugging.
     return mCompositionBounds.IsEqualEdges(aOther.mCompositionBounds) &&
            mDisplayPort.IsEqualEdges(aOther.mDisplayPort) &&
            mCriticalDisplayPort.IsEqualEdges(aOther.mCriticalDisplayPort) &&
@@ -75,6 +85,7 @@ public:
            mMayHaveTouchListeners == aOther.mMayHaveTouchListeners &&
            mPresShellId == aOther.mPresShellId &&
            mIsRoot == aOther.mIsRoot &&
+           mHasScrollgrab == aOther.mHasScrollgrab &&
            mUpdateScrollOffset == aOther.mUpdateScrollOffset;
   }
   bool operator!=(const FrameMetrics& aOther) const
@@ -277,10 +288,10 @@ public:
   // resolution.
   CSSToLayoutDeviceScale mDevPixelsPerCSSPixel;
 
+  uint32_t mPresShellId;
+
   // Whether or not this frame may have touch listeners.
   bool mMayHaveTouchListeners;
-
-  uint32_t mPresShellId;
 
   // Whether or not this is the root scroll frame for the root content document.
   bool mIsRoot;
@@ -288,9 +299,46 @@ public:
   // Whether or not this frame is for an element marked 'scrollgrab'.
   bool mHasScrollgrab;
 
+public:
+  void SetScrollOffsetUpdated(uint32_t aScrollGeneration)
+  {
+    mUpdateScrollOffset = true;
+    mScrollGeneration = aScrollGeneration;
+  }
+
+  bool GetScrollOffsetUpdated() const
+  {
+    return mUpdateScrollOffset;
+  }
+
+  uint32_t GetScrollGeneration() const
+  {
+    return mScrollGeneration;
+  }
+
+  const std::string& GetContentDescription() const
+  {
+    return mContentDescription;
+  }
+
+  void SetContentDescription(const std::string& aContentDescription)
+  {
+    mContentDescription = aContentDescription;
+  }
+
+private:
+  // New fields from now on should be made private and old fields should
+  // be refactored to be private.
+
   // Whether mScrollOffset was updated by something other than the APZ code, and
   // if the APZC receiving this metrics should update its local copy.
   bool mUpdateScrollOffset;
+  // The scroll generation counter used to acknowledge the scroll offset update.
+  uint32_t mScrollGeneration;
+
+  // A description of the content element corresponding to this frame.
+  // This is empty unless the apz.printtree pref is turned on.
+  std::string mContentDescription;
 };
 
 /**
@@ -344,6 +392,55 @@ struct ScrollableLayerGuid {
   }
 
   bool operator!=(const ScrollableLayerGuid& other) const
+  {
+    return !(*this == other);
+  }
+};
+
+template <int LogLevel>
+gfx::Log<LogLevel>& operator<<(gfx::Log<LogLevel>& log, const ScrollableLayerGuid& aGuid) {
+  return log << '(' << aGuid.mLayersId << ',' << aGuid.mPresShellId << ',' << aGuid.mScrollId << ')';
+}
+
+struct ZoomConstraints {
+  bool mAllowZoom;
+  bool mAllowDoubleTapZoom;
+  CSSToScreenScale mMinZoom;
+  CSSToScreenScale mMaxZoom;
+
+  ZoomConstraints()
+    : mAllowZoom(true)
+    , mAllowDoubleTapZoom(true)
+  {
+    MOZ_COUNT_CTOR(ZoomConstraints);
+  }
+
+  ZoomConstraints(bool aAllowZoom,
+                  bool aAllowDoubleTapZoom,
+                  const CSSToScreenScale& aMinZoom,
+                  const CSSToScreenScale& aMaxZoom)
+    : mAllowZoom(aAllowZoom)
+    , mAllowDoubleTapZoom(aAllowDoubleTapZoom)
+    , mMinZoom(aMinZoom)
+    , mMaxZoom(aMaxZoom)
+  {
+    MOZ_COUNT_CTOR(ZoomConstraints);
+  }
+
+  ~ZoomConstraints()
+  {
+    MOZ_COUNT_DTOR(ZoomConstraints);
+  }
+
+  bool operator==(const ZoomConstraints& other) const
+  {
+    return mAllowZoom == other.mAllowZoom
+        && mAllowDoubleTapZoom == other.mAllowDoubleTapZoom
+        && mMinZoom == other.mMinZoom
+        && mMaxZoom == other.mMaxZoom;
+  }
+
+  bool operator!=(const ZoomConstraints& other) const
   {
     return !(*this == other);
   }

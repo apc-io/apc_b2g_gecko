@@ -15,9 +15,9 @@
 #include "Logging.h"
 #endif
 
+#include "mozilla/dom/Event.h" // for nsIDOMEvent::InternalDOMEvent()
 #include "nsCURILoader.h"
 #include "nsDocShellLoadTypes.h"
-#include "nsDOMEvent.h"
 #include "nsIChannel.h"
 #include "nsIDOMDocument.h"
 #include "nsEventListenerManager.h"
@@ -230,7 +230,7 @@ DocManager::OnLocationChange(nsIWebProgress* aWebProgress,
 NS_IMETHODIMP
 DocManager::OnStatusChange(nsIWebProgress* aWebProgress,
                            nsIRequest* aRequest, nsresult aStatus,
-                           const PRUnichar* aMessage)
+                           const char16_t* aMessage)
 {
   NS_NOTREACHED("notification excluded in AddProgressListener(...)");
   return NS_OK;

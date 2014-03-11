@@ -43,8 +43,11 @@ public:
   bool CanReuse() { return !mShouldGoAway && !mClosed; }
   bool RoomForMoreStreams();
 
-  // When the connection is active this is called every 1 second
-  void ReadTimeoutTick(PRIntervalTime now);
+  // When the connection is active this is called up to once every 1 second
+  // return the interval (in seconds) that the connection next wants to
+  // have this invoked. It might happen sooner depending on the needs of
+  // other connections.
+  uint32_t  ReadTimeoutTick(PRIntervalTime now);
 
   // Idle time represents time since "goodput".. e.g. a data or header frame
   PRIntervalTime IdleTime();
@@ -170,6 +173,9 @@ public:
 
   // an overload of nsAHttpSegementReader
   virtual nsresult CommitToSegmentSize(uint32_t size, bool forceCommitment);
+  nsresult BufferOutput(const char *, uint32_t, uint32_t *);
+  void     FlushOutputQueue();
+  uint32_t AmountOfOutputBuffered() { return mOutputQueueUsed - mOutputQueueSent; }
 
   uint32_t GetServerInitialStreamWindow() { return mServerInitialStreamWindow; }
 
@@ -214,7 +220,6 @@ private:
   void        RemoveStreamFromQueues(SpdyStream31 *);
 
   void        SetWriteCallbacks();
-  void        FlushOutputQueue();
   void        RealignOutputQueue();
 
   bool        RoomForMoreConcurrent();

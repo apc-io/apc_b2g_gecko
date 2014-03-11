@@ -17,7 +17,7 @@
 #include "jit/Registers.h"
 #include "jit/RegisterSets.h"
 
-#if defined(JS_CPU_X64) || defined(JS_CPU_ARM)
+#if defined(JS_CODEGEN_X64) || defined(JS_CODEGEN_ARM)
 // JS_SMALL_BRANCH means the range on a branch instruction
 // is smaller than the whole address space
 #    define JS_SMALL_BRANCH
@@ -685,31 +685,23 @@ enum AsmJSImmKind
     AsmJSImm_ToInt32,
     AsmJSImm_EnableActivationFromAsmJS,
     AsmJSImm_DisableActivationFromAsmJS,
-#if defined(JS_CPU_ARM)
+#if defined(JS_CODEGEN_ARM)
     AsmJSImm_aeabi_idivmod,
     AsmJSImm_aeabi_uidivmod,
 #endif
     AsmJSImm_ModD,
     AsmJSImm_SinD,
-    AsmJSImm_SinF,
     AsmJSImm_CosD,
-    AsmJSImm_CosF,
     AsmJSImm_TanD,
-    AsmJSImm_TanF,
     AsmJSImm_ASinD,
-    AsmJSImm_ASinF,
     AsmJSImm_ACosD,
-    AsmJSImm_ACosF,
     AsmJSImm_ATanD,
-    AsmJSImm_ATanF,
     AsmJSImm_CeilD,
     AsmJSImm_CeilF,
     AsmJSImm_FloorD,
     AsmJSImm_FloorF,
     AsmJSImm_ExpD,
-    AsmJSImm_ExpF,
     AsmJSImm_LogD,
-    AsmJSImm_LogF,
     AsmJSImm_PowD,
     AsmJSImm_ATan2D,
     AsmJSImm_Invalid

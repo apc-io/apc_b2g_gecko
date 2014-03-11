@@ -13,7 +13,7 @@ import org.mozilla.gecko.FennecNativeActions;
 import org.mozilla.gecko.FennecNativeDriver;
 import org.mozilla.gecko.FennecTalosAssert;
 import org.mozilla.gecko.tests.components.*;
-import org.mozilla.gecko.tests.helpers.*;
+import org.mozilla.gecko.tests.helpers.HelperInitializer;
 
 import com.jayway.android.robotium.solo.Solo;
 
@@ -29,6 +29,9 @@ import java.util.HashMap;
  * provide a framework to improve upon the issues discovered with the previous BaseTest
  * implementation by providing simple test authorship and framework extension, consistency,
  * and reliability.
+ *
+ * For documentation on writing tests and extending the framework, see
+ * https://wiki.mozilla.org/Mobile/Fennec/Android/UITest
  */
 abstract class UITest extends ActivityInstrumentationTestCase2<Activity>
                       implements UITestContext {
@@ -55,6 +58,8 @@ abstract class UITest extends ActivityInstrumentationTestCase2<Activity>
     private String mBaseIpUrl;
 
     protected AboutHomeComponent mAboutHome;
+    protected AppMenuComponent mAppMenu;
+    protected GeckoViewComponent mGeckoView;
     protected ToolbarComponent mToolbar;
 
     static {
@@ -117,17 +122,13 @@ abstract class UITest extends ActivityInstrumentationTestCase2<Activity>
 
     private void initComponents() {
         mAboutHome = new AboutHomeComponent(this);
+        mAppMenu = new AppMenuComponent(this);
+        mGeckoView = new GeckoViewComponent(this);
         mToolbar = new ToolbarComponent(this);
     }
 
     private void initHelpers() {
-        // Other helpers make assertions so init AssertionHelper first.
-        AssertionHelper.init(this);
-
-        DeviceHelper.init(this);
-        GeckoHelper.init(this);
-        NavigationHelper.init(this);
-        WaitHelper.init(this);
+        HelperInitializer.init(this);
     }
 
     @Override
@@ -151,13 +152,13 @@ abstract class UITest extends ActivityInstrumentationTestCase2<Activity>
     }
 
     @Override
-    public void dumpLog(final String message) {
-        mAsserter.dumpLog(message);
+    public void dumpLog(final String logtag, final String message) {
+        mAsserter.dumpLog(logtag + ": " + message);
     }
 
     @Override
-    public void dumpLog(final String message, final Throwable t) {
-        mAsserter.dumpLog(message, t);
+    public void dumpLog(final String logtag, final String message, final Throwable t) {
+        mAsserter.dumpLog(logtag + ": " + message, t);
     }
 
     @Override
@@ -165,6 +166,12 @@ abstract class UITest extends ActivityInstrumentationTestCase2<Activity>
         switch (type) {
             case ABOUTHOME:
                 return mAboutHome;
+
+            case APPMENU:
+                return mAppMenu;
+
+            case GECKOVIEW:
+                return mGeckoView;
 
             case TOOLBAR:
                 return mToolbar;

@@ -40,9 +40,11 @@ let EXPORTED_SYMBOLS = [
   "Type",
   "HollowStructure",
   "OSError",
+  "Library",
   "declareFFI",
   "declareLazy",
   "declareLazyFFI",
+  "normalizeToPointer",
   "projectValue",
   "isTypedArray",
   "defineLazyGetter",
@@ -330,6 +332,24 @@ Type.prototype = {
       return ctypes.CDataFinalizer(
         parent.importFromC(value, operation),
         finalizer);
+    };
+    return type;
+  },
+
+  /**
+   * Lazy variant of releaseWith.
+   * Attach a finalizer lazily to a type.
+   *
+   * @param {function} getFinalizer The function that
+   * returns finalizer lazily.
+   */
+  releaseWithLazy: function releaseWithLazy(getFinalizer) {
+    let parent = this;
+    let type = this.withName("[auto " + this.name + ", (lazy)] ");
+    type.importFromC = function importFromC(value, operation) {
+      return ctypes.CDataFinalizer(
+        parent.importFromC(value, operation),
+        getFinalizer());
     };
     return type;
   },
@@ -880,6 +900,120 @@ HollowStructure.prototype = {
 exports.HollowStructure = HollowStructure;
 
 /**
+ * Representation of a native library.
+ *
+ * The native library is opened lazily, during the first call to its
+ * field |library| or whenever accessing one of the methods imported
+ * with declareLazyFFI.
+ *
+ * @param {string} name A human-readable name for the library. Used
+ * for debugging and error reporting.
+ * @param {string...} candidates A list of system libraries that may
+ * represent this library. Used e.g. to try different library names
+ * on distinct operating systems ("libxul", "XUL", etc.).
+ *
+ * @constructor
+ */
+function Library(name, ...candidates) {
+  this.name = name;
+  this._candidates = candidates;
+};
+Library.prototype = Object.freeze({
+  /**
+   * The native library as a js-ctypes object.
+   *
+   * @throws {Error} If none of the candidate libraries could be opened.
+   */
+  get library() {
+    let library;
+    delete this.library;
+    for (let candidate of this._candidates) {
+      try {
+        library = ctypes.open(candidate);
+        break;
+      } catch (ex) {
+        LOG("Could not open library", candidate, ex);
+      }
+    }
+    this._candidates = null;
+    if (library) {
+      Object.defineProperty(this, "library", {
+        value: library
+      });
+      Object.freeze(this);
+      return library;
+    }
+    let error = new Error("Could not open library " + this.name);
+    Object.defineProperty(this, "library", {
+      get: function() {
+        throw error;
+      }
+    });
+    Object.freeze(this);
+    throw error;
+  },
+
+  /**
+   * Declare a function, lazily.
+   *
+   * @param {object} The object containing the function as a field.
+   * @param {string} The name of the field containing the function.
+   * @param {string} symbol The name of the function, as defined in the
+   * library.
+   * @param {ctypes.abi} abi The abi to use, or |null| for default.
+   * @param {Type} returnType The type of values returned by the function.
+   * @param {...Type} argTypes The type of arguments to the function.
+   */
+  declareLazyFFI: function(object, field, ...args) {
+    let lib = this;
+    Object.defineProperty(object, field, {
+      get: function() {
+        delete this[field];
+        let ffi = declareFFI(lib.library, ...args);
+        if (ffi) {
+          return this[field] = ffi;
+        }
+        return undefined;
+      },
+      configurable: true,
+      enumerable: true
+    });
+  },
+
+  /**
+   * Define a js-ctypes function lazily using ctypes method declare.
+   *
+   * @param {object} The object containing the function as a field.
+   * @param {string} The name of the field containing the function.
+   * @param {string} symbol The name of the function, as defined in the
+   * library.
+   * @param {ctypes.abi} abi The abi to use, or |null| for default.
+   * @param {ctypes.CType} returnType The type of values returned by the function.
+   * @param {...ctypes.CType} argTypes The type of arguments to the function.
+   */
+  declareLazy: function(object, field, ...args) {
+    let lib = this;
+    Object.defineProperty(object, field, {
+      get: function() {
+        delete this[field];
+        let ffi = lib.library.declare(...args);
+        if (ffi) {
+          return this[field] = ffi;
+        }
+        return undefined;
+      },
+      configurable: true,
+      enumerable: true
+    });
+  },
+
+  toString: function() {
+    return "[Library " + this.name + "]";
+  }
+});
+exports.Library = Library;
+
+/**
  * Declare a function through js-ctypes
  *
  * @param {ctypes.library} lib The ctypes library holding the function.
@@ -1048,6 +1182,51 @@ let offsetBy =
 };
 exports.offsetBy = offsetBy;
 
+/**
+ * Utility function used to normalize a Typed Array or C
+ * pointer into a uint8_t C pointer.
+ *
+ * Future versions might extend this to other data structures.
+ *
+ * @param {Typed array | C pointer} candidate The buffer. If
+ * a C pointer, it must be non-null.
+ * @param {number} bytes The number of bytes that |candidate| should contain.
+ * Used for sanity checking if the size of |candidate| can be determined.
+ *
+ * @return {ptr:{C pointer}, bytes:number} A C pointer of type uint8_t,
+ * corresponding to the start of |candidate|.
+ */
+function normalizeToPointer(candidate, bytes) {
+  if (!candidate) {
+    throw new TypeError("Expecting  a Typed Array or a C pointer");
+  }
+  let ptr;
+  if ("isNull" in candidate) {
+    if (candidate.isNull()) {
+      throw new TypeError("Expecting a non-null pointer");
+    }
+    ptr = Type.uint8_t.out_ptr.cast(candidate);
+    if (bytes == null) {
+      throw new TypeError("C pointer missing bytes indication.");
+    }
+  } else if (isTypedArray(candidate)) {
+    // Typed Array
+    ptr = Type.uint8_t.out_ptr.implementation(candidate.buffer);
+    if (bytes == null) {
+      bytes = candidate.byteLength;
+    } else if (candidate.byteLength < bytes) {
+      throw new TypeError("Buffer is too short. I need at least " +
+                         bytes +
+                         " bytes but I have only " +
+                         candidate.byteLength +
+                          "bytes");
+    }
+  } else {
+    throw new TypeError("Expecting  a Typed Array or a C pointer");
+  }
+  return {ptr: ptr, bytes: bytes};
+};
+exports.normalizeToPointer = normalizeToPointer;
 
 ///////////////////// OS interactions
 
@@ -1059,12 +1238,15 @@ exports.offsetBy = offsetBy;
  * codes provided by subclasses of |OS.Shared.Error|.
  *
  * @param {string} operation The operation that failed.
+ * @param {string=} path The path of the file on which the operation failed,
+ * or nothing if there was no file involved in the failure.
  *
  * @constructor
  */
-function OSError(operation) {
+function OSError(operation, path = "") {
   Error.call(this);
   this.operation = operation;
+  this.path = path;
 }
 exports.OSError = OSError;
 

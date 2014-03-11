@@ -61,7 +61,7 @@ FrameworkView::SearchActivated(ComPtr<ISearchActivatedEventArgs>& aArgs, bool aS
   unsigned int length;
   WinUtils::LogW(L"SearchActivated text=%s", data.GetRawBuffer(&length));
   if (aStartup) {
-    mActivationURI = data.GetRawBuffer(&length);
+    WindowsDuplicateString(data.Get(), &sActivationURI);
   } else {
     PerformURILoadOrSearch(data);
   }
@@ -81,8 +81,7 @@ FrameworkView::FileActivated(ComPtr<IFileActivatedEventArgs>& aArgs, bool aStart
   AssertHRESULT(item->get_Path(filePath.GetAddressOf()));
 
   if (aStartup) {
-    unsigned int length;
-    mActivationURI = filePath.GetRawBuffer(&length);
+    WindowsDuplicateString(filePath.Get(), &sActivationURI);
   } else {
     PerformURILoad(filePath);
   }
@@ -99,13 +98,13 @@ FrameworkView::LaunchActivated(ComPtr<ILaunchActivatedEventArgs>& aArgs, bool aS
     return;
 
   // If we're being launched from a secondary tile then we have a 2nd command line param of -url
-  // and a third of the secondary tile.  We want it in mActivationURI so that browser.js will
+  // and a third of the secondary tile.  We want it in sActivationURI so that browser.js will
   // load it in without showing the start UI.
   int argc;
   unsigned int length;
   LPWSTR* argv = CommandLineToArgvW(data.GetRawBuffer(&length), &argc);
-  if (aStartup && argc == 3 && !wcsicmp(argv[1], L"-url")) {
-    mActivationURI = argv[2];
+  if (aStartup && argc == 2 && !wcsicmp(argv[0], L"-url")) {
+    WindowsCreateString(argv[1], wcslen(argv[1]), &sActivationURI);
   } else {
     // Some other command line or this is not a startup.
     // If it is startup we process it later when XPCOM is initialilzed.
@@ -177,8 +176,7 @@ FrameworkView::ProcessActivationArgs(IActivatedEventArgs* aArgs, bool aStartup)
       return;
 
     if (aStartup) {
-      unsigned int length;
-      mActivationURI = data.GetRawBuffer(&length);
+      WindowsDuplicateString(data.Get(), &sActivationURI);
     } else {
       PerformURILoad(data);
     }
@@ -273,7 +271,11 @@ FrameworkView::PerformURILoad(HString& aURI)
   }
 
   nsAutoCString utf8data(NS_ConvertUTF16toUTF8(aURI.GetRawBuffer(&length)));
-  const char *argv[] = { "metrobrowser",
+
+  // NB: The first argument gets stripped by nsICommandLineRunner::Init,
+  //     so it doesn't matter what we pass as the first argument, but we
+  //     have to pass something.
+  const char *argv[] = { "", // This argument gets stripped
                          "-url",
                          utf8data.BeginReading() };
   nsresult rv = cmdLine->Init(ArrayLength(argv),
@@ -304,7 +306,10 @@ FrameworkView::PerformSearch(HString& aQuery)
   parameter.Append(NS_ConvertUTF16toUTF8(aQuery.GetRawBuffer(&length)));
   parameter.AppendLiteral("\"");
 
-  const char *argv[] = { "metrobrowser",
+  // NB: The first argument gets stripped by nsICommandLineRunner::Init,
+  //     so it doesn't matter what we pass as the first argument, but we
+  //     have to pass something.
+  const char *argv[] = { "", // This argument gets stripped
                          "-search",
                          parameter.BeginReading() };
   nsresult rv = cmdLine->Init(ArrayLength(argv),

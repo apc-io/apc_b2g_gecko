@@ -80,7 +80,7 @@ bool InitializeIon();
 IonContext *GetIonContext();
 IonContext *MaybeGetIonContext();
 
-bool SetIonContext(IonContext *ctx);
+void SetIonContext(IonContext *ctx);
 
 bool CanIonCompileScript(JSContext *cx, HandleScript script, bool osr);
 
@@ -159,8 +159,8 @@ void StopAllOffThreadCompilations(JSCompartment *comp);
 static inline bool
 IsIonEnabled(JSContext *cx)
 {
-    return cx->compartment()->options().ion(cx) &&
-        cx->compartment()->options().baseline(cx) &&
+    return cx->runtime()->options().ion() &&
+        cx->runtime()->options().baseline() &&
         cx->typeInferenceEnabled();
 }
 

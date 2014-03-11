@@ -14,7 +14,7 @@
 #include "nsICSSDeclaration.h"
 #include "nsIDocument.h"
 #include "nsIDOMMutationEvent.h"
-#include "mozilla/MutationEvent.h"
+#include "mozilla/InternalMutationEvent.h"
 #include "nsError.h"
 #include "nsIPresShell.h"
 #include "nsGkAtoms.h"
@@ -1205,7 +1205,7 @@ MappedAttrParser::ParseMappedAttrValue(nsIAtom* aMappedAttrName,
   // Get the nsCSSProperty ID for our mapped attribute.
   nsCSSProperty propertyID =
     nsCSSProps::LookupProperty(nsDependentAtomString(aMappedAttrName),
-                               nsCSSProps::eEnabled);
+                               nsCSSProps::eEnabledForAllContent);
   if (propertyID != eCSSProperty_UNKNOWN) {
     bool changed; // outparam for ParseProperty. (ignored)
     mParser.ParseProperty(propertyID, aMappedAttrValue, mDocURI, mBaseURI,
@@ -1520,10 +1520,6 @@ nsIAtom* nsSVGElement::GetEventNameForAttr(nsIAtom* aAttr)
     return nsGkAtoms::onSVGLoad;
   if (aAttr == nsGkAtoms::onunload)
     return nsGkAtoms::onSVGUnload;
-  if (aAttr == nsGkAtoms::onabort)
-    return nsGkAtoms::onSVGAbort;
-  if (aAttr == nsGkAtoms::onerror)
-    return nsGkAtoms::onSVGError;
   if (aAttr == nsGkAtoms::onresize)
     return nsGkAtoms::onSVGResize;
   if (aAttr == nsGkAtoms::onscroll)
@@ -2500,7 +2496,7 @@ nsSVGElement::ReportAttributeParseFailure(nsIDocument* aDocument,
                                           const nsAString& aValue)
 {
   const nsAFlatString& attributeValue = PromiseFlatString(aValue);
-  const PRUnichar *strings[] = { aAttribute->GetUTF16String(),
+  const char16_t *strings[] = { aAttribute->GetUTF16String(),
                                  attributeValue.get() };
   return SVGContentUtils::ReportToConsole(aDocument,
                                           "AttributeParseWarning",
@@ -2543,7 +2539,7 @@ nsSVGElement::GetAnimatedAttr(int32_t aNamespaceID, nsIAtom* aName)
     if (IsAttributeMapped(aName)) {
       nsCSSProperty prop =
         nsCSSProps::LookupProperty(nsDependentAtomString(aName),
-                                   nsCSSProps::eEnabled);
+                                   nsCSSProps::eEnabledForAllContent);
       // Check IsPropertyAnimatable to avoid attributes that...
       //  - map to explicitly unanimatable properties (e.g. 'direction')
       //  - map to unsupported attributes (e.g. 'glyph-orientation-horizontal')

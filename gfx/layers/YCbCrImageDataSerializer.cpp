@@ -15,6 +15,9 @@
 #define MOZ_ALIGN_WORD(x) (((x) + 3) & ~3)
 
 namespace mozilla {
+
+using namespace gfx;
+
 namespace layers {
 
 // The Data is layed out as follows:
@@ -39,77 +42,92 @@ struct YCbCrBufferInfo
   uint32_t mYOffset;
   uint32_t mCbOffset;
   uint32_t mCrOffset;
+  uint32_t mYStride;
   uint32_t mYWidth;
   uint32_t mYHeight;
+  uint32_t mCbCrStride;
   uint32_t mCbCrWidth;
   uint32_t mCbCrHeight;
   StereoMode mStereoMode;
 };
 
-static YCbCrBufferInfo* GetYCbCrBufferInfo(uint8_t* aData)
+static YCbCrBufferInfo* GetYCbCrBufferInfo(uint8_t* aData, size_t aDataSize)
 {
-  return reinterpret_cast<YCbCrBufferInfo*>(aData);
+  return aDataSize >= sizeof(YCbCrBufferInfo)
+         ? reinterpret_cast<YCbCrBufferInfo*>(aData)
+         : nullptr;
 }
 
-bool YCbCrImageDataDeserializerBase::IsValid()
+void YCbCrImageDataDeserializerBase::Validate()
 {
-  if (mData == nullptr) {
-    return false;
+  mIsValid = false;
+  if (!mData) {
+    return;
   }
-  return true;
+  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData, mDataSize);
+  if (!info) {
+    return;
+  }
+  size_t requiredSize = ComputeMinBufferSize(
+                          IntSize(info->mYWidth, info->mYHeight),
+                          info->mYStride,
+                          IntSize(info->mCbCrWidth, info->mCbCrHeight),
+                          info->mCbCrStride);
+  mIsValid = requiredSize <= mDataSize;
+
 }
 
 uint8_t* YCbCrImageDataDeserializerBase::GetYData()
 {
-  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData);
+  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData, mDataSize);
   return reinterpret_cast<uint8_t*>(info) + info->mYOffset;
 }
 
 uint8_t* YCbCrImageDataDeserializerBase::GetCbData()
 {
-  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData);
+  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData, mDataSize);
   return reinterpret_cast<uint8_t*>(info) + info->mCbOffset;
 }
 
 uint8_t* YCbCrImageDataDeserializerBase::GetCrData()
 {
-  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData);
+  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData, mDataSize);
   return reinterpret_cast<uint8_t*>(info) + info->mCrOffset;
 }
 
 uint8_t* YCbCrImageDataDeserializerBase::GetData()
 {
-  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData);
+  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData, mDataSize);
   return (reinterpret_cast<uint8_t*>(info)) + MOZ_ALIGN_WORD(sizeof(YCbCrBufferInfo));
 }
 
 uint32_t YCbCrImageDataDeserializerBase::GetYStride()
 {
-  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData);
-  return info->mYWidth;
+  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData, mDataSize);
+  return info->mYStride;
 }
 
 uint32_t YCbCrImageDataDeserializerBase::GetCbCrStride()
 {
-  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData);
-  return info->mCbCrWidth;
+  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData, mDataSize);
+  return info->mCbCrStride;
 }
 
-gfxIntSize YCbCrImageDataDeserializerBase::GetYSize()
+gfx::IntSize YCbCrImageDataDeserializerBase::GetYSize()
 {
-  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData);
-  return gfxIntSize(info->mYWidth, info->mYHeight);
+  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData, mDataSize);
+  return gfx::IntSize(info->mYWidth, info->mYHeight);
 }
 
-gfxIntSize YCbCrImageDataDeserializerBase::GetCbCrSize()
+gfx::IntSize YCbCrImageDataDeserializerBase::GetCbCrSize()
 {
-  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData);
-  return gfxIntSize(info->mCbCrWidth, info->mCbCrHeight);
+  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData, mDataSize);
+  return gfx::IntSize(info->mCbCrWidth, info->mCbCrHeight);
 }
 
 StereoMode YCbCrImageDataDeserializerBase::GetStereoMode()
 {
-  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData);
+  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData, mDataSize);
   return info->mStereoMode;
 }
 
@@ -121,24 +139,24 @@ static size_t ComputeOffset(uint32_t aHeight, uint32_t aStride)
 
 // Minimum required shmem size in bytes
 size_t
-YCbCrImageDataSerializer::ComputeMinBufferSize(const gfx::IntSize& aYSize,
-                                               const gfx::IntSize& aCbCrSize)
+YCbCrImageDataDeserializerBase::ComputeMinBufferSize(const gfx::IntSize& aYSize,
+                                                   uint32_t aYStride,
+                                                   const gfx::IntSize& aCbCrSize,
+                                                   uint32_t aCbCrStride)
 {
-  uint32_t yStride = aYSize.width;
-  uint32_t CbCrStride = aCbCrSize.width;
-
-  return ComputeOffset(aYSize.height, yStride)
-         + 2 * ComputeOffset(aCbCrSize.height, CbCrStride)
+  return ComputeOffset(aYSize.height, aYStride)
+         + 2 * ComputeOffset(aCbCrSize.height, aCbCrStride)
          + MOZ_ALIGN_WORD(sizeof(YCbCrBufferInfo));
 }
 
+// Minimum required shmem size in bytes
 size_t
-YCbCrImageDataSerializer::ComputeMinBufferSize(const gfxIntSize& aYSize,
-                                               const gfxIntSize& aCbCrSize)
+YCbCrImageDataDeserializerBase::ComputeMinBufferSize(const gfx::IntSize& aYSize,
+                                                   const gfx::IntSize& aCbCrSize)
 {
-  return ComputeMinBufferSize(gfx::IntSize(aYSize.width, aYSize.height),
-                              gfx::IntSize(aCbCrSize.width, aCbCrSize.height));
+  return ComputeMinBufferSize(aYSize, aYSize.width, aCbCrSize, aCbCrSize.width);
 }
+
 // Offset in bytes
 static size_t ComputeOffset(uint32_t aSize)
 {
@@ -147,7 +165,7 @@ static size_t ComputeOffset(uint32_t aSize)
 
 // Minimum required shmem size in bytes
 size_t
-YCbCrImageDataSerializer::ComputeMinBufferSize(uint32_t aSize)
+YCbCrImageDataDeserializerBase::ComputeMinBufferSize(uint32_t aSize)
 {
   return ComputeOffset(aSize) + MOZ_ALIGN_WORD(sizeof(YCbCrBufferInfo));
 }
@@ -156,20 +174,40 @@ void
 YCbCrImageDataSerializer::InitializeBufferInfo(uint32_t aYOffset,
                                                uint32_t aCbOffset,
                                                uint32_t aCrOffset,
+                                               uint32_t aYStride,
+                                               uint32_t aCbCrStride,
                                                const gfx::IntSize& aYSize,
                                                const gfx::IntSize& aCbCrSize,
                                                StereoMode aStereoMode)
 {
-  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData);
+  YCbCrBufferInfo* info = GetYCbCrBufferInfo(mData, mDataSize);
+  MOZ_ASSERT(info); // OK to assert here, this method is client-side-only
   uint32_t info_size = MOZ_ALIGN_WORD(sizeof(YCbCrBufferInfo));
   info->mYOffset = info_size + aYOffset;
   info->mCbOffset = info_size + aCbOffset;
   info->mCrOffset = info_size + aCrOffset;
+  info->mYStride = aYStride;
   info->mYWidth = aYSize.width;
   info->mYHeight = aYSize.height;
+  info->mCbCrStride = aCbCrStride;
   info->mCbCrWidth = aCbCrSize.width;
   info->mCbCrHeight = aCbCrSize.height;
   info->mStereoMode = aStereoMode;
+  Validate();
+}
+
+void
+YCbCrImageDataSerializer::InitializeBufferInfo(uint32_t aYStride,
+                                               uint32_t aCbCrStride,
+                                               const gfx::IntSize& aYSize,
+                                               const gfx::IntSize& aCbCrSize,
+                                               StereoMode aStereoMode)
+{
+  uint32_t yOffset = 0;
+  uint32_t cbOffset = yOffset + MOZ_ALIGN_WORD(aYStride * aYSize.height);
+  uint32_t crOffset = cbOffset + MOZ_ALIGN_WORD(aCbCrStride * aCbCrSize.height);
+  return InitializeBufferInfo(yOffset, cbOffset, crOffset,
+      aYStride, aCbCrStride, aYSize, aCbCrSize, aStereoMode);
 }
 
 void
@@ -177,20 +215,7 @@ YCbCrImageDataSerializer::InitializeBufferInfo(const gfx::IntSize& aYSize,
                                                const gfx::IntSize& aCbCrSize,
                                                StereoMode aStereoMode)
 {
-  uint32_t yOffset = 0;
-  uint32_t cbOffset = yOffset + MOZ_ALIGN_WORD(aYSize.width * aYSize.height);
-  uint32_t crOffset = cbOffset + MOZ_ALIGN_WORD(aCbCrSize.width * aCbCrSize.height);
-  return InitializeBufferInfo(yOffset, cbOffset, crOffset, aYSize, aCbCrSize, aStereoMode);
-}
-
-void
-YCbCrImageDataSerializer::InitializeBufferInfo(const gfxIntSize& aYSize,
-                                               const gfxIntSize& aCbCrSize,
-                                               StereoMode aStereoMode)
-{
-  InitializeBufferInfo(gfx::IntSize(aYSize.width, aYSize.height),
-                       gfx::IntSize(aCbCrSize.width, aCbCrSize.height),
-                       aStereoMode);
+  return InitializeBufferInfo(aYSize.width, aCbCrSize.width, aYSize, aCbCrSize, aStereoMode);
 }
 
 static void CopyLineWithSkip(const uint8_t* src, uint8_t* dst, uint32_t len, uint32_t skip) {
@@ -204,8 +229,8 @@ static void CopyLineWithSkip(const uint8_t* src, uint8_t* dst, uint32_t len, uin
 bool
 YCbCrImageDataSerializer::CopyData(const uint8_t* aYData,
                                    const uint8_t* aCbData, const uint8_t* aCrData,
-                                   gfxIntSize aYSize, uint32_t aYStride,
-                                   gfxIntSize aCbCrSize, uint32_t aCbCrStride,
+                                   gfx::IntSize aYSize, uint32_t aYStride,
+                                   gfx::IntSize aCbCrSize, uint32_t aCbCrStride,
                                    uint32_t aYSkip, uint32_t aCbCrSkip)
 {
   if (!IsValid() || GetYSize() != aYSize || GetCbCrSize() != aCbCrSize) {
@@ -246,20 +271,23 @@ YCbCrImageDataSerializer::CopyData(const uint8_t* aYData,
   return true;
 }
 
-TemporaryRef<gfx::DataSourceSurface>
+TemporaryRef<DataSourceSurface>
 YCbCrImageDataDeserializer::ToDataSourceSurface()
 {
-  RefPtr<gfx::DataSourceSurface> result =
-    gfx::Factory::CreateDataSourceSurface(ToIntSize(GetYSize()), gfx::FORMAT_R8G8B8X8);
+  RefPtr<DataSourceSurface> result =
+    Factory::CreateDataSourceSurface(GetYSize(), gfx::SurfaceFormat::B8G8R8X8);
+
+  DataSourceSurface::MappedSurface map;
+  result->Map(DataSourceSurface::MapType::WRITE, &map);
 
   gfx::ConvertYCbCrToRGB32(GetYData(), GetCbData(), GetCrData(),
-                           result->GetData(),
+                           map.mData,
                            0, 0, //pic x and y
                            GetYSize().width, GetYSize().height,
                            GetYStride(), GetCbCrStride(),
-                           result->Stride(),
+                           map.mStride,
                            gfx::YV12);
-  result->MarkDirty();
+  result->Unmap();
   return result.forget();
 }
 

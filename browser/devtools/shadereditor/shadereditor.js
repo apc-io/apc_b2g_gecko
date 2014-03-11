@@ -14,7 +14,7 @@ Cu.import("resource:///modules/devtools/ViewHelpers.jsm");
 
 const require = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools.require;
 const promise = Cu.import("resource://gre/modules/Promise.jsm", {}).Promise;
-const EventEmitter = require("devtools/shared/event-emitter");
+const EventEmitter = require("devtools/toolkit/event-emitter");
 const {Tooltip} = require("devtools/shared/widgets/Tooltip");
 const Editor = require("devtools/sourceeditor/editor");
 
@@ -221,12 +221,17 @@ let ShadersListView = Heritage.extend(WidgetMethods, {
     // standard of allowing debuggees to add some identifiable metadata to their
     // program sources or instances.
     let label = L10N.getFormatStr("shadersList.programLabel", this.itemCount);
+    let contents = document.createElement("label");
+    contents.className = "plain program-item";
+    contents.setAttribute("value", label);
+    contents.setAttribute("crop", "start");
+    contents.setAttribute("flex", "1");
 
     // Append a program item to this container.
-    this.push([label, ""], {
+    this.push([contents], {
       index: -1, /* specifies on which position should the item be appended */
-      relaxed: true, /* this container should allow dupes & degenerates */
       attachment: {
+        label: label,
         programActor: programActor,
         checkboxState: true,
         checkboxTooltip: L10N.getStr("shadersList.blackboxLabel")
@@ -562,7 +567,7 @@ let ShadersEditorsView = {
 
     let tooltip = node._markerErrorsTooltip = new Tooltip(document);
     tooltip.defaultOffsetX = GUTTER_ERROR_PANEL_OFFSET_X;
-    tooltip.setTextContent(messages);
+    tooltip.setTextContent({ messages: messages });
     tooltip.startTogglingOnHover(node, () => true, GUTTER_ERROR_PANEL_DELAY);
   },
 

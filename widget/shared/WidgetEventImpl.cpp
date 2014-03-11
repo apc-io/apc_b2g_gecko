@@ -5,9 +5,9 @@
 
 #include "mozilla/BasicEvents.h"
 #include "mozilla/ContentEvents.h"
+#include "mozilla/InternalMutationEvent.h"
 #include "mozilla/MiscEvents.h"
 #include "mozilla/MouseEvents.h"
-#include "mozilla/MutationEvent.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/TouchEvents.h"
 
@@ -235,6 +235,76 @@ WidgetEvent::IsAllowedToDispatchDOMEvent() const
     default:
       return true;
   }
+}
+
+/******************************************************************************
+ * mozilla::WidgetKeyboardEvent (TextEvents.h)
+ ******************************************************************************/
+
+/*static*/ void
+WidgetKeyboardEvent::GetDOMKeyName(KeyNameIndex aKeyNameIndex,
+                                   nsAString& aKeyName)
+{
+  // The expected way to implement this function would be to use a
+  // switch statement.  By using a table-based implementation, below, we
+  // ensure that this function executes in constant time in cases where
+  // compilers wouldn't be able to convert the switch statement to a
+  // jump table.  This table-based implementation also minimizes the
+  // space required by the code and data.
+#define KEY_STR_NUM_INTERNAL(line) key##line
+#define KEY_STR_NUM(line) KEY_STR_NUM_INTERNAL(line)
+
+  // Catch non-ASCII DOM key names in our key name list.
+#define NS_DEFINE_KEYNAME(aCPPName, aDOMKeyName)                      \
+  static_assert(sizeof(aDOMKeyName) == MOZ_ARRAY_LENGTH(aDOMKeyName), \
+                "Invalid DOM key name");
+#include "nsDOMKeyNameList.h"
+#undef NS_DEFINE_KEYNAME
+
+  struct KeyNameTable
+  {
+#define NS_DEFINE_KEYNAME(aCPPName, aDOMKeyName)          \
+    char16_t KEY_STR_NUM(__LINE__)[sizeof(aDOMKeyName)];
+#include "nsDOMKeyNameList.h"
+#undef NS_DEFINE_KEYNAME
+  };
+
+  static const KeyNameTable kKeyNameTable = {
+#define NS_DEFINE_KEYNAME(aCPPName, aDOMKeyName) MOZ_UTF16(aDOMKeyName),
+#include "nsDOMKeyNameList.h"
+#undef NS_DEFINE_KEYNAME
+  };
+
+  static const uint16_t kKeyNameOffsets[] = {
+#define NS_DEFINE_KEYNAME(aCPPName, aDOMKeyName)          \
+    offsetof(struct KeyNameTable, KEY_STR_NUM(__LINE__)) / sizeof(char16_t),
+#include "nsDOMKeyNameList.h"
+#undef NS_DEFINE_KEYNAME
+    // Include this entry so we can compute lengths easily.
+    sizeof(kKeyNameTable)
+  };
+
+  // Use the sizeof trick rather than MOZ_ARRAY_LENGTH to avoid problems
+  // with constexpr functions called inside static_assert with some
+  // compilers.
+  static_assert(KEY_NAME_INDEX_USE_STRING ==
+                (sizeof(kKeyNameOffsets)/sizeof(kKeyNameOffsets[0])) - 1,
+                "Invalid enumeration values!");
+
+  if (aKeyNameIndex >= KEY_NAME_INDEX_USE_STRING) {
+    aKeyName.Truncate();
+    return;
+  }
+
+  uint16_t offset = kKeyNameOffsets[aKeyNameIndex];
+  uint16_t nextOffset = kKeyNameOffsets[aKeyNameIndex + 1];
+  const char16_t* table = reinterpret_cast<const char16_t*>(&kKeyNameTable);
+
+  // Subtract off 1 for the null terminator.
+  aKeyName.Assign(table + offset, nextOffset - offset - 1);
+
+#undef KEY_STR_NUM
+#undef KEY_STR_NUM_INTERNAL
 }
 
 } // namespace mozilla

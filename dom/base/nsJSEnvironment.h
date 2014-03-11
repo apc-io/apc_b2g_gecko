@@ -18,9 +18,12 @@
 
 class nsICycleCollectorListener;
 class nsIXPConnectJSObjectHolder;
-class nsRootedJSValueArray;
 class nsScriptNameSpaceManager;
 class nsCycleCollectionNoteRootCallback;
+
+namespace JS {
+class AutoValueVector;
+}
 
 namespace mozilla {
 template <class> class Maybe;
@@ -101,11 +104,15 @@ public:
                                 IsShrinking aShrinking = NonShrinkingGC,
                                 int64_t aSliceMillis = 0);
   static void ShrinkGCBuffersNow();
+
   // If aExtraForgetSkippableCalls is -1, forgetSkippable won't be
   // called even if the previous collection was GC.
   static void CycleCollectNow(nsICycleCollectorListener *aListener = nullptr,
                               int32_t aExtraForgetSkippableCalls = 0);
-  static void ScheduledCycleCollectNow();
+
+  // Run a cycle collector slice, using a heuristic to decide how long to run it.
+  static void RunCycleCollectorSlice();
+
   static void BeginCycleCollectionCallback();
   static void EndCycleCollectionCallback(mozilla::CycleCollectorResults &aResults);
 
@@ -117,6 +124,7 @@ public:
 
   static void MaybePokeCC();
   static void KillCCTimer();
+  static void KillICCTimer();
   static void KillFullGCTimer();
   static void KillInterSliceGCTimer();
 
@@ -140,9 +148,7 @@ protected:
   // Helper to convert xpcom datatypes to jsvals.
   nsresult ConvertSupportsTojsvals(nsISupports *aArgs,
                                    JS::Handle<JSObject*> aScope,
-                                   uint32_t *aArgc,
-                                   JS::Value **aArgv,
-                                   mozilla::Maybe<nsRootedJSValueArray> &aPoolRelease);
+                                   JS::AutoValueVector &aArgsOut);
 
   nsresult AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv);
 

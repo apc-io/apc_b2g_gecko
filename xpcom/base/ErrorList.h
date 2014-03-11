@@ -108,8 +108,6 @@
   ERROR(NS_ERROR_GFX_PRINTER_STARTPAGE,                   FAILURE(6)),
   /* The document is still being loaded */
   ERROR(NS_ERROR_GFX_PRINTER_DOC_IS_BUSY,                 FAILURE(7)),
-  /* Cannot Print or Print Preview XUL Documents (bug 136185 / bug 240490) */
-  ERROR(NS_ERROR_GFX_PRINTER_NO_XUL,                      FAILURE(8)),
 
   /* Font cmap is strangely structured - avoid this font! */
   ERROR(NS_ERROR_GFX_CMAP_MALFORMED,                      FAILURE(51)),
@@ -600,10 +598,6 @@
   /* any new errors here should have an associated entry added in xpc.msg */
 
   ERROR(NS_SUCCESS_I_DID_SOMETHING,      SUCCESS(1)),
-  /* Classes that want to only be touched by chrome (or from code whose
-   * filename begins with chrome://global/) shoudl return this from their
-   * scriptable helper's PreCreate hook. */
-  ERROR(NS_SUCCESS_CHROME_ACCESS_ONLY,   SUCCESS(2)),
 #undef MODULE
 
 
@@ -829,6 +823,18 @@
   ERROR(NS_ERROR_SIGNED_JAR_ENTRY_TOO_LARGE,              FAILURE(6)),
   ERROR(NS_ERROR_SIGNED_JAR_ENTRY_INVALID,                FAILURE(7)),
   ERROR(NS_ERROR_SIGNED_JAR_MANIFEST_INVALID,             FAILURE(8)),
+#undef MODULE
+
+  /* ======================================================================= */
+  /* 36: NS_ERROR_MODULE_DOM_FILESYSTEM */
+  /* ======================================================================= */
+#define MODULE NS_ERROR_MODULE_DOM_FILESYSTEM
+  ERROR(NS_ERROR_DOM_FILESYSTEM_INVALID_PATH_ERR,          FAILURE(1)),
+  ERROR(NS_ERROR_DOM_FILESYSTEM_INVALID_MODIFICATION_ERR,  FAILURE(2)),
+  ERROR(NS_ERROR_DOM_FILESYSTEM_NO_MODIFICATION_ALLOWED_ERR, FAILURE(3)),
+  ERROR(NS_ERROR_DOM_FILESYSTEM_PATH_EXISTS_ERR,           FAILURE(4)),
+  ERROR(NS_ERROR_DOM_FILESYSTEM_TYPE_MISMATCH_ERR,         FAILURE(5)),
+  ERROR(NS_ERROR_DOM_FILESYSTEM_UNKNOWN_ERR,               FAILURE(6)),
 #undef MODULE
 
   /* ======================================================================= */

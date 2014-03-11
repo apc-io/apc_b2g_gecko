@@ -117,7 +117,7 @@ NS_IMPL_ISUPPORTS1(nsStandardURL::nsPrefObserver, nsIObserver)
 NS_IMETHODIMP nsStandardURL::
 nsPrefObserver::Observe(nsISupports *subject,
                         const char *topic,
-                        const PRUnichar *data)
+                        const char16_t *data)
 {
     if (!strcmp(topic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID)) {
         nsCOMPtr<nsIPrefBranch> prefBranch( do_QueryInterface(subject) );
@@ -353,6 +353,7 @@ nsStandardURL::Clear()
 
     mPort = -1;
 
+    mScheme.Reset();
     mAuthority.Reset();
     mUsername.Reset();
     mPassword.Reset();
@@ -515,7 +516,7 @@ nsStandardURL::BuildNormalizedSpec(const char *spec)
         if (mPassword.mLen >= 0)
             approxLen += 1 + encoder.EncodeSegmentCount(spec, mPassword,  esc_Password,      encPassword,  useEncPassword);
         // mHost is handled differently below due to encoding differences
-        NS_ABORT_IF_FALSE(mPort > 0 || mPort == -1, "Invalid negative mPort");
+        NS_ABORT_IF_FALSE(mPort >= -1, "Invalid negative mPort");
         if (mPort != -1 && mPort != mDefaultPort)
         {
             // :port
@@ -588,7 +589,7 @@ nsStandardURL::BuildNormalizedSpec(const char *spec)
     if (mHost.mLen > 0) {
         i = AppendSegmentToBuf(buf, i, spec, mHost, &encHost, useEncHost);
         net_ToLowerCase(buf + mHost.mPos, mHost.mLen);
-        NS_ABORT_IF_FALSE(mPort > 0 || mPort == -1, "Invalid negative mPort");
+        NS_ABORT_IF_FALSE(mPort >= -1, "Invalid negative mPort");
         if (mPort != -1 && mPort != mDefaultPort) {
             buf[i++] = ':';
             // Already formatted while building approxLen
@@ -1137,11 +1138,16 @@ nsStandardURL::SetSpec(const nsACString &input)
 
     // parse the given URL...
     nsresult rv = ParseURL(spec, specLength);
-    if (NS_FAILED(rv)) return rv;
+    if (NS_SUCCEEDED(rv)) {
+        // finally, use the URLSegment member variables to build a normalized
+        // copy of |spec|
+        rv = BuildNormalizedSpec(spec);
+    }
 
-    // finally, use the URLSegment member variables to build a normalized
-    // copy of |spec|
-    rv = BuildNormalizedSpec(spec);
+    if (NS_FAILED(rv)) {
+        Clear();
+        return rv;
+    }
 
 #if defined(PR_LOGGING)
     if (LOG_ENABLED()) {
@@ -1174,16 +1180,16 @@ nsStandardURL::SetScheme(const nsACString &input)
     LOG(("nsStandardURL::SetScheme [scheme=%s]\n", scheme.get()));
 
     if (scheme.IsEmpty()) {
-        NS_ERROR("cannot remove the scheme from an url");
+        NS_WARNING("cannot remove the scheme from an url");
         return NS_ERROR_UNEXPECTED;
     }
     if (mScheme.mLen < 0) {
-        NS_ERROR("uninitialized");
+        NS_WARNING("uninitialized");
         return NS_ERROR_NOT_INITIALIZED;
     }
 
     if (!net_IsValidScheme(scheme)) {
-        NS_ERROR("the given url scheme contains invalid characters");
+        NS_WARNING("the given url scheme contains invalid characters");
         return NS_ERROR_UNEXPECTED;
     }
 
@@ -1216,11 +1222,11 @@ nsStandardURL::SetUserPass(const nsACString &input)
     if (mURLType == URLTYPE_NO_AUTHORITY) {
         if (userpass.IsEmpty())
             return NS_OK;
-        NS_ERROR("cannot set user:pass on no-auth url");
+        NS_WARNING("cannot set user:pass on no-auth url");
         return NS_ERROR_UNEXPECTED;
     }
     if (mAuthority.mLen < 0) {
-        NS_ERROR("uninitialized");
+        NS_WARNING("uninitialized");
         return NS_ERROR_NOT_INITIALIZED;
     }
 
@@ -1317,7 +1323,7 @@ nsStandardURL::SetUsername(const nsACString &input)
     if (mURLType == URLTYPE_NO_AUTHORITY) {
         if (username.IsEmpty())
             return NS_OK;
-        NS_ERROR("cannot set username on no-auth url");
+        NS_WARNING("cannot set username on no-auth url");
         return NS_ERROR_UNEXPECTED;
     }
 
@@ -1362,11 +1368,11 @@ nsStandardURL::SetPassword(const nsACString &input)
     if (mURLType == URLTYPE_NO_AUTHORITY) {
         if (password.IsEmpty())
             return NS_OK;
-        NS_ERROR("cannot set password on no-auth url");
+        NS_WARNING("cannot set password on no-auth url");
         return NS_ERROR_UNEXPECTED;
     }
     if (mUsername.mLen <= 0) {
-        NS_ERROR("cannot set password without existing username");
+        NS_WARNING("cannot set password without existing username");
         return NS_ERROR_FAILURE;
     }
 
@@ -1529,8 +1535,8 @@ nsStandardURL::SetPort(int32_t port)
     if ((port == mPort) || (mPort == -1 && port == mDefaultPort))
         return NS_OK;
 
-    // ports must be >= 0 (and 0 is pretty much garbage too, though legal per RFC)
-    if (port <= 0 && port != -1) // -1 == use default
+    // ports must be >= 0
+    if (port < -1) // -1 == use default
         return NS_ERROR_MALFORMED_URI;
 
     if (mURLType == URLTYPE_NO_AUTHORITY) {
@@ -1814,7 +1820,7 @@ nsStandardURL::Resolve(const nsACString &in, nsACString &out)
     // initialize a nsStandardURL object.
 
     if (mScheme.mLen < 0) {
-        NS_ERROR("unable to Resolve URL: this URL not initialized");
+        NS_WARNING("unable to Resolve URL: this URL not initialized");
         return NS_ERROR_NOT_INITIALIZED;
     }
 
@@ -2514,12 +2520,12 @@ nsStandardURL::EnsureFile()
 
     // Parse the spec if we don't have a cached result
     if (mSpec.IsEmpty()) {
-        NS_ERROR("url not initialized");
+        NS_WARNING("url not initialized");
         return NS_ERROR_NOT_INITIALIZED;
     }
 
     if (!SegmentIs(mScheme, "file")) {
-        NS_ERROR("not a file URL");
+        NS_WARNING("not a file URL");
         return NS_ERROR_FAILURE;
     }
 

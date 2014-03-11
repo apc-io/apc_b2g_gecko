@@ -5,6 +5,8 @@
 
 package org.mozilla.gecko.home;
 
+import java.util.EnumSet;
+
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.ThumbnailHelper;
 import org.mozilla.gecko.db.BrowserDB.TopSitesCursorWrapper;
@@ -18,14 +20,11 @@ import android.database.Cursor;
 import android.graphics.Rect;
 import android.text.TextUtils;
 import android.util.AttributeSet;
-import android.util.Log;
 import android.view.ContextMenu.ContextMenuInfo;
 import android.view.View;
 import android.widget.AbsListView;
 import android.widget.AdapterView;
 import android.widget.GridView;
-
-import java.util.EnumSet;
 
 /**
  * A grid view of top and pinned sites.
@@ -106,7 +105,7 @@ public class TopSitesGridView extends GridView {
                 TopSitesGridItemView row = (TopSitesGridItemView) view;
 
                 // Decode "user-entered" URLs before loading them.
-                String url = TopSitesPage.decodeUserEnteredUrl(row.getUrl());
+                String url = TopSitesPanel.decodeUserEnteredUrl(row.getUrl());
 
                 // If the url is empty, the user can pin a site.
                 // If not, navigate to the page given by the url.

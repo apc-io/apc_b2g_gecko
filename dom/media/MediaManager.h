@@ -19,6 +19,7 @@
 #include "nsIDOMNavigatorUserMedia.h"
 #include "nsXULAppAPI.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/Preferences.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/dom/MediaStreamTrackBinding.h"
 #include "prlog.h"
@@ -102,12 +103,16 @@ public:
   bool CapturingVideo()
   {
     NS_ASSERTION(NS_IsMainThread(), "Only call on main thread");
-    return mVideoSource && !mVideoSource->IsFake() && !mStopped;
+    return mVideoSource && !mStopped &&
+           (!mVideoSource->IsFake() ||
+            Preferences::GetBool("media.navigator.permission.fake"));
   }
   bool CapturingAudio()
   {
     NS_ASSERTION(NS_IsMainThread(), "Only call on main thread");
-    return mAudioSource && !mAudioSource->IsFake() && !mStopped;
+    return mAudioSource && !mStopped &&
+           (!mAudioSource->IsFake() ||
+            Preferences::GetBool("media.navigator.permission.fake"));
   }
 
   void SetStopped()
@@ -241,6 +246,7 @@ typedef enum {
 } MediaOperation;
 
 class MediaManager;
+class GetUserMediaRunnable;
 
 /**
  * Send an error back to content. The error is the form a string.
@@ -493,7 +499,8 @@ public:
   nsresult GetUserMediaDevices(nsPIDOMWindow* aWindow,
     const dom::MediaStreamConstraintsInternal& aConstraints,
     nsIGetUserMediaDevicesSuccessCallback* onSuccess,
-    nsIDOMGetUserMediaErrorCallback* onError);
+    nsIDOMGetUserMediaErrorCallback* onError,
+    uint64_t aInnerWindowID = 0);
   void OnNavigation(uint64_t aWindowID);
 
   MediaEnginePrefs mPrefs;
@@ -513,9 +520,7 @@ private:
   // Make private because we want only one instance of this class
   MediaManager();
 
-  ~MediaManager() {
-    delete mBackend;
-  }
+  ~MediaManager() {}
 
   nsresult MediaCaptureWindowStateInternal(nsIDOMWindow* aWindow, bool* aVideo,
                                            bool* aAudio);
@@ -524,17 +529,18 @@ private:
 
   // ONLY access from MainThread so we don't need to lock
   WindowTable mActiveWindows;
-  nsRefPtrHashtable<nsStringHashKey, nsRunnable> mActiveCallbacks;
+  nsRefPtrHashtable<nsStringHashKey, GetUserMediaRunnable> mActiveCallbacks;
+  nsClassHashtable<nsUint64HashKey, nsTArray<nsString>> mCallIds;
   // Always exists
   nsCOMPtr<nsIThread> mMediaThread;
 
   Mutex mMutex;
   // protected with mMutex:
-  MediaEngine* mBackend;
+  RefPtr<MediaEngine> mBackend;
 
   static StaticRefPtr<MediaManager> sSingleton;
 
-#ifdef MOZ_WIDGET_GONK
+#ifdef MOZ_B2G_CAMERA
   nsRefPtr<nsDOMCameraManager> mCameraManager;
 #endif
 };

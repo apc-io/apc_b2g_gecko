@@ -17,14 +17,14 @@ using namespace JS;
 #define IS_TEAROFF_CLASS(clazz) ((clazz) == &XPC_WN_Tearoff_JSClass)
 
 XPCCallContext::XPCCallContext(XPCContext::LangType callerLanguage,
-                               JSContext* cx       /* = GetDefaultJSContext() */,
+                               JSContext* cx,
                                HandleObject obj    /* = nullptr               */,
                                HandleObject funobj /* = nullptr               */,
                                HandleId name       /* = JSID_VOID             */,
                                unsigned argc       /* = NO_ARGS               */,
                                jsval *argv         /* = nullptr               */,
                                jsval *rval         /* = nullptr               */)
-    :   mPusher(cx),
+    :   mAr(cx),
         mState(INIT_FAILED),
         mXPC(nsXPConnect::XPConnect()),
         mXPCContext(nullptr),
@@ -36,6 +36,7 @@ XPCCallContext::XPCCallContext(XPCContext::LangType callerLanguage,
         mName(cx)
 {
     MOZ_ASSERT(cx);
+    MOZ_ASSERT(cx == XPCJSRuntime::Get()->GetJSContextStack()->Peek());
 
     if (!mXPC)
         return;
@@ -245,9 +246,8 @@ XPCCallContext::~XPCCallContext()
 NS_IMETHODIMP
 XPCCallContext::GetCallee(nsISupports * *aCallee)
 {
-    nsISupports* temp = mWrapper ? mWrapper->GetIdentityObject() : nullptr;
-    NS_IF_ADDREF(temp);
-    *aCallee = temp;
+    nsCOMPtr<nsISupports> rval = mWrapper ? mWrapper->GetIdentityObject() : nullptr;
+    rval.forget(aCallee);
     return NS_OK;
 }
 
@@ -263,9 +263,8 @@ XPCCallContext::GetCalleeMethodIndex(uint16_t *aCalleeMethodIndex)
 NS_IMETHODIMP
 XPCCallContext::GetCalleeWrapper(nsIXPConnectWrappedNative * *aCalleeWrapper)
 {
-    nsIXPConnectWrappedNative* temp = mWrapper;
-    NS_IF_ADDREF(temp);
-    *aCalleeWrapper = temp;
+    nsCOMPtr<nsIXPConnectWrappedNative> rval = mWrapper;
+    rval.forget(aCalleeWrapper);
     return NS_OK;
 }
 
@@ -273,9 +272,8 @@ XPCCallContext::GetCalleeWrapper(nsIXPConnectWrappedNative * *aCalleeWrapper)
 NS_IMETHODIMP
 XPCCallContext::GetCalleeInterface(nsIInterfaceInfo * *aCalleeInterface)
 {
-    nsIInterfaceInfo* temp = mInterface->GetInterfaceInfo();
-    NS_IF_ADDREF(temp);
-    *aCalleeInterface = temp;
+    nsCOMPtr<nsIInterfaceInfo> rval = mInterface->GetInterfaceInfo();
+    rval.forget(aCalleeInterface);
     return NS_OK;
 }
 
@@ -283,9 +281,8 @@ XPCCallContext::GetCalleeInterface(nsIInterfaceInfo * *aCalleeInterface)
 NS_IMETHODIMP
 XPCCallContext::GetCalleeClassInfo(nsIClassInfo * *aCalleeClassInfo)
 {
-    nsIClassInfo* temp = mWrapper ? mWrapper->GetClassInfo() : nullptr;
-    NS_IF_ADDREF(temp);
-    *aCalleeClassInfo = temp;
+    nsCOMPtr<nsIClassInfo> rval = mWrapper ? mWrapper->GetClassInfo() : nullptr;
+    rval.forget(aCalleeClassInfo);
     return NS_OK;
 }
 
@@ -354,7 +351,10 @@ XPCCallContext::UnwrapThisIfAllowed(HandleObject obj, HandleObject fun, unsigned
     // here, potentially an outer window proxy, and then an XPCWN.
     MOZ_ASSERT(js::IsWrapper(obj));
     RootedObject unwrapped(mJSContext, js::UncheckedUnwrap(obj, /* stopAtOuter = */ false));
-    MOZ_ASSERT(unwrapped == JS_ObjectToInnerObject(mJSContext, js::Wrapper::wrappedObject(obj)));
+#ifdef DEBUG
+    JS::Rooted<JSObject*> wrappedObj(mJSContext, js::Wrapper::wrappedObject(obj));
+    MOZ_ASSERT(unwrapped == JS_ObjectToInnerObject(mJSContext, wrappedObj));
+#endif
 
     // Make sure we have an XPCWN, and grab it.
     if (!IS_WN_REFLECTOR(unwrapped))

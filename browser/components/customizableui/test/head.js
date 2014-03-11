@@ -11,12 +11,15 @@ Cu.import("resource:///modules/CustomizableUI.jsm", tmp);
 let {Promise, CustomizableUI} = tmp;
 
 let ChromeUtils = {};
-let scriptLoader = Cc["@mozilla.org/moz/jssubscript-loader;1"].getService(Ci.mozIJSSubScriptLoader);
-scriptLoader.loadSubScript("chrome://mochikit/content/tests/SimpleTest/ChromeUtils.js", ChromeUtils);
+Services.scriptloader.loadSubScript("chrome://mochikit/content/tests/SimpleTest/ChromeUtils.js", ChromeUtils);
+
+Services.prefs.setBoolPref("browser.uiCustomization.skipSourceNodeCheck", true);
+registerCleanupFunction(() => Services.prefs.clearUserPref("browser.uiCustomization.skipSourceNodeCheck"));
 
 let {synthesizeDragStart, synthesizeDrop} = ChromeUtils;
 
 const kNSXUL = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+const kTabEventFailureTimeoutInMs = 20000;
 
 function createDummyXULButton(id, label) {
   let btn = document.createElementNS(kNSXUL, "toolbarbutton");
@@ -29,7 +32,7 @@ function createDummyXULButton(id, label) {
 
 let gAddedToolbars = new Set();
 
-function createToolbarWithPlacements(id, placements) {
+function createToolbarWithPlacements(id, placements = []) {
   gAddedToolbars.add(id);
   let tb = document.createElementNS(kNSXUL, "toolbar");
   tb.id = id;
@@ -51,17 +54,18 @@ function removeCustomToolbars() {
   gAddedToolbars.clear();
 }
 
+function getToolboxCustomToolbarId(toolbarName) {
+  return "__customToolbar_" + toolbarName.replace(" ", "_");
+}
+
 function resetCustomization() {
   return CustomizableUI.reset();
 }
 
 function isInWin8() {
-  let sysInfo = Services.sysinfo;
-  let osName = sysInfo.getProperty("name");
-  let version = sysInfo.getProperty("version");
-
-  // Windows 8 is version >= 6.2
-  return osName == "Windows_NT" && version >= 6.2;
+  if (!Services.metro)
+    return false;
+  return Services.metro.supported;
 }
 
 function addSwitchToMetroButtonInWindows8(areaPanelPlacements) {
@@ -198,6 +202,11 @@ function openAndLoadWindow(aOptions, aWaitForDelayedStartup=false) {
   return deferred.promise;
 }
 
+function promiseWindowClosed(win) {
+  win.close();
+  return waitForCondition(() => win.closed);
+}
+
 function promisePanelShown(win) {
   let panelEl = win.PanelUI.panel;
   return promisePanelElementShown(win, panelEl);
@@ -246,6 +255,40 @@ function promisePanelElementHidden(win, aPanel) {
   return deferred.promise;
 }
 
+function isPanelUIOpen() {
+  return PanelUI.panel.state == "open" || PanelUI.panel.state == "showing";
+}
+
+function subviewShown(aSubview) {
+  let deferred = Promise.defer();
+  let win = aSubview.ownerDocument.defaultView;
+  let timeoutId = win.setTimeout(() => {
+    deferred.reject("Subview (" + aSubview.id + ") did not show within 20 seconds.");
+  }, 20000);
+  function onViewShowing(e) {
+    aSubview.removeEventListener("ViewShowing", onViewShowing);
+    win.clearTimeout(timeoutId);
+    deferred.resolve();
+  };
+  aSubview.addEventListener("ViewShowing", onViewShowing);
+  return deferred.promise;
+}
+
+function subviewHidden(aSubview) {
+  let deferred = Promise.defer();
+  let win = aSubview.ownerDocument.defaultView;
+  let timeoutId = win.setTimeout(() => {
+    deferred.reject("Subview (" + aSubview.id + ") did not hide within 20 seconds.");
+  }, 20000);
+  function onViewHiding(e) {
+    aSubview.removeEventListener("ViewHiding", onViewHiding);
+    win.clearTimeout(timeoutId);
+    deferred.resolve();
+  };
+  aSubview.addEventListener("ViewHiding", onViewHiding);
+  return deferred.promise;
+}
+
 function waitForCondition(aConditionFn, aMaxTries=50, aCheckInterval=100) {
   function tryNow() {
     tries++;
@@ -270,4 +313,128 @@ function waitFor(aTimeout=100) {
   let deferred = Promise.defer();
   setTimeout(function() deferred.resolve(), aTimeout);
   return deferred.promise;
+}
+
+/**
+ * Starts a load in an existing tab and waits for it to finish (via some event).
+ *
+ * @param aTab       The tab to load into.
+ * @param aUrl       The url to load.
+ * @param aEventType The load event type to wait for.  Defaults to "load".
+ * @return {Promise} resolved when the event is handled.
+ */
+function promiseTabLoadEvent(aTab, aURL, aEventType="load") {
+  let deferred = Promise.defer();
+  info("Wait for tab event: " + aEventType);
+
+  let timeoutId = setTimeout(() => {
+    aTab.linkedBrowser.removeEventListener(aEventType, onTabLoad, true);
+    deferred.reject("TabSelect did not happen within " + kTabEventFailureTimeoutInMs + "ms");
+  }, kTabEventFailureTimeoutInMs);
+
+  function onTabLoad(event) {
+    if (event.originalTarget != aTab.linkedBrowser.contentDocument ||
+        event.target.location.href == "about:blank") {
+      info("skipping spurious load event");
+      return;
+    }
+    clearTimeout(timeoutId);
+    aTab.linkedBrowser.removeEventListener(aEventType, onTabLoad, true);
+    info("Tab event received: " + aEventType);
+    deferred.resolve();
+  }
+  aTab.linkedBrowser.addEventListener(aEventType, onTabLoad, true, true);
+  aTab.linkedBrowser.loadURI(aURL);
+  return deferred.promise;
+}
+
+/**
+ * Navigate back or forward in tab history and wait for it to finish.
+ *
+ * @param aDirection   Number to indicate to move backward or forward in history.
+ * @param aConditionFn Function that returns the result of an evaluated condition
+ *                     that needs to be `true` to resolve the promise.
+ * @return {Promise} resolved when navigation has finished.
+ */
+function promiseTabHistoryNavigation(aDirection = -1, aConditionFn) {
+  let deferred = Promise.defer();
+
+  let timeoutId = setTimeout(() => {
+    gBrowser.removeEventListener("pageshow", listener, true);
+    deferred.reject("Pageshow did not happen within " + kTabEventFailureTimeoutInMs + "ms");
+  }, kTabEventFailureTimeoutInMs);
+
+  function listener(event) {
+    gBrowser.removeEventListener("pageshow", listener, true);
+    clearTimeout(timeoutId);
+
+    if (aConditionFn) {
+      waitForCondition(aConditionFn).then(() => deferred.resolve(),
+                                          aReason => deferred.reject(aReason));
+    } else {
+      deferred.resolve();
+    }
+  }
+  gBrowser.addEventListener("pageshow", listener, true);
+
+  content.history.go(aDirection);
+
+  return deferred.promise;
+}
+
+function contextMenuShown(aContextMenu) {
+  let deferred = Promise.defer();
+  let win = aContextMenu.ownerDocument.defaultView;
+  let timeoutId = win.setTimeout(() => {
+    deferred.reject("Context menu (" + aContextMenu.id + ") did not show within 20 seconds.");
+  }, 20000);
+  function onPopupShown(e) {
+    aContextMenu.removeEventListener("popupshown", onPopupShown);
+    win.clearTimeout(timeoutId);
+    deferred.resolve();
+  };
+  aContextMenu.addEventListener("popupshown", onPopupShown);
+  return deferred.promise;
+}
+
+function contextMenuHidden(aContextMenu) {
+  let deferred = Promise.defer();
+  let win = aContextMenu.ownerDocument.defaultView;
+  let timeoutId = win.setTimeout(() => {
+    deferred.reject("Context menu (" + aContextMenu.id + ") did not hide within 20 seconds.");
+  }, 20000);
+  function onPopupHidden(e) {
+    win.clearTimeout(timeoutId);
+    aContextMenu.removeEventListener("popuphidden", onPopupHidden);
+    deferred.resolve();
+  };
+  aContextMenu.addEventListener("popuphidden", onPopupHidden);
+  return deferred.promise;
+}
+
+
+// This is a simpler version of the context menu check that
+// exists in contextmenu_common.js.
+function checkContextMenu(aContextMenu, aExpectedEntries, aWindow=window) {
+  let childNodes = aContextMenu.childNodes;
+  for (let i = 0; i < childNodes.length; i++) {
+    let menuitem = childNodes[i];
+    try {
+      if (aExpectedEntries[i][0] == "---") {
+        is(menuitem.localName, "menuseparator", "menuseparator expected");
+        continue;
+      }
+
+      let selector = aExpectedEntries[i][0];
+      ok(menuitem.mozMatchesSelector(selector), "menuitem should match " + selector + " selector");
+      let commandValue = menuitem.getAttribute("command");
+      let relatedCommand = commandValue ? aWindow.document.getElementById(commandValue) : null;
+      let menuItemDisabled = relatedCommand ?
+                               relatedCommand.getAttribute("disabled") == "true" :
+                               menuitem.getAttribute("disabled") == "true";
+      is(menuItemDisabled, !aExpectedEntries[i][1], "disabled state for " + selector);
+    } catch (e) {
+      ok(false, "Exception when checking context menu: " + e);
+    }
+  }
 }

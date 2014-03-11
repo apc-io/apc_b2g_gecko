@@ -5,15 +5,23 @@
 
 package org.mozilla.gecko;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import org.json.JSONObject;
 import org.mozilla.gecko.db.BrowserDB;
 import org.mozilla.gecko.favicons.Favicons;
+import org.mozilla.gecko.fxa.FirefoxAccounts;
 import org.mozilla.gecko.mozglue.JNITarget;
 import org.mozilla.gecko.mozglue.RobocopTarget;
 import org.mozilla.gecko.sync.setup.SyncAccounts;
 import org.mozilla.gecko.util.GeckoEventListener;
 import org.mozilla.gecko.util.ThreadUtils;
-
-import org.json.JSONObject;
 
 import android.accounts.Account;
 import android.accounts.AccountManager;
@@ -25,16 +33,7 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Handler;
-import android.text.TextUtils;
 import android.util.Log;
-
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public class Tabs implements GeckoEventListener {
     private static final String LOGTAG = "GeckoTabs";
@@ -74,7 +73,9 @@ public class Tabs implements GeckoEventListener {
         @Override
         public void run() {
             try {
-                boolean syncIsSetup = SyncAccounts.syncAccountsExist(getAppContext());
+                final Context context = getAppContext();
+                boolean syncIsSetup = SyncAccounts.syncAccountsExist(context) ||
+                                      FirefoxAccounts.firefoxAccountsExist(context);
                 if (syncIsSetup) {
                     TabsAccessor.persistLocalTabs(getContentResolver(), getTabsInOrder());
                 }
@@ -159,7 +160,7 @@ public class Tabs implements GeckoEventListener {
         return count;
     }
 
-    public synchronized int isOpen(String url) {
+    public int isOpen(String url) {
         for (Tab tab : mOrder) {
             if (tab.getURL().equals(url)) {
                 return tab.getId();
@@ -403,7 +404,6 @@ public class Tabs implements GeckoEventListener {
                         // Tab was already closed; abort
                         return;
                     }
-                    tab.updateURL(url);
                 } else {
                     tab = addTab(id, url, message.getBoolean("external"),
                                           message.getInt("parentId"),
@@ -455,10 +455,12 @@ public class Tabs implements GeckoEventListener {
                     }
                 }
             } else if (event.equals("Content:LoadError")) {
+                tab.handleContentLoaded();
                 notifyListeners(tab, Tabs.TabEvents.LOAD_ERROR);
             } else if (event.equals("Content:PageShow")) {
                 notifyListeners(tab, TabEvents.PAGE_SHOW);
             } else if (event.equals("DOMContentLoaded")) {
+                tab.handleContentLoaded();
                 String backgroundColor = message.getString("bgColor");
                 if (backgroundColor != null) {
                     tab.setBackgroundColor(backgroundColor);
@@ -565,7 +567,6 @@ public class Tabs implements GeckoEventListener {
         notifyListeners(tab, msg, "");
     }
 
-    // Throws if not initialized.
     public void notifyListeners(final Tab tab, final TabEvents msg, final Object data) {
         if (tab == null &&
             msg != TabEvents.RESTORED) {
@@ -637,32 +638,44 @@ public class Tabs implements GeckoEventListener {
     /**
      * Looks for an open tab with the given URL.
      * @param url       the URL of the tab we're looking for
+     *
+     * @return first Tab with the given URL, or null if there is no such tab.
+     */
+    public Tab getFirstTabForUrl(String url) {
+        return getFirstTabForUrlHelper(url, null);
+    }
+
+    /**
+     * Looks for an open tab with the given URL and private state.
+     * @param url       the URL of the tab we're looking for
      * @param isPrivate if true, only look for tabs that are private. if false,
      *                  only look for tabs that are non-private.
      *
-     * @return id of an open tab with the given URL; -1 if the tab doesn't exist.
+     * @return first Tab with the given URL, or null if there is no such tab.
      */
-    public int getTabIdForUrl(String url, boolean isPrivate) {
+    public Tab getFirstTabForUrl(String url, boolean isPrivate) {
+        return getFirstTabForUrlHelper(url, isPrivate);
+    }
+
+    private Tab getFirstTabForUrlHelper(String url, Boolean isPrivate) {
+        if (url == null) {
+            return null;
+        }
+
         for (Tab tab : mOrder) {
+            if (isPrivate != null && isPrivate != tab.isPrivate()) {
+                continue;
+            }
             String tabUrl = tab.getURL();
             if (AboutPages.isAboutReader(tabUrl)) {
                 tabUrl = ReaderModeUtils.getUrlFromAboutReader(tabUrl);
             }
-            if (TextUtils.equals(tabUrl, url) && isPrivate == tab.isPrivate()) {
-                return tab.getId();
+            if (url.equals(tabUrl)) {
+                return tab;
             }
         }
 
-        return -1;
-    }
-
-    public int getTabIdForUrl(String url) {
-        return getTabIdForUrl(url, Tabs.getInstance().getSelectedTab().isPrivate());
-    }
-
-    public synchronized Tab getTabForUrl(String url) {
-        int tabId = getTabIdForUrl(url);
-        return getTab(tabId);
+        return null;
     }
 
     /**
@@ -766,7 +779,7 @@ public class Tabs implements GeckoEventListener {
      */
     private Bitmap getAboutPageFavicon(final String url) {
         int faviconSize = Math.round(mAppContext.getResources().getDimension(R.dimen.browser_toolbar_favicon_size));
-        return Favicons.getCachedFaviconForSize(url, faviconSize);
+        return Favicons.getSizedFaviconForPageFromCache(url, faviconSize);
     }
 
     /**

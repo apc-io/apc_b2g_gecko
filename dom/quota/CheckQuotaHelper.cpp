@@ -21,8 +21,6 @@
 #include "nsThreadUtils.h"
 #include "nsXULAppAPI.h"
 
-#define PERMISSION_INDEXEDDB_UNLIMITED "indexedDB-unlimited"
-
 #define TOPIC_QUOTA_PROMPT "indexedDB-quota-prompt"
 #define TOPIC_QUOTA_RESPONSE "indexedDB-quota-response"
 #define TOPIC_QUOTA_CANCEL "indexedDB-quota-cancel"
@@ -129,7 +127,7 @@ CheckQuotaHelper::GetQuotaPermission(nsIPrincipal* aPrincipal)
 
   uint32_t permission;
   nsresult rv = pm->TestPermissionFromPrincipal(aPrincipal,
-                                                PERMISSION_INDEXEDDB_UNLIMITED,
+                                                PERMISSION_STORAGE_UNLIMITED,
                                                 &permission);
   NS_ENSURE_SUCCESS(rv, nsIPermissionManager::DENY_ACTION);
 
@@ -167,7 +165,7 @@ CheckQuotaHelper::Run()
         NS_ENSURE_STATE(permissionManager);
 
         rv = permissionManager->AddFromPrincipal(sop->GetPrincipal(),
-                                                 PERMISSION_INDEXEDDB_UNLIMITED,
+                                                 PERMISSION_STORAGE_UNLIMITED,
                                                  mPromptResult,
                                                  nsIPermissionManager::EXPIRE_NEVER, 0);
         NS_ENSURE_SUCCESS(rv, rv);
@@ -229,7 +227,7 @@ CheckQuotaHelper::GetInterface(const nsIID& aIID,
 NS_IMETHODIMP
 CheckQuotaHelper::Observe(nsISupports* aSubject,
                           const char* aTopic,
-                          const PRUnichar* aData)
+                          const char16_t* aData)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 

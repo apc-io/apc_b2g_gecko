@@ -18,16 +18,16 @@ ConvertToB8G8R8A8_SIMD(SourceSurface* aSurface)
   IntSize size = aSurface->GetSize();
   RefPtr<DataSourceSurface> input = aSurface->GetDataSurface();
   RefPtr<DataSourceSurface> output =
-    Factory::CreateDataSourceSurface(size, FORMAT_B8G8R8A8);
+    Factory::CreateDataSourceSurface(size, SurfaceFormat::B8G8R8A8);
   uint8_t *inputData = input->GetData();
   uint8_t *outputData = output->GetData();
   int32_t inputStride = input->Stride();
   int32_t outputStride = output->Stride();
   switch (input->GetFormat()) {
-    case FORMAT_B8G8R8A8:
+    case SurfaceFormat::B8G8R8A8:
       output = input;
       break;
-    case FORMAT_B8G8R8X8:
+    case SurfaceFormat::B8G8R8X8:
       for (int32_t y = 0; y < size.height; y++) {
         for (int32_t x = 0; x < size.width; x++) {
           int32_t inputIndex = y * inputStride + 4 * x;
@@ -39,7 +39,7 @@ ConvertToB8G8R8A8_SIMD(SourceSurface* aSurface)
         }
       }
       break;
-    case FORMAT_R8G8B8A8:
+    case SurfaceFormat::R8G8B8A8:
       for (int32_t y = 0; y < size.height; y++) {
         for (int32_t x = 0; x < size.width; x++) {
           int32_t inputIndex = y * inputStride + 4 * x;
@@ -51,7 +51,7 @@ ConvertToB8G8R8A8_SIMD(SourceSurface* aSurface)
         }
       }
       break;
-    case FORMAT_R8G8B8X8:
+    case SurfaceFormat::R8G8B8X8:
       for (int32_t y = 0; y < size.height; y++) {
         for (int32_t x = 0; x < size.width; x++) {
           int32_t inputIndex = y * inputStride + 4 * x;
@@ -63,7 +63,7 @@ ConvertToB8G8R8A8_SIMD(SourceSurface* aSurface)
         }
       }
       break;
-    case FORMAT_A8:
+    case SurfaceFormat::A8:
       for (int32_t y = 0; y < size.height; y++) {
         for (int32_t x = 0; x < size.width; x += 16) {
           int32_t inputIndex = y * inputStride + x;
@@ -289,7 +289,7 @@ ApplyBlending_SIMD(DataSourceSurface* aInput1, DataSourceSurface* aInput2)
 {
   IntSize size = aInput1->GetSize();
   RefPtr<DataSourceSurface> target =
-    Factory::CreateDataSourceSurface(size, FORMAT_B8G8R8A8);
+    Factory::CreateDataSourceSurface(size, SurfaceFormat::B8G8R8A8);
   if (!target) {
     return nullptr;
   }
@@ -382,8 +382,11 @@ inline void ApplyMorphologyHorizontal_SIMD(uint8_t* aSourceData, int32_t aSource
   MOZ_ASSERT(completeKernelSizeForFourPixels % 4 == 0 ||
              completeKernelSizeForFourPixels % 4 == 2);
 
-  // aSourceData[0] and aDestData[-aRadius] are both aligned to 16 bytes, just
+  // aSourceData[-aRadius] and aDestData[0] are both aligned to 16 bytes, just
   // the way we need them to be.
+
+  IntRect sourceRect = aDestRect;
+  sourceRect.Inflate(aRadius, 0);
 
   for (int32_t y = aDestRect.y; y < aDestRect.YMost(); y++) {
     int32_t kernelStartX = aDestRect.x - aRadius;
@@ -398,7 +401,9 @@ inline void ApplyMorphologyHorizontal_SIMD(uint8_t* aSourceData, int32_t aSource
       u8x16_t m1234 = p1234;
 
       for (int32_t i = 4; i < completeKernelSizeForFourPixels; i += 4) {
-        u8x16_t p5678 = simd::Load8<u8x16_t>(&aSourceData[sourceIndex + 4 * i]);
+        u8x16_t p5678 = (kernelStartX + i < sourceRect.XMost()) ?
+          simd::Load8<u8x16_t>(&aSourceData[sourceIndex + 4 * i]) :
+          simd::FromZero8<u8x16_t>();
         u8x16_t p2345 = simd::Rotate8<4>(p1234, p5678);
         u8x16_t p3456 = simd::Rotate8<8>(p1234, p5678);
         m1234 = Morph8<op,u8x16_t>(m1234, p2345);
@@ -509,7 +514,7 @@ ApplyColorMatrix_SIMD(DataSourceSurface* aInput, const Matrix5x4 &aMatrix)
 {
   IntSize size = aInput->GetSize();
   RefPtr<DataSourceSurface> target =
-    Factory::CreateDataSourceSurface(size, FORMAT_B8G8R8A8);
+    Factory::CreateDataSourceSurface(size, SurfaceFormat::B8G8R8A8);
   if (!target) {
     return nullptr;
   }
@@ -1014,7 +1019,7 @@ ApplyArithmeticCombine_SIMD(DataSourceSurface* aInput1, DataSourceSurface* aInpu
 {
   IntSize size = aInput1->GetSize();
   RefPtr<DataSourceSurface> target =
-  Factory::CreateDataSourceSurface(size, FORMAT_B8G8R8A8);
+  Factory::CreateDataSourceSurface(size, SurfaceFormat::B8G8R8A8);
   if (!target) {
     return nullptr;
   }

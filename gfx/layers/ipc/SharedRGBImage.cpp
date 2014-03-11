@@ -19,7 +19,6 @@
 #include "nsISupportsImpl.h"            // for Image::AddRef, etc
 #include "nsRect.h"                     // for nsIntRect
 #include "nsSize.h"                     // for nsIntSize
-#include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
 
 // Just big enough for a 1080p RGBA32 frame
 #define MAX_FRAME_SIZE (16 * 1024 * 1024)
@@ -28,7 +27,7 @@ namespace mozilla {
 namespace layers {
 
 DeprecatedSharedRGBImage::DeprecatedSharedRGBImage(ISurfaceAllocator *aAllocator) :
-  Image(nullptr, SHARED_RGB),
+  Image(nullptr, ImageFormat::SHARED_RGB),
   mSize(0, 0),
   mSurfaceAllocator(aAllocator),
   mAllocated(false),
@@ -54,9 +53,9 @@ CreateSharedRGBImage(ImageContainer *aImageContainer,
                      nsIntSize aSize,
                      gfxImageFormat aImageFormat)
 {
-  NS_ASSERTION(aImageFormat == gfxImageFormatARGB32 ||
-               aImageFormat == gfxImageFormatRGB24 ||
-               aImageFormat == gfxImageFormatRGB16_565,
+  NS_ASSERTION(aImageFormat == gfxImageFormat::ARGB32 ||
+               aImageFormat == gfxImageFormat::RGB24 ||
+               aImageFormat == gfxImageFormat::RGB16_565,
                "RGB formats supported only");
 
   if (!aImageContainer) {
@@ -64,8 +63,7 @@ CreateSharedRGBImage(ImageContainer *aImageContainer,
     return nullptr;
   }
 
-  ImageFormat format = SHARED_RGB;
-  nsRefPtr<Image> image = aImageContainer->CreateImage(&format, 1);
+  nsRefPtr<Image> image = aImageContainer->CreateImage(ImageFormat::SHARED_RGB);
 
   if (!image) {
     NS_WARNING("Failed to create DeprecatedSharedRGBImage");
@@ -74,7 +72,7 @@ CreateSharedRGBImage(ImageContainer *aImageContainer,
 
   if (gfxPlatform::GetPlatform()->UseDeprecatedTextures()) {
     nsRefPtr<DeprecatedSharedRGBImage> rgbImageDep = static_cast<DeprecatedSharedRGBImage*>(image.get());
-    rgbImageDep->mSize = gfxIntSize(aSize.width, aSize.height);
+    rgbImageDep->mSize = aSize.ToIntSize();
     rgbImageDep->mImageFormat = aImageFormat;
 
     if (!rgbImageDep->AllocateBuffer(aSize, aImageFormat)) {
@@ -131,7 +129,13 @@ DeprecatedSharedRGBImage::AllocateBuffer(nsIntSize aSize, gfxImageFormat aImageF
 }
 
 already_AddRefed<gfxASurface>
-DeprecatedSharedRGBImage::GetAsSurface()
+DeprecatedSharedRGBImage::DeprecatedGetAsSurface()
+{
+  return nullptr;
+}
+
+TemporaryRef<gfx::SourceSurface>
+DeprecatedSharedRGBImage::GetAsSourceSurface()
 {
   return nullptr;
 }
@@ -179,7 +183,7 @@ DeprecatedSharedRGBImage::FromSurfaceDescriptor(const SurfaceDescriptor& aDescri
 }
 
 SharedRGBImage::SharedRGBImage(ImageClient* aCompositable)
-: Image(nullptr, SHARED_RGB)
+: Image(nullptr, ImageFormat::SHARED_RGB)
 , mCompositable(aCompositable)
 {
   MOZ_COUNT_CTOR(SharedRGBImage);
@@ -211,14 +215,14 @@ SharedRGBImage::GetBuffer()
     return nullptr;
   }
 
-  ImageDataSerializer serializer(mTextureClient->GetBuffer());
+  ImageDataSerializer serializer(mTextureClient->GetBuffer(), mTextureClient->GetBufferSize());
   return serializer.GetData();
 }
 
 gfx::IntSize
 SharedRGBImage::GetSize()
 {
-  return ThebesIntSize(mSize);
+  return mSize;
 }
 
 size_t
@@ -229,13 +233,19 @@ SharedRGBImage::GetBufferSize()
 }
 
 TextureClient*
-SharedRGBImage::GetTextureClient()
+SharedRGBImage::GetTextureClient(CompositableClient* aClient)
 {
   return mTextureClient.get();
 }
 
 already_AddRefed<gfxASurface>
-SharedRGBImage::GetAsSurface()
+SharedRGBImage::DeprecatedGetAsSurface()
+{
+  return nullptr;
+}
+
+TemporaryRef<gfx::SourceSurface>
+SharedRGBImage::GetAsSourceSurface()
 {
   return nullptr;
 }

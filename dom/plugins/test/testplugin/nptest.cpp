@@ -52,6 +52,7 @@
 #include <float.h>
 #include <windows.h>
 #define getpid _getpid
+#define strcasecmp _stricmp
 #else
 #include <unistd.h>
 #include <pthread.h>
@@ -139,6 +140,7 @@ static bool setPluginWantsAllStreams(NPObject* npobj, const NPVariant* args, uin
 static bool crashPlugin(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
 static bool crashOnDestroy(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
 static bool getObjectValue(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
+static bool getJavaCodebase(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
 static bool checkObjectValue(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
 static bool enableFPExceptions(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
 static bool setCookie(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
@@ -202,6 +204,7 @@ static const NPUTF8* sPluginMethodIdentifierNames[] = {
   "crash",
   "crashOnDestroy",
   "getObjectValue",
+  "getJavaCodebase",
   "checkObjectValue",
   "enableFPExceptions",
   "setCookie",
@@ -266,6 +269,7 @@ static const ScriptableFunction sPluginMethodFunctions[] = {
   crashPlugin,
   crashOnDestroy,
   getObjectValue,
+  getJavaCodebase,
   checkObjectValue,
   enableFPExceptions,
   setCookie,
@@ -647,7 +651,7 @@ extern const char *sMimeDescription;
 
 #if defined(XP_UNIX)
 NP_EXPORT(const char*) NP_GetMIMEDescription()
-#elif defined(XP_WIN) || defined(XP_OS2)
+#elif defined(XP_WIN)
 const char* NP_GetMIMEDescription()
 #endif
 {
@@ -701,7 +705,7 @@ static bool fillPluginFunctionTable(NPPluginFuncs* pFuncs)
 
 #if defined(XP_MACOSX)
 NP_EXPORT(NPError) NP_Initialize(NPNetscapeFuncs* bFuncs)
-#elif defined(XP_WIN) || defined(XP_OS2)
+#elif defined(XP_WIN)
 NPError OSCALL NP_Initialize(NPNetscapeFuncs* bFuncs)
 #elif defined(XP_UNIX)
 NP_EXPORT(NPError) NP_Initialize(NPNetscapeFuncs* bFuncs, NPPluginFuncs* pFuncs)
@@ -741,10 +745,10 @@ NP_EXPORT(NPError) NP_Initialize(NPNetscapeFuncs* bFuncs, NPPluginFuncs* pFuncs)
 
 #if defined(XP_MACOSX)
 NP_EXPORT(NPError) NP_GetEntryPoints(NPPluginFuncs* pFuncs)
-#elif defined(XP_WIN) || defined(XP_OS2)
+#elif defined(XP_WIN)
 NPError OSCALL NP_GetEntryPoints(NPPluginFuncs* pFuncs)
 #endif
-#if defined(XP_MACOSX) || defined(XP_WIN) || defined(XP_OS2)
+#if defined(XP_MACOSX) || defined(XP_WIN)
 {
   if (!fillPluginFunctionTable(pFuncs)) {
     return NPERR_INVALID_FUNCTABLE_ERROR;
@@ -756,7 +760,7 @@ NPError OSCALL NP_GetEntryPoints(NPPluginFuncs* pFuncs)
 
 #if defined(XP_UNIX)
 NP_EXPORT(NPError) NP_Shutdown()
-#elif defined(XP_WIN) || defined(XP_OS2)
+#elif defined(XP_WIN)
 NPError OSCALL NP_Shutdown()
 #endif
 {
@@ -958,6 +962,11 @@ NPP_New(NPMIMEType pluginType, NPP instance, uint16_t mode, int16_t argc, char* 
     }
     if (strcmp(argn[i], "bugmode") == 0) {
       instanceData->bugMode = atoi(argv[i]);
+    }
+    // Try to emulate java's codebase handling: Use the last seen codebase
+    // value, regardless of whether it is in attributes or params.
+    if (strcasecmp(argn[i], "codebase") == 0) {
+      instanceData->javaCodebase = argv[i];
     }
   }
 
@@ -2888,6 +2897,18 @@ static const NPClass kTestSharedNPClass = {
   NP_CLASS_STRUCT_VERSION,
   // Everything else is nullptr
 };
+
+static bool getJavaCodebase(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result)
+{
+  if (argCount != 0) {
+    return false;
+  }
+
+  NPP npp = static_cast<TestNPObject*>(npobj)->npp;
+  InstanceData* id = static_cast<InstanceData*>(npp->pdata);
+  STRINGZ_TO_NPVARIANT(NPN_StrDup(id->javaCodebase.c_str()), *result);
+  return true;
+}
 
 static bool getObjectValue(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result)
 {

@@ -60,7 +60,8 @@ Tools.options = {
   id: "options",
   ordinal: 0,
   url: "chrome://browser/content/devtools/framework/toolbox-options.xul",
-  icon: "chrome://browser/skin/devtools/tool-options.png",
+  icon: "chrome://browser/skin/devtools/tool-options.svg",
+  invertIconForLightTheme: true,
   bgTheme: "theme-body",
   tooltip: l10n("optionsButton.tooltip", toolboxStrings),
   inMenu: false,
@@ -79,12 +80,21 @@ Tools.webConsole = {
   accesskey: l10n("webConsoleCmd.accesskey", webConsoleStrings),
   modifiers: Services.appinfo.OS == "Darwin" ? "accel,alt" : "accel,shift",
   ordinal: 1,
-  icon: "chrome://browser/skin/devtools/tool-webconsole.png",
+  icon: "chrome://browser/skin/devtools/tool-webconsole.svg",
+  invertIconForLightTheme: true,
   url: "chrome://browser/content/devtools/webconsole.xul",
   label: l10n("ToolboxTabWebconsole.label", webConsoleStrings),
   menuLabel: l10n("MenuWebconsole.label", webConsoleStrings),
   tooltip: l10n("ToolboxWebconsole.tooltip", webConsoleStrings),
   inMenu: true,
+
+  preventClosingOnKey: true,
+  onkey: function(panel, toolbox) {
+    if (toolbox.splitConsole)
+      return toolbox.focusConsoleInput();
+
+    panel.focusInput();
+  },
 
   isTargetSupported: function(target) {
     return true;
@@ -101,7 +111,8 @@ Tools.inspector = {
   key: l10n("inspector.commandkey", inspectorStrings),
   ordinal: 2,
   modifiers: osString == "Darwin" ? "accel,alt" : "accel,shift",
-  icon: "chrome://browser/skin/devtools/tool-inspector.png",
+  icon: "chrome://browser/skin/devtools/tool-inspector.svg",
+  invertIconForLightTheme: true,
   url: "chrome://browser/content/devtools/inspector/inspector.xul",
   label: l10n("inspector.label", inspectorStrings),
   tooltip: l10n("inspector.tooltip", inspectorStrings),
@@ -109,9 +120,7 @@ Tools.inspector = {
 
   preventClosingOnKey: true,
   onkey: function(panel) {
-    if (panel.highlighter) {
-      panel.highlighter.toggleLockState();
-    }
+    panel.toolbox.highlighterUtils.togglePicker();
   },
 
   isTargetSupported: function(target) {
@@ -130,8 +139,9 @@ Tools.jsdebugger = {
   accesskey: l10n("debuggerMenu.accesskey", debuggerStrings),
   modifiers: osString == "Darwin" ? "accel,alt" : "accel,shift",
   ordinal: 3,
-  icon: "chrome://browser/skin/devtools/tool-debugger.png",
-  highlightedicon: "chrome://browser/skin/devtools/tool-debugger-paused.png",
+  icon: "chrome://browser/skin/devtools/tool-debugger.svg",
+  invertIconForLightTheme: true,
+  highlightedicon: "chrome://browser/skin/devtools/tool-debugger-paused.svg",
   url: "chrome://browser/content/devtools/debugger.xul",
   label: l10n("ToolboxDebugger.label", debuggerStrings),
   tooltip: l10n("ToolboxDebugger.tooltip", debuggerStrings),
@@ -153,7 +163,8 @@ Tools.styleEditor = {
   ordinal: 4,
   accesskey: l10n("open.accesskey", styleEditorStrings),
   modifiers: "shift",
-  icon: "chrome://browser/skin/devtools/tool-styleeditor.png",
+  icon: "chrome://browser/skin/devtools/tool-styleeditor.svg",
+  invertIconForLightTheme: true,
   url: "chrome://browser/content/devtools/styleeditor.xul",
   label: l10n("ToolboxStyleEditor.label", styleEditorStrings),
   tooltip: l10n("ToolboxStyleEditor.tooltip2", styleEditorStrings),
@@ -173,7 +184,8 @@ Tools.shaderEditor = {
   id: "shadereditor",
   ordinal: 5,
   visibilityswitch: "devtools.shadereditor.enabled",
-  icon: "chrome://browser/skin/devtools/tool-styleeditor.png",
+  icon: "chrome://browser/skin/devtools/tool-styleeditor.svg",
+  invertIconForLightTheme: true,
   url: "chrome://browser/content/devtools/shadereditor.xul",
   label: l10n("ToolboxShaderEditor.label", shaderEditorStrings),
   tooltip: l10n("ToolboxShaderEditor.tooltip", shaderEditorStrings),
@@ -195,7 +207,8 @@ Tools.jsprofiler = {
   ordinal: 6,
   modifiers: "shift",
   visibilityswitch: "devtools.profiler.enabled",
-  icon: "chrome://browser/skin/devtools/tool-profiler.png",
+  icon: "chrome://browser/skin/devtools/tool-profiler.svg",
+  invertIconForLightTheme: true,
   url: "chrome://browser/content/devtools/profiler.xul",
   label: l10n("profiler.label", profilerStrings),
   tooltip: l10n("profiler.tooltip2", profilerStrings),
@@ -218,7 +231,8 @@ Tools.netMonitor = {
   ordinal: 7,
   modifiers: osString == "Darwin" ? "accel,alt" : "accel,shift",
   visibilityswitch: "devtools.netmonitor.enabled",
-  icon: "chrome://browser/skin/devtools/tool-network.png",
+  icon: "chrome://browser/skin/devtools/tool-network.svg",
+  invertIconForLightTheme: true,
   url: "chrome://browser/content/devtools/netmonitor.xul",
   label: l10n("netmonitor.label", netMonitorStrings),
   tooltip: l10n("netmonitor.tooltip", netMonitorStrings),
@@ -238,7 +252,8 @@ Tools.scratchpad = {
   id: "scratchpad",
   ordinal: 8,
   visibilityswitch: "devtools.scratchpad.enabled",
-  icon: "chrome://browser/skin/devtools/tool-scratchpad.png",
+  icon: "chrome://browser/skin/devtools/tool-scratchpad.svg",
+  invertIconForLightTheme: true,
   url: "chrome://browser/content/devtools/scratchpad.xul",
   label: l10n("scratchpad.label", scratchpadStrings),
   tooltip: l10n("scratchpad.tooltip", scratchpadStrings),

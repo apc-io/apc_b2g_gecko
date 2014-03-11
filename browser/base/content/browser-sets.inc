@@ -20,7 +20,7 @@
     <command id="cmd_handleBackspace" oncommand="BrowserHandleBackspace();" />
     <command id="cmd_handleShiftBackspace" oncommand="BrowserHandleShiftBackspace();" />
 
-    <command id="cmd_newNavigatorTab" oncommand="BrowserOpenTab();"/>
+    <command id="cmd_newNavigatorTab" oncommand="BrowserOpenNewTabOrWindow(event);"/>
     <command id="Browser:OpenFile"  oncommand="BrowserOpenFileWindow();"/>
     <command id="Browser:SavePage" oncommand="saveDocument(window.content.document);"/>
 
@@ -50,6 +50,9 @@
     <command id="cmd_findPrevious"
              oncommand="gFindBar.onFindAgainCommand(true);"
              observes="isImage"/>
+#ifdef XP_MACOSX
+    <command id="cmd_findSelection" oncommand="gFindBar.onFindSelectionCommand();"/>
+#endif
     <!-- work-around bug 392512 -->
     <command id="Browser:AddBookmarkAs"
              oncommand="PlacesCommandHook.bookmarkCurrentPage(true, PlacesUtils.bookmarksMenuFolderId);"/>
@@ -106,6 +109,10 @@
      oncommand="Cc['@mozilla.org/browser/browserglue;1'].getService(Ci.nsIBrowserGlue).sanitize(window);"/>
     <command id="Tools:PrivateBrowsing"
       oncommand="OpenBrowserWindow({private: true});"/>
+    <command id="Tools:RemoteWindow"
+      oncommand="OpenBrowserWindow({remote: true});"/>
+    <command id="Tools:NonRemoteWindow"
+      oncommand="OpenBrowserWindow({remote: false});"/>
     <command id="History:UndoCloseTab" oncommand="undoCloseTab();"/>
     <command id="History:UndoCloseWindow" oncommand="undoCloseWindow();"/>
     <command id="Social:SharePage" oncommand="SocialShare.sharePage();" disabled="true"/>
@@ -114,7 +121,6 @@
     <command id="Social:FocusChat" oncommand="SocialChatBar.focus();" hidden="true" disabled="true"/>
     <command id="Social:Toggle" oncommand="Social.toggle();" hidden="true"/>
     <command id="Social:Addons" oncommand="BrowserOpenAddonsMgr('addons://list/service');"/>
-    <command id="MenuPanel:Toggle" oncommand="PanelUI.toggle(event);"/>
   </commandset>
 
   <commandset id="placesCommands">
@@ -141,6 +147,11 @@
                  type="checkbox" group="sidebar" sidebarurl="chrome://browser/content/web-panels.xul"
                  oncommand="toggleSidebar('viewWebPanelsSidebar');"/>
 
+    <broadcaster id="bookmarkThisPageBroadcaster"
+                 label="&bookmarkThisPageCmd.label;"
+                 bookmarklabel="&bookmarkThisPageCmd.label;"
+                 editlabel="&editThisBookmarkCmd.label;"/>
+
     <!-- popup blocking menu items -->
     <broadcaster id="blockedPopupAllowSite"
                  accesskey="&allowPopups.accesskey;"
@@ -166,6 +177,7 @@
 #ifdef MOZ_SERVICES_SYNC
     <broadcaster id="sync-setup-state"/>
     <broadcaster id="sync-syncnow-state"/>
+    <broadcaster id="sync-reauth-state"/>
 #endif
     <broadcaster id="workOfflineMenuitemState"/>
     <broadcaster id="socialSidebarBroadcaster" hidden="true"/>
@@ -342,6 +354,9 @@
     <key id="key_find" key="&findOnCmd.commandkey;" command="cmd_find" modifiers="accel"/>
     <key id="key_findAgain" key="&findAgainCmd.commandkey;" command="cmd_findAgain" modifiers="accel"/>
     <key id="key_findPrevious" key="&findAgainCmd.commandkey;" command="cmd_findPrevious" modifiers="accel,shift"/>
+#ifdef XP_MACOSX
+    <key id="key_findSelection" key="&findSelectionCmd.commandkey;" command="cmd_findSelection" modifiers="accel"/>
+#endif
     <key keycode="&findAgainCmd.commandkey2;" command="cmd_findAgain"/>
     <key keycode="&findAgainCmd.commandkey2;"  command="cmd_findPrevious" modifiers="shift"/>
 
@@ -405,13 +420,6 @@
     <key id="key_undoCloseTab" command="History:UndoCloseTab" key="&tabCmd.commandkey;" modifiers="accel,shift"/>
 #endif
     <key id="key_undoCloseWindow" command="History:UndoCloseWindow" key="&newNavigatorCmd.key;" modifiers="accel,shift"/>
-
-    <key id="key_menuButton" command="MenuPanel:Toggle"
-#ifdef XP_MACOSX
-         key="&toggleMenuPanelMac.key;" modifiers="accel,shift"/>
-#else
-         key="&toggleMenuPanel.key;" modifiers="accel"/>
-#endif
 
 #ifdef XP_GNOME
 #define NUM_SELECT_TAB_MODIFIER alt

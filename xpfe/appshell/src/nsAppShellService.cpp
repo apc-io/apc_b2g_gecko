@@ -46,6 +46,10 @@
 #include "nsIWebBrowser.h"
 #include "nsIDocShell.h"
 
+#ifdef MOZ_INSTRUMENT_EVENT_LOOP
+#include "EventTracer.h"
+#endif
+
 using namespace mozilla;
 
 // Default URL for the hidden window, can be overridden by a pref on Mac
@@ -230,7 +234,7 @@ NS_IMPL_ADDREF(WebBrowserChrome2Stub)
 NS_IMPL_RELEASE(WebBrowserChrome2Stub)
 
 NS_IMETHODIMP
-WebBrowserChrome2Stub::SetStatus(uint32_t aStatusType, const PRUnichar* aStatus)
+WebBrowserChrome2Stub::SetStatus(uint32_t aStatusType, const char16_t* aStatus)
 {
   return NS_OK;
 }
@@ -517,6 +521,9 @@ nsAppShellService::JustCreateTopWindow(nsIXULWindow *aParent,
   if (aChromeMask & nsIWebBrowserChrome::CHROME_MAC_SUPPRESS_ANIMATION)
     widgetInitData.mIsAnimationSuppressed = true;
 
+  if (aChromeMask & nsIWebBrowserChrome::CHROME_REMOTE_WINDOW)
+    widgetInitData.mRequireOffMainThreadCompositing = true;
+
 #ifdef XP_MACOSX
   // Mac OS X sheet support
   // Adding CHROME_OPENAS_CHROME to sheetMask makes modal windows opened from
@@ -527,8 +534,11 @@ nsAppShellService::JustCreateTopWindow(nsIXULWindow *aParent,
   uint32_t sheetMask = nsIWebBrowserChrome::CHROME_OPENAS_DIALOG |
                        nsIWebBrowserChrome::CHROME_MODAL |
                        nsIWebBrowserChrome::CHROME_OPENAS_CHROME;
-  if (parent && ((aChromeMask & sheetMask) == sheetMask))
+  if (parent &&
+      (parent != mHiddenWindow && parent != mHiddenPrivateWindow) &&
+      ((aChromeMask & sheetMask) == sheetMask)) {
     widgetInitData.mWindowType = eWindowType_sheet;
+  }
 #endif
 
 #if defined(XP_WIN)
@@ -845,7 +855,7 @@ nsAppShellService::UnregisterTopLevelWindow(nsIXULWindow* aWindow)
 
 NS_IMETHODIMP
 nsAppShellService::Observe(nsISupports* aSubject, const char *aTopic,
-                           const PRUnichar *aData)
+                           const char16_t *aData)
 {
   if (!strcmp(aTopic, "xpcom-will-shutdown")) {
     mXPCOMWillShutDown = true;
@@ -862,4 +872,22 @@ nsAppShellService::Observe(nsISupports* aSubject, const char *aTopic,
   }
 
   return NS_OK;
+}
+
+NS_IMETHODIMP
+nsAppShellService::StartEventLoopLagTracking(bool* aResult)
+{
+#ifdef MOZ_INSTRUMENT_EVENT_LOOP
+    *aResult = mozilla::InitEventTracing(true);
+#endif
+    return NS_OK;
+}
+
+NS_IMETHODIMP
+nsAppShellService::StopEventLoopLagTracking()
+{
+#ifdef MOZ_INSTRUMENT_EVENT_LOOP
+    mozilla::ShutdownEventTracing();
+#endif
+    return NS_OK;
 }

@@ -107,7 +107,8 @@ static DllBlockInfo sWindowsDllBlocklist[] = {
   // Topcrash with Babylon Toolbar on FF16+ (bug 721264)
   {"babyfox.dll", ALL_VERSIONS},
 
-  {"sprotector.dll", ALL_VERSIONS, DllBlockInfo::BLOCK_WIN8PLUS_ONLY },
+  // sprotector.dll crashes, bug 957258
+  {"sprotector.dll", ALL_VERSIONS},
 
   // Topcrash with Websense Endpoint, bug 828184
   {"qipcap.dll", MAKE_VERSION(7, 6, 815, 1)},
@@ -135,6 +136,9 @@ static DllBlockInfo sWindowsDllBlocklist[] = {
   // bug 812683 - crashes in Windows library when Asus Gamer OSD is installed
   // Software is discontinued/unsupported
   { "atkdx11disp.dll", ALL_VERSIONS },
+
+  // Topcrash with Conduit SearchProtect, bug 944542
+  { "spvc32.dll", ALL_VERSIONS },
 
   { nullptr, 0 }
 };
@@ -610,7 +614,10 @@ DllBlocklist_Initialize()
 
   ReentrancySentinel::InitializeStatics();
 
-  bool ok = NtDllIntercept.AddHook("LdrLoadDll", reinterpret_cast<intptr_t>(patched_LdrLoadDll), (void**) &stub_LdrLoadDll);
+  // We specifically use a detour, because there are cases where external
+  // code also tries to hook LdrLoadDll, and doesn't know how to relocate our
+  // nop space patches. (Bug 951827)
+  bool ok = NtDllIntercept.AddDetour("LdrLoadDll", reinterpret_cast<intptr_t>(patched_LdrLoadDll), (void**) &stub_LdrLoadDll);
 
   if (!ok) {
     sBlocklistInitFailed = true;

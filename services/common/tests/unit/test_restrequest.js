@@ -1,12 +1,12 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
+"use strict";
+
 Cu.import("resource://gre/modules/NetUtil.jsm");
 Cu.import("resource://gre/modules/Log.jsm");
 Cu.import("resource://services-common/rest.js");
 Cu.import("resource://services-common/utils.js");
-
-//DEBUG = true;
 
 function run_test() {
   Log.repository.getLogger("Services.Common.RESTRequest").level =
@@ -717,8 +717,14 @@ add_test(function test_timeout() {
     do_check_eq(error.result, Cr.NS_ERROR_NET_TIMEOUT);
     do_check_eq(this.status, this.ABORTED);
 
-    _("Closing connection.");
-    server_connection.close();
+    // server_connection is undefined on the Android emulator for reasons
+    // unknown. Yet, we still get here. If this test is refactored, we should
+    // investigate the reason why the above callback is behaving differently.
+    if (server_connection) {
+      _("Closing connection.");
+      server_connection.close();
+    }
+
     _("Shutting down server.");
     server.stop(run_next_test);
   });
@@ -831,3 +837,4 @@ add_test(function test_not_sending_cookie() {
     server.stop(run_next_test);
   });
 });
+

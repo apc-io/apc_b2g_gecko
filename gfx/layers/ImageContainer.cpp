@@ -21,6 +21,8 @@
 #ifdef MOZ_WIDGET_GONK
 #include "GrallocImages.h"
 #endif
+#include "gfx2DGlue.h"
+#include "mozilla/gfx/2D.h"
 
 #ifdef XP_MACOSX
 #include "mozilla/gfx/QuartzSupport.h"
@@ -37,54 +39,47 @@
 
 using namespace mozilla::ipc;
 using namespace android;
-using mozilla::gfx::DataSourceSurface;
-using mozilla::gfx::SourceSurface;
+using namespace mozilla::gfx;
 
 
 namespace mozilla {
 namespace layers {
 
-class DataSourceSurface;
-class SourceSurface;
 
 Atomic<int32_t> Image::sSerialCounter(0);
 
 already_AddRefed<Image>
-ImageFactory::CreateImage(const ImageFormat *aFormats,
-                          uint32_t aNumFormats,
+ImageFactory::CreateImage(ImageFormat aFormat,
                           const gfx::IntSize &,
                           BufferRecycleBin *aRecycleBin)
 {
-  if (!aNumFormats) {
-    return nullptr;
-  }
   nsRefPtr<Image> img;
 #ifdef MOZ_WIDGET_GONK
-  if (FormatInList(aFormats, aNumFormats, GRALLOC_PLANAR_YCBCR)) {
+  if (aFormat == ImageFormat::GRALLOC_PLANAR_YCBCR) {
     img = new GrallocImage();
     return img.forget();
   }
 #endif
-  if (FormatInList(aFormats, aNumFormats, PLANAR_YCBCR)) {
+  if (aFormat == ImageFormat::PLANAR_YCBCR) {
     img = new PlanarYCbCrImage(aRecycleBin);
     return img.forget();
   }
-  if (FormatInList(aFormats, aNumFormats, CAIRO_SURFACE)) {
+  if (aFormat == ImageFormat::CAIRO_SURFACE) {
     img = new CairoImage();
     return img.forget();
   }
-  if (FormatInList(aFormats, aNumFormats, SHARED_TEXTURE)) {
+  if (aFormat == ImageFormat::SHARED_TEXTURE) {
     img = new SharedTextureImage();
     return img.forget();
   }
 #ifdef XP_MACOSX
-  if (FormatInList(aFormats, aNumFormats, MAC_IOSURFACE)) {
+  if (aFormat == ImageFormat::MAC_IOSURFACE) {
     img = new MacIOSurfaceImage();
     return img.forget();
   }
 #endif
 #ifdef XP_WIN
-  if (FormatInList(aFormats, aNumFormats, D3D9_RGB32_TEXTURE)) {
+  if (aFormat == ImageFormat::D3D9_RGB32_TEXTURE) {
     img = new D3D9SurfaceImage();
     return img.forget();
   }
@@ -154,19 +149,17 @@ ImageContainer::~ImageContainer()
 }
 
 already_AddRefed<Image>
-ImageContainer::CreateImage(const ImageFormat *aFormats,
-                            uint32_t aNumFormats)
+ImageContainer::CreateImage(ImageFormat aFormat)
 {
   ReentrantMonitorAutoEnter mon(mReentrantMonitor);
 
   if (mImageClient) {
-    nsRefPtr<Image> img = mImageClient->CreateImage((uint32_t*)aFormats,
-                                                            aNumFormats);
+    nsRefPtr<Image> img = mImageClient->CreateImage(aFormat);
     if (img) {
       return img.forget();
     }
   }
-  return mImageFactory->CreateImage(aFormats, aNumFormats, mScaleHint, mRecycleBin);
+  return mImageFactory->CreateImage(aFormat, mScaleHint, mRecycleBin);
 }
 
 void
@@ -289,7 +282,7 @@ ImageContainer::LockCurrentImage()
 }
 
 already_AddRefed<gfxASurface>
-ImageContainer::LockCurrentAsSurface(gfx::IntSize *aSize, Image** aCurrentImage)
+ImageContainer::DeprecatedLockCurrentAsSurface(gfx::IntSize *aSize, Image** aCurrentImage)
 {
   ReentrantMonitorAutoEnter mon(mReentrantMonitor);
 
@@ -308,20 +301,22 @@ ImageContainer::LockCurrentAsSurface(gfx::IntSize *aSize, Image** aCurrentImage)
       return nullptr;
     } 
 
-    if (mActiveImage->GetFormat() == REMOTE_IMAGE_BITMAP) {
+    if (mActiveImage->GetFormat() == ImageFormat::REMOTE_IMAGE_BITMAP) {
       nsRefPtr<gfxImageSurface> newSurf =
-        new gfxImageSurface(mRemoteData->mBitmap.mData, mRemoteData->mSize, mRemoteData->mBitmap.mStride,
+        new gfxImageSurface(mRemoteData->mBitmap.mData,
+                            ThebesIntSize(mRemoteData->mSize),
+                            mRemoteData->mBitmap.mStride,
                             mRemoteData->mFormat == RemoteImageData::BGRX32 ?
-                                                   gfxImageFormatARGB32 :
-                                                   gfxImageFormatRGB24);
+                                                   gfxImageFormat::ARGB32 :
+                                                   gfxImageFormat::RGB24);
 
-      *aSize = newSurf->GetSize();
+      *aSize = newSurf->GetSize().ToIntSize();
     
       return newSurf.forget();
     }
 
     *aSize = mActiveImage->GetSize();
-    return mActiveImage->GetAsSurface();
+    return mActiveImage->DeprecatedGetAsSurface();
   }
 
   if (aCurrentImage) {
@@ -334,7 +329,59 @@ ImageContainer::LockCurrentAsSurface(gfx::IntSize *aSize, Image** aCurrentImage)
   }
 
   *aSize = mActiveImage->GetSize();
-  return mActiveImage->GetAsSurface();
+  return mActiveImage->DeprecatedGetAsSurface();
+}
+
+TemporaryRef<gfx::SourceSurface>
+ImageContainer::LockCurrentAsSourceSurface(gfx::IntSize *aSize, Image** aCurrentImage)
+{
+  ReentrantMonitorAutoEnter mon(mReentrantMonitor);
+
+  if (mRemoteData) {
+    NS_ASSERTION(mRemoteDataMutex, "Should have remote data mutex when having remote data!");
+    mRemoteDataMutex->Lock();
+
+    EnsureActiveImage();
+
+    if (aCurrentImage) {
+      NS_IF_ADDREF(mActiveImage);
+      *aCurrentImage = mActiveImage.get();
+    }
+
+    if (!mActiveImage) {
+      return nullptr;
+    }
+
+    if (mActiveImage->GetFormat() == ImageFormat::REMOTE_IMAGE_BITMAP) {
+      gfxImageFormat fmt = mRemoteData->mFormat == RemoteImageData::BGRX32
+                           ? gfxImageFormat::ARGB32
+                           : gfxImageFormat::RGB24;
+
+      RefPtr<gfx::DataSourceSurface> newSurf
+        = gfx::Factory::CreateWrappingDataSourceSurface(mRemoteData->mBitmap.mData,
+                                                        mRemoteData->mBitmap.mStride,
+                                                        mRemoteData->mSize,
+                                                        gfx::ImageFormatToSurfaceFormat(fmt));
+      *aSize = newSurf->GetSize();
+
+      return newSurf;
+    }
+
+    *aSize = mActiveImage->GetSize();
+    return mActiveImage->GetAsSourceSurface();
+  }
+
+  if (aCurrentImage) {
+    NS_IF_ADDREF(mActiveImage);
+    *aCurrentImage = mActiveImage.get();
+  }
+
+  if (!mActiveImage) {
+    return nullptr;
+  }
+
+  *aSize = mActiveImage->GetSize();
+  return mActiveImage->GetAsSourceSurface();
 }
 
 void
@@ -347,7 +394,7 @@ ImageContainer::UnlockCurrentImage()
 }
 
 already_AddRefed<gfxASurface>
-ImageContainer::GetCurrentAsSurface(gfx::IntSize *aSize)
+ImageContainer::DeprecatedGetCurrentAsSurface(gfx::IntSize *aSize)
 {
   ReentrantMonitorAutoEnter mon(mReentrantMonitor);
 
@@ -363,7 +410,27 @@ ImageContainer::GetCurrentAsSurface(gfx::IntSize *aSize)
       return nullptr;
     *aSize = mActiveImage->GetSize();
   }
-  return mActiveImage->GetAsSurface();
+  return mActiveImage->DeprecatedGetAsSurface();
+}
+
+TemporaryRef<gfx::SourceSurface>
+ImageContainer::GetCurrentAsSourceSurface(gfx::IntSize *aSize)
+{
+  ReentrantMonitorAutoEnter mon(mReentrantMonitor);
+
+  if (mRemoteData) {
+    CrossProcessMutexAutoLock autoLock(*mRemoteDataMutex);
+    EnsureActiveImage();
+
+    if (!mActiveImage)
+      return nullptr;
+    *aSize = mRemoteData->mSize;
+  } else {
+    if (!mActiveImage)
+      return nullptr;
+    *aSize = mActiveImage->GetSize();
+  }
+  return mActiveImage->GetAsSourceSurface();
 }
 
 gfx::IntSize
@@ -380,7 +447,7 @@ ImageContainer::GetCurrentSize()
   }
 
   if (!mActiveImage) {
-    return gfxIntSize(0,0);
+    return gfx::IntSize(0, 0);
   }
 
   return mActiveImage->GetSize();
@@ -442,9 +509,9 @@ ImageContainer::EnsureActiveImage()
 
 
 PlanarYCbCrImage::PlanarYCbCrImage(BufferRecycleBin *aRecycleBin)
-  : Image(nullptr, PLANAR_YCBCR)
+  : Image(nullptr, ImageFormat::PLANAR_YCBCR)
   , mBufferSize(0)
-  , mOffscreenFormat(gfxImageFormatUnknown)
+  , mOffscreenFormat(gfxImageFormat::Unknown)
   , mRecycleBin(aRecycleBin)
 {
 }
@@ -464,7 +531,7 @@ PlanarYCbCrImage::AllocateBuffer(uint32_t aSize)
 
 static void
 CopyPlane(uint8_t *aDst, const uint8_t *aSrc,
-          const gfxIntSize &aSize, int32_t aStride, int32_t aSkip)
+          const gfx::IntSize &aSize, int32_t aStride, int32_t aSkip)
 {
   if (!aSkip) {
     // Fast path: planar input.
@@ -526,7 +593,7 @@ PlanarYCbCrImage::SetData(const Data &aData)
 gfxImageFormat
 PlanarYCbCrImage::GetOffscreenFormat()
 {
-  return mOffscreenFormat == gfxImageFormatUnknown ?
+  return mOffscreenFormat == gfxImageFormat::Unknown ?
     gfxPlatform::GetPlatform()->GetOffscreenFormat() :
     mOffscreenFormat;
 }
@@ -551,10 +618,10 @@ PlanarYCbCrImage::AllocateAndGetNewBuffer(uint32_t aSize)
 }
 
 already_AddRefed<gfxASurface>
-PlanarYCbCrImage::GetAsSurface()
+PlanarYCbCrImage::DeprecatedGetAsSurface()
 {
-  if (mSurface) {
-    nsRefPtr<gfxASurface> result = mSurface.get();
+  if (mDeprecatedSurface) {
+    nsRefPtr<gfxASurface> result = mDeprecatedSurface.get();
     return result.forget();
   }
 
@@ -572,17 +639,42 @@ PlanarYCbCrImage::GetAsSurface()
 
   gfx::ConvertYCbCrToRGB(mData, format, mSize, imageSurface->Data(), imageSurface->Stride());
 
-  mSurface = imageSurface;
+  mDeprecatedSurface = imageSurface;
 
   return imageSurface.forget();
 }
 
+TemporaryRef<gfx::SourceSurface>
+PlanarYCbCrImage::GetAsSourceSurface()
+{
+  if (mSourceSurface) {
+    return mSourceSurface.get();
+  }
+
+  gfx::IntSize size(mSize);
+  gfx::SurfaceFormat format = gfx::ImageFormatToSurfaceFormat(GetOffscreenFormat());
+  gfx::GetYCbCrToRGBDestFormatAndSize(mData, format, size);
+  if (mSize.width > PlanarYCbCrImage::MAX_DIMENSION ||
+      mSize.height > PlanarYCbCrImage::MAX_DIMENSION) {
+    NS_ERROR("Illegal image dest width or height");
+    return nullptr;
+  }
+
+  RefPtr<gfx::DataSourceSurface> surface = gfx::Factory::CreateDataSourceSurface(size, format);
+
+  gfx::ConvertYCbCrToRGB(mData, format, size, surface->GetData(), surface->Stride());
+
+  mSourceSurface = surface;
+
+  return surface.forget();
+}
+
 already_AddRefed<gfxASurface>
-RemoteBitmapImage::GetAsSurface()
+RemoteBitmapImage::DeprecatedGetAsSurface()
 {
   nsRefPtr<gfxImageSurface> newSurf =
-    new gfxImageSurface(mSize,
-    mFormat == RemoteImageData::BGRX32 ? gfxImageFormatRGB24 : gfxImageFormatARGB32);
+    new gfxImageSurface(ThebesIntSize(mSize),
+    mFormat == RemoteImageData::BGRX32 ? gfxImageFormat::RGB24 : gfxImageFormat::ARGB32);
 
   for (int y = 0; y < mSize.height; y++) {
     memcpy(newSurf->Data() + newSurf->Stride() * y,
@@ -591,6 +683,63 @@ RemoteBitmapImage::GetAsSurface()
   }
 
   return newSurf.forget();
+}
+
+TemporaryRef<gfx::SourceSurface>
+RemoteBitmapImage::GetAsSourceSurface()
+{
+  gfx::SurfaceFormat fmt = mFormat == RemoteImageData::BGRX32
+                         ? gfx::SurfaceFormat::B8G8R8X8
+                         : gfx::SurfaceFormat::B8G8R8A8;
+  RefPtr<gfx::DataSourceSurface> newSurf = gfx::Factory::CreateDataSourceSurface(mSize, fmt);
+
+  for (int y = 0; y < mSize.height; y++) {
+    memcpy(newSurf->GetData() + newSurf->Stride() * y,
+           mData + mStride * y,
+           mSize.width * 4);
+  }
+
+  return newSurf;
+}
+
+CairoImage::CairoImage()
+  : Image(nullptr, ImageFormat::CAIRO_SURFACE)
+{}
+
+CairoImage::~CairoImage()
+{
+}
+
+TextureClient*
+CairoImage::GetTextureClient(CompositableClient *aClient)
+{
+  CompositableForwarder* forwarder = aClient->GetForwarder();
+  RefPtr<TextureClient> textureClient = mTextureClients.Get(forwarder->GetSerial());
+  if (textureClient) {
+    return textureClient;
+  }
+
+  RefPtr<SourceSurface> surface = GetAsSourceSurface();
+  MOZ_ASSERT(surface);
+
+  textureClient = aClient->CreateTextureClientForDrawing(surface->GetFormat(),
+                                                         TEXTURE_FLAGS_DEFAULT);
+  MOZ_ASSERT(textureClient->AsTextureClientDrawTarget());
+  if (!textureClient->AsTextureClientDrawTarget()->AllocateForSurface(surface->GetSize()) ||
+      !textureClient->Lock(OPEN_WRITE_ONLY)) {
+    return nullptr;
+  }
+
+  {
+    // We must not keep a reference to the DrawTarget after it has been unlocked.
+    RefPtr<DrawTarget> dt = textureClient->AsTextureClientDrawTarget()->GetAsDrawTarget();
+    dt->CopySurface(surface, IntRect(IntPoint(), surface->GetSize()), IntPoint());
+  }
+
+  textureClient->Unlock();
+
+  mTextureClients.Put(forwarder->GetSerial(), textureClient);
+  return textureClient;
 }
 
 } // namespace

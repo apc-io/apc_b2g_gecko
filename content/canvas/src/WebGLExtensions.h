@@ -6,9 +6,17 @@
 #ifndef WEBGLEXTENSIONS_H_
 #define WEBGLEXTENSIONS_H_
 
+#include "jsapi.h"
+#include "mozilla/Attributes.h"
+#include "nsWrapperCache.h"
+#include "WebGLObjectModel.h"
+#include "WebGLTypes.h"
+
 namespace mozilla {
 
 class WebGLContext;
+class WebGLShader;
+class WebGLVertexArray;
 
 class WebGLExtensionBase
     : public nsWrapperCache
@@ -76,6 +84,18 @@ public:
     DECL_WEBGL_EXTENSION_GOOP
 };
 
+class WebGLExtensionDebugShaders
+    : public WebGLExtensionBase
+{
+public:
+    WebGLExtensionDebugShaders(WebGLContext*);
+    virtual ~WebGLExtensionDebugShaders();
+
+    void GetTranslatedShaderSource(WebGLShader* shader, nsAString& retval);
+
+    DECL_WEBGL_EXTENSION_GOOP
+};
+
 class WebGLExtensionDepthTexture
     : public WebGLExtensionBase
 {
@@ -92,6 +112,18 @@ class WebGLExtensionElementIndexUint
 public:
     WebGLExtensionElementIndexUint(WebGLContext*);
     virtual ~WebGLExtensionElementIndexUint();
+
+    DECL_WEBGL_EXTENSION_GOOP
+};
+
+class WebGLExtensionFragDepth
+    : public WebGLExtensionBase
+{
+public:
+    WebGLExtensionFragDepth(WebGLContext*);
+    virtual ~WebGLExtensionFragDepth();
+
+    static bool IsSupported(const WebGLContext* context);
 
     DECL_WEBGL_EXTENSION_GOOP
 };
@@ -161,6 +193,50 @@ public:
     DECL_WEBGL_EXTENSION_GOOP
 };
 
+class WebGLExtensionTextureHalfFloat
+    : public WebGLExtensionBase
+{
+public:
+    WebGLExtensionTextureHalfFloat(WebGLContext*);
+    virtual ~WebGLExtensionTextureHalfFloat();
+
+    DECL_WEBGL_EXTENSION_GOOP
+};
+
+class WebGLExtensionTextureHalfFloatLinear
+    : public WebGLExtensionBase
+{
+public:
+    WebGLExtensionTextureHalfFloatLinear(WebGLContext*);
+    virtual ~WebGLExtensionTextureHalfFloatLinear();
+
+    DECL_WEBGL_EXTENSION_GOOP
+};
+
+class WebGLExtensionColorBufferFloat
+    : public WebGLExtensionBase
+{
+public:
+    WebGLExtensionColorBufferFloat(WebGLContext*);
+    virtual ~WebGLExtensionColorBufferFloat();
+
+    static bool IsSupported(const WebGLContext*);
+
+    DECL_WEBGL_EXTENSION_GOOP
+};
+
+class WebGLExtensionColorBufferHalfFloat
+    : public WebGLExtensionBase
+{
+public:
+    WebGLExtensionColorBufferHalfFloat(WebGLContext*);
+    virtual ~WebGLExtensionColorBufferHalfFloat();
+
+    static bool IsSupported(const WebGLContext*);
+
+    DECL_WEBGL_EXTENSION_GOOP
+};
+
 class WebGLExtensionDrawBuffers
     : public WebGLExtensionBase
 {
@@ -176,7 +252,7 @@ public:
     static const size_t sMinDrawBuffers = 4;
     /*
      WEBGL_draw_buffers does not give a minal value for GL_MAX_DRAW_BUFFERS. But, we request
-     for GL_MAX_DRAW_BUFFERS = 4 at least to be able to use all requested color attachements.
+     for GL_MAX_DRAW_BUFFERS = 4 at least to be able to use all requested color attachments.
      See DrawBuffersWEBGL in WebGLExtensionDrawBuffers.cpp inner comments for more informations.
      */
 

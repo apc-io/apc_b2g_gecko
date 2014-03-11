@@ -31,6 +31,7 @@
 using namespace mozilla;
 using namespace mozilla::layers;
 using namespace mozilla::dom;
+using namespace mozilla::gfx;
 
 nsIFrame*
 NS_NewHTMLVideoFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
@@ -198,8 +199,8 @@ nsVideoFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
   if (r.IsEmpty()) {
     return nullptr;
   }
-  gfxIntSize scaleHint(static_cast<int32_t>(r.Width()),
-                       static_cast<int32_t>(r.Height()));
+  IntSize scaleHint(static_cast<int32_t>(r.Width()),
+                    static_cast<int32_t>(r.Height()));
   container->SetScaleHint(scaleHint);
 
   nsRefPtr<ImageLayer> layer = static_cast<ImageLayer*>
@@ -214,10 +215,11 @@ nsVideoFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
   layer->SetFilter(nsLayoutUtils::GetGraphicsFilterForFrame(this));
   layer->SetContentFlags(Layer::CONTENT_OPAQUE);
   // Set a transform on the layer to draw the video in the right place
-  gfxMatrix transform;
-  transform.Translate(r.TopLeft() + aContainerParameters.mOffset);
+  gfx::Matrix transform;
+  gfxPoint p = r.TopLeft() + aContainerParameters.mOffset;
+  transform.Translate(p.x, p.y);
   transform.Scale(r.Width()/frameSize.width, r.Height()/frameSize.height);
-  layer->SetBaseTransform(gfx3DMatrix::From2D(transform));
+  layer->SetBaseTransform(gfx::Matrix4x4::From2D(transform));
   layer->SetVisibleRegion(nsIntRect(0, 0, frameSize.width, frameSize.height));
   nsRefPtr<Layer> result = layer.forget();
   return result.forget();
@@ -228,7 +230,7 @@ class DispatchResizeToControls : public nsRunnable
 public:
   DispatchResizeToControls(nsIContent* aContent)
     : mContent(aContent) {}
-  NS_IMETHOD Run() {
+  NS_IMETHOD Run() MOZ_OVERRIDE {
     nsContentUtils::DispatchTrustedEvent(mContent->OwnerDoc(), mContent,
                                          NS_LITERAL_STRING("resizevideocontrols"),
                                          false, false);
@@ -237,7 +239,7 @@ public:
   nsCOMPtr<nsIContent> mContent;
 };
 
-NS_IMETHODIMP
+nsresult
 nsVideoFrame::Reflow(nsPresContext*           aPresContext,
                      nsHTMLReflowMetrics&     aMetrics,
                      const nsHTMLReflowState& aReflowState,
@@ -247,20 +249,20 @@ nsVideoFrame::Reflow(nsPresContext*           aPresContext,
   DISPLAY_REFLOW(aPresContext, this, aReflowState, aMetrics, aStatus);
   NS_FRAME_TRACE(NS_FRAME_TRACE_CALLS,
                   ("enter nsVideoFrame::Reflow: availSize=%d,%d",
-                  aReflowState.availableWidth, aReflowState.availableHeight));
+                  aReflowState.AvailableWidth(), aReflowState.AvailableHeight()));
 
   NS_PRECONDITION(mState & NS_FRAME_IN_REFLOW, "frame is not in reflow");
 
   aStatus = NS_FRAME_COMPLETE;
 
-  aMetrics.width = aReflowState.ComputedWidth();
-  aMetrics.height = aReflowState.ComputedHeight();
+  aMetrics.Width() = aReflowState.ComputedWidth();
+  aMetrics.Height() = aReflowState.ComputedHeight();
 
   // stash this away so we can compute our inner area later
-  mBorderPadding   = aReflowState.mComputedBorderPadding;
+  mBorderPadding   = aReflowState.ComputedPhysicalBorderPadding();
 
-  aMetrics.width += mBorderPadding.left + mBorderPadding.right;
-  aMetrics.height += mBorderPadding.top + mBorderPadding.bottom;
+  aMetrics.Width() += mBorderPadding.left + mBorderPadding.right;
+  aMetrics.Height() += mBorderPadding.top + mBorderPadding.bottom;
 
   // Reflow the child frames. We may have up to two, an image frame
   // which is the poster, and a box frame, which is the video controls.
@@ -270,15 +272,15 @@ nsVideoFrame::Reflow(nsPresContext*           aPresContext,
     if (child->GetContent() == mPosterImage) {
       // Reflow the poster frame.
       nsImageFrame* imageFrame = static_cast<nsImageFrame*>(child);
-      nsHTMLReflowMetrics kidDesiredSize;
-      nsSize availableSize = nsSize(aReflowState.availableWidth,
-                                    aReflowState.availableHeight);
+      nsHTMLReflowMetrics kidDesiredSize(aReflowState);
+      nsSize availableSize = nsSize(aReflowState.AvailableWidth(),
+                                    aReflowState.AvailableHeight());
       nsHTMLReflowState kidReflowState(aPresContext,
                                        aReflowState,
                                        imageFrame,
                                        availableSize,
-                                       aMetrics.width,
-                                       aMetrics.height);
+                                       aMetrics.Width(),
+                                       aMetrics.Height());
 
       uint32_t posterHeight, posterWidth;
       nsSize scaledPosterSize(0, 0);
@@ -305,7 +307,7 @@ nsVideoFrame::Reflow(nsPresContext*           aPresContext,
 
       ReflowChild(imageFrame, aPresContext, kidDesiredSize, kidReflowState,
                         posterTopLeft.x, posterTopLeft.y, 0, aStatus);
-      FinishReflowChild(imageFrame, aPresContext, &kidReflowState, kidDesiredSize,
+      FinishReflowChild(imageFrame, aPresContext, kidDesiredSize, &kidReflowState,
                         posterTopLeft.x, posterTopLeft.y, 0);
     } else if (child->GetContent() == mVideoControls) {
       // Reflow the video controls frame.
@@ -323,18 +325,18 @@ nsVideoFrame::Reflow(nsPresContext*           aPresContext,
       }
     } else if (child->GetContent() == mCaptionDiv) {
       // Reflow to caption div
-      nsHTMLReflowMetrics kidDesiredSize;
-      nsSize availableSize = nsSize(aReflowState.availableWidth,
-                                    aReflowState.availableHeight);
+      nsHTMLReflowMetrics kidDesiredSize(aReflowState);
+      nsSize availableSize = nsSize(aReflowState.AvailableWidth(),
+                                    aReflowState.AvailableHeight());
       nsHTMLReflowState kidReflowState(aPresContext,
                                        aReflowState,
                                        child,
                                        availableSize,
-                                       aMetrics.width,
-                                       aMetrics.height);
+                                       aMetrics.Width(),
+                                       aMetrics.Height());
       nsSize size(aReflowState.ComputedWidth(), aReflowState.ComputedHeight());
-      size.width -= kidReflowState.mComputedBorderPadding.LeftRight();
-      size.height -= kidReflowState.mComputedBorderPadding.TopBottom();
+      size.width -= kidReflowState.ComputedPhysicalBorderPadding().LeftRight();
+      size.height -= kidReflowState.ComputedPhysicalBorderPadding().TopBottom();
 
       kidReflowState.SetComputedWidth(std::max(size.width, 0));
       kidReflowState.SetComputedHeight(std::max(size.height, 0));
@@ -342,7 +344,7 @@ nsVideoFrame::Reflow(nsPresContext*           aPresContext,
       ReflowChild(child, aPresContext, kidDesiredSize, kidReflowState,
                   mBorderPadding.left, mBorderPadding.top, 0, aStatus);
       FinishReflowChild(child, aPresContext,
-                        &kidReflowState, kidDesiredSize,
+                        kidDesiredSize, &kidReflowState,
                         mBorderPadding.left, mBorderPadding.top, 0);
     }
   }
@@ -352,7 +354,7 @@ nsVideoFrame::Reflow(nsPresContext*           aPresContext,
 
   NS_FRAME_TRACE(NS_FRAME_TRACE_CALLS,
                   ("exit nsVideoFrame::Reflow: size=%d,%d",
-                  aMetrics.width, aMetrics.height));
+                  aMetrics.Width(), aMetrics.Height()));
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowState, aMetrics);
 
   return NS_OK;
@@ -381,7 +383,7 @@ public:
   // away completely (e.g. because of a decoder error). The problem would
   // be especially acute if we have off-main-thread rendering.
 
-  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap)
+  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) MOZ_OVERRIDE
   {
     *aSnap = true;
     nsIFrame* f = Frame();
@@ -390,14 +392,14 @@ public:
 
   virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
                                              LayerManager* aManager,
-                                             const ContainerLayerParameters& aContainerParameters)
+                                             const ContainerLayerParameters& aContainerParameters) MOZ_OVERRIDE
   {
     return static_cast<nsVideoFrame*>(mFrame)->BuildLayer(aBuilder, aManager, this, aContainerParameters);
   }
 
   virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
                                    LayerManager* aManager,
-                                   const ContainerLayerParameters& aParameters)
+                                   const ContainerLayerParameters& aParameters) MOZ_OVERRIDE
   {
     if (aManager->IsCompositingCheap()) {
       // Since ImageLayers don't require additional memory of the
@@ -466,8 +468,8 @@ nsVideoFrame::AccessibleType()
 }
 #endif
 
-#ifdef DEBUG
-NS_IMETHODIMP
+#ifdef DEBUG_FRAME_DUMP
+nsresult
 nsVideoFrame::GetFrameName(nsAString& aResult) const
 {
   return MakeFrameName(NS_LITERAL_STRING("HTMLVideo"), aResult);
@@ -602,7 +604,7 @@ nsVideoFrame::UpdatePosterSource(bool aNotify)
   }
 }
 
-NS_IMETHODIMP
+nsresult
 nsVideoFrame::AttributeChanged(int32_t aNameSpaceID,
                                nsIAtom* aAttribute,
                                int32_t aModType)

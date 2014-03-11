@@ -306,6 +306,7 @@ nsIAtom** const kElementsSVG[] = {
   &nsGkAtoms::feDiffuseLighting, // feDiffuseLighting
   &nsGkAtoms::feDisplacementMap, // feDisplacementMap
   &nsGkAtoms::feDistantLight, // feDistantLight
+  &nsGkAtoms::feDropShadow, // feDropShadow
   &nsGkAtoms::feFlood, // feFlood
   &nsGkAtoms::feFuncA, // feFuncA
   &nsGkAtoms::feFuncB, // feFuncB
@@ -1228,7 +1229,7 @@ nsTreeSanitizer::SanitizeAttributes(mozilla::dom::Element* aElement,
         // <link rel itemprop>
         continue;
       }
-      const PRUnichar* localStr = attrLocal->GetUTF16String();
+      const char16_t* localStr = attrLocal->GetUTF16String();
       // Allow underscore to cater to the MCE editor library.
       // Allow data-* on SVG and MathML, too, as a forward-compat measure.
       if (*localStr == '_' || (attrLocal->GetLength() > 5 && localStr[0] == 'd'

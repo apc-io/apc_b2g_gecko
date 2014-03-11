@@ -17,7 +17,7 @@
 #endif
 #include <errno.h>
 #include <fcntl.h>
-#if defined(XP_OS2) || defined(XP_WIN)
+#if defined(XP_WIN)
 # include <io.h>     /* for isatty() */
 #endif
 #include <locale.h>
@@ -60,6 +60,7 @@
 
 #include "builtin/TestingFunctions.h"
 #include "frontend/Parser.h"
+#include "jit/arm/Simulator-arm.h"
 #include "jit/Ion.h"
 #include "js/OldDebugAPI.h"
 #include "js/StructuredClone.h"
@@ -85,7 +86,7 @@ using namespace js;
 using namespace js::cli;
 
 using mozilla::ArrayLength;
-using mozilla::DoubleEqualsInt32;
+using mozilla::NumberEqualsInt32;
 using mozilla::Maybe;
 using mozilla::PodCopy;
 
@@ -108,12 +109,6 @@ static size_t gMaxStackSize = 2 * 128 * sizeof(size_t) * 1024;
 static size_t gMaxStackSize = 128 * sizeof(size_t) * 1024;
 #endif
 
-#ifdef JS_THREADSAFE
-static unsigned gStackBaseThreadIndex;
-#else
-static uintptr_t gStackBase;
-#endif
-
 /*
  * Limit the timeout to 30 minutes to prevent an overflow on platfoms
  * that represent the time internally in microseconds using 32-bit int.
@@ -123,16 +118,13 @@ static double gTimeoutInterval = -1.0;
 static volatile bool gTimedOut = false;
 static JS::Value gTimeoutFunc;
 
-static bool enableTypeInference = true;
 static bool enableDisassemblyDumps = false;
-static bool enableIon = true;
-static bool enableBaseline = true;
-static bool enableAsmJS = true;
 
 static bool printTiming = false;
 static const char *jsCacheDir = nullptr;
 static const char *jsCacheAsmJSPath = nullptr;
-mozilla::Atomic<int32_t> jsCacheOpened(false);
+static bool jsCachingEnabled = true;
+mozilla::Atomic<bool> jsCacheOpened(false);
 
 static bool
 SetTimeoutValue(JSContext *cx, double t);
@@ -197,8 +189,65 @@ NewContext(JSRuntime *rt);
 static void
 DestroyContext(JSContext *cx, bool withGC);
 
+static JSObject *
+NewGlobalObject(JSContext *cx, JS::CompartmentOptions &options,
+                JSPrincipals *principals);
+
 static const JSErrorFormatString *
 my_GetErrorMessage(void *userRef, const char *locale, const unsigned errorNumber);
+
+
+/*
+ * A toy principals type for the shell.
+ *
+ * In the shell, a principal is simply a 32-bit mask: P subsumes Q if the
+ * set bits in P are a superset of those in Q. Thus, the principal 0 is
+ * subsumed by everything, and the principal ~0 subsumes everything.
+ *
+ * As a special case, a null pointer as a principal is treated like 0xffff.
+ *
+ * The 'newGlobal' function takes an option indicating which principal the
+ * new global should have; 'evaluate' does for the new code.
+ */
+class ShellPrincipals: public JSPrincipals {
+    uint32_t bits;
+
+    static uint32_t getBits(JSPrincipals *p) {
+        if (!p)
+            return 0xffff;
+        return static_cast<ShellPrincipals *>(p)->bits;
+    }
+
+  public:
+    ShellPrincipals(uint32_t bits, int32_t refcount = 0) : bits(bits) {
+        this->refcount = refcount;
+    }
+
+    static void destroy(JSPrincipals *principals) {
+        MOZ_ASSERT(principals != &fullyTrusted);
+        MOZ_ASSERT(principals->refcount == 0);
+        js_free(static_cast<ShellPrincipals *>(principals));
+    }
+
+    static bool subsumes(JSPrincipals *first, JSPrincipals *second) {
+        uint32_t firstBits  = getBits(first);
+        uint32_t secondBits = getBits(second);
+        return (firstBits | secondBits) == firstBits;
+    }
+
+    static JSSecurityCallbacks securityCallbacks;
+
+    // Fully-trusted principals singleton.
+    static ShellPrincipals fullyTrusted;
+};
+
+JSSecurityCallbacks ShellPrincipals::securityCallbacks = {
+    nullptr, // contentSecurityPolicyAllows
+    subsumes
+};
+
+// The fully-trusted principal subsumes all other principals.
+ShellPrincipals ShellPrincipals::fullyTrusted(-1, 1);
 
 #ifdef EDITLINE
 extern "C" {
@@ -321,15 +370,19 @@ ShellOperationCallback(JSContext *cx)
     if (!gTimedOut)
         return true;
 
-    JS_ClearPendingException(cx);
-
     bool result;
     if (!gTimeoutFunc.isNull()) {
-        RootedValue returnedValue(cx);
-        if (!JS_CallFunctionValue(cx, nullptr, gTimeoutFunc, 0, nullptr, returnedValue.address()))
+        JS::AutoSaveExceptionState savedExc(cx);
+        JSAutoCompartment ac(cx, &gTimeoutFunc.toObject());
+        RootedValue rval(cx);
+        HandleValue timeoutFunc = HandleValue::fromMarkedLocation(&gTimeoutFunc);
+        if (!JS_CallFunctionValue(cx, JS::NullPtr(), timeoutFunc,
+                                  JS::HandleValueArray::empty(), &rval))
+        {
             return false;
-        if (returnedValue.isBoolean())
-            result = returnedValue.toBoolean();
+        }
+        if (rval.isBoolean())
+            result = rval.toBoolean();
         else
             result = false;
     } else {
@@ -391,7 +444,8 @@ RunFile(JSContext *cx, Handle<JSObject*> obj, const char *filename, FILE *file, 
         JS::ContextOptionsRef(cx).setNoScriptRval(true);
 
         CompileOptions options(cx);
-        options.setUTF8(true)
+        options.setIntroductionType("js shell file")
+               .setUTF8(true)
                .setFileAndLine(filename, 1)
                .setCompileAndGo(true);
 
@@ -421,7 +475,8 @@ EvalAndPrint(JSContext *cx, Handle<JSObject*> global, const char *bytes, size_t 
 {
     // Eval.
     JS::CompileOptions options(cx);
-    options.setUTF8(true)
+    options.setIntroductionType("js shell interactive")
+           .setUTF8(true)
            .setCompileAndGo(true)
            .setFileAndLine("typein", lineno);
     RootedScript script(cx);
@@ -561,7 +616,7 @@ Version(JSContext *cx, unsigned argc, jsval *vp)
         } else if (args[0].isDouble()) {
             double fv = args[0].toDouble();
             int32_t fvi;
-            if (DoubleEqualsInt32(fv, &fvi))
+            if (NumberEqualsInt32(fv, &fvi))
                 v = fvi;
         }
         if (v < 0 || v > JSVERSION_LATEST) {
@@ -572,14 +627,6 @@ Version(JSContext *cx, unsigned argc, jsval *vp)
         args.rval().setInt32(origVersion);
     }
     return true;
-}
-
-static JSScript *
-GetTopScript(JSContext *cx)
-{
-    RootedScript script(cx);
-    JS_DescribeScriptedCaller(cx, &script, nullptr);
-    return script;
 }
 
 /*
@@ -614,19 +661,23 @@ ResolvePath(JSContext *cx, HandleString filenameStr, bool scriptRelative)
 #endif
 
     /* Get the currently executing script's name. */
-    RootedScript script(cx, GetTopScript(cx));
-    if (!script->filename())
+    JS::AutoFilename scriptFilename;
+    if (!DescribeScriptedCaller(cx, &scriptFilename))
         return nullptr;
-    if (strcmp(script->filename(), "-e") == 0 || strcmp(script->filename(), "typein") == 0)
+
+    if (!scriptFilename.get())
+        return nullptr;
+
+    if (strcmp(scriptFilename.get(), "-e") == 0 || strcmp(scriptFilename.get(), "typein") == 0)
         scriptRelative = false;
 
     static char buffer[PATH_MAX+1];
     if (scriptRelative) {
 #ifdef XP_WIN
         // The docs say it can return EINVAL, but the compiler says it's void
-        _splitpath(script->filename(), nullptr, buffer, nullptr, nullptr);
+        _splitpath(scriptFilename.get(), nullptr, buffer, nullptr, nullptr);
 #else
-        strncpy(buffer, script->filename(), PATH_MAX+1);
+        strncpy(buffer, scriptFilename.get(), PATH_MAX+1);
         if (buffer[PATH_MAX] != '\0')
             return nullptr;
 
@@ -654,7 +705,8 @@ Options(JSContext *cx, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    JS::ContextOptions oldOptions = JS::ContextOptionsRef(cx);
+    JS::RuntimeOptions oldRuntimeOptions = JS::RuntimeOptionsRef(cx);
+    JS::ContextOptions oldContextOptions = JS::ContextOptionsRef(cx);
     for (unsigned i = 0; i < args.length(); i++) {
         JSString *str = JS::ToString(cx, args[i]);
         if (!str)
@@ -668,7 +720,7 @@ Options(JSContext *cx, unsigned argc, jsval *vp)
         if (strcmp(opt.ptr(), "strict") == 0)
             JS::ContextOptionsRef(cx).toggleExtraWarnings();
         else if (strcmp(opt.ptr(), "typeinfer") == 0)
-            JS::ContextOptionsRef(cx).toggleTypeInference();
+            JS::RuntimeOptionsRef(cx).toggleTypeInference();
         else if (strcmp(opt.ptr(), "werror") == 0)
             JS::ContextOptionsRef(cx).toggleWerror();
         else if (strcmp(opt.ptr(), "strict_mode") == 0)
@@ -692,19 +744,19 @@ Options(JSContext *cx, unsigned argc, jsval *vp)
 
     char *names = strdup("");
     bool found = false;
-    if (!names && oldOptions.extraWarnings()) {
+    if (!names && oldContextOptions.extraWarnings()) {
         names = JS_sprintf_append(names, "%s%s", found ? "," : "", "strict");
         found = true;
     }
-    if (!names && oldOptions.typeInference()) {
+    if (!names && oldRuntimeOptions.typeInference()) {
         names = JS_sprintf_append(names, "%s%s", found ? "," : "", "typeinfer");
         found = true;
     }
-    if (!names && oldOptions.werror()) {
+    if (!names && oldContextOptions.werror()) {
         names = JS_sprintf_append(names, "%s%s", found ? "," : "", "werror");
         found = true;
     }
-    if (!names && oldOptions.strictMode()) {
+    if (!names && oldContextOptions.strictMode()) {
         names = JS_sprintf_append(names, "%s%s", found ? "," : "", "strict_mode");
         found = true;
     }
@@ -746,7 +798,10 @@ LoadScript(JSContext *cx, unsigned argc, jsval *vp, bool scriptRelative)
             return false;
         errno = 0;
         CompileOptions opts(cx);
-        opts.setUTF8(true).setCompileAndGo(true).setNoScriptRval(true);
+        opts.setIntroductionType("js shell load")
+            .setUTF8(true)
+            .setCompileAndGo(true)
+            .setNoScriptRval(true);
         if ((compileOnly && !Compile(cx, thisobj, opts, filename.ptr())) ||
             !Evaluate(cx, thisobj, opts, filename.ptr(), nullptr))
         {
@@ -768,6 +823,89 @@ static bool
 LoadScriptRelativeToScript(JSContext *cx, unsigned argc, jsval *vp)
 {
     return LoadScript(cx, argc, vp, true);
+}
+
+// Populate |options| with the options given by |opts|'s properties. If we
+// need to convert a filename to a C string, let fileNameBytes own the
+// bytes.
+static bool
+ParseCompileOptions(JSContext *cx, CompileOptions &options, HandleObject opts,
+                    JSAutoByteString &fileNameBytes)
+{
+    RootedValue v(cx);
+    RootedString s(cx);
+
+    if (!JS_GetProperty(cx, opts, "compileAndGo", &v))
+        return false;
+    if (!v.isUndefined())
+        options.setCompileAndGo(ToBoolean(v));
+
+    if (!JS_GetProperty(cx, opts, "noScriptRval", &v))
+        return false;
+    if (!v.isUndefined())
+        options.setNoScriptRval(ToBoolean(v));
+
+    if (!JS_GetProperty(cx, opts, "fileName", &v))
+        return false;
+    if (v.isNull()) {
+        options.setFile(nullptr);
+    } else if (!v.isUndefined()) {
+        s = ToString(cx, v);
+        if (!s)
+            return false;
+        char *fileName = fileNameBytes.encodeLatin1(cx, s);
+        if (!fileName)
+            return false;
+        options.setFile(fileName);
+    }
+
+    if (!JS_GetProperty(cx, opts, "element", &v))
+        return false;
+    if (v.isObject())
+        options.setElement(&v.toObject());
+
+    if (!JS_GetProperty(cx, opts, "elementAttributeName", &v))
+        return false;
+    if (!v.isUndefined()) {
+        s = ToString(cx, v);
+        if (!s)
+            return false;
+        options.setElementAttributeName(s);
+    }
+
+    if (!JS_GetProperty(cx, opts, "lineNumber", &v))
+        return false;
+    if (!v.isUndefined()) {
+        uint32_t u;
+        if (!ToUint32(cx, v, &u))
+            return false;
+        options.setLine(u);
+    }
+
+    if (!JS_GetProperty(cx, opts, "sourcePolicy", &v))
+        return false;
+    if (!v.isUndefined()) {
+        JSString *s = ToString(cx, v);
+        if (!s)
+            return false;
+
+        JSAutoByteString bytes;
+        char *policy = bytes.encodeUtf8(cx, s);
+        if (!policy)
+            return false;
+        if (strcmp(policy, "NO_SOURCE") == 0) {
+            options.setSourcePolicy(CompileOptions::NO_SOURCE);
+        } else if (strcmp(policy, "LAZY_SOURCE") == 0) {
+            options.setSourcePolicy(CompileOptions::LAZY_SOURCE);
+        } else if (strcmp(policy, "SAVE_SOURCE") == 0) {
+            options.setSourcePolicy(CompileOptions::SAVE_SOURCE);
+        } else {
+            JS_ReportError(cx, "bad 'sourcePolicy' option: '%s'", policy);
+            return false;
+        }
+    }
+
+    return true;
 }
 
 class AutoNewContext
@@ -814,6 +952,90 @@ class AutoNewContext
     }
 };
 
+static const uint32_t CacheEntry_SOURCE = 0;
+static const uint32_t CacheEntry_BYTECODE = 1;
+
+static const JSClass CacheEntry_class = {
+    "CacheEntryObject", JSCLASS_HAS_RESERVED_SLOTS(2),
+    JS_PropertyStub,       /* addProperty */
+    JS_DeletePropertyStub, /* delProperty */
+    JS_PropertyStub,       /* getProperty */
+    JS_StrictPropertyStub, /* setProperty */
+    JS_EnumerateStub,
+    JS_ResolveStub,
+    JS_ConvertStub,
+    nullptr,               /* finalize */
+    nullptr,               /* call */
+    nullptr,               /* hasInstance */
+    nullptr,               /* construct */
+    nullptr,               /* trace */
+    JSCLASS_NO_INTERNAL_MEMBERS
+};
+
+static bool
+CacheEntry(JSContext* cx, unsigned argc, JS::Value *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    if (args.length() != 1 || !args[0].isString()) {
+        JS_ReportErrorNumber(cx, my_GetErrorMessage, nullptr, JSSMSG_INVALID_ARGS, "CacheEntry");
+        return false;
+    }
+
+    RootedObject obj(cx, JS_NewObject(cx, &CacheEntry_class, JS::NullPtr(), JS::NullPtr()));
+    if (!obj)
+        return false;
+
+    SetReservedSlot(obj, CacheEntry_SOURCE, args[0]);
+    SetReservedSlot(obj, CacheEntry_BYTECODE, UndefinedValue());
+    args.rval().setObject(*obj);
+    return true;
+}
+
+static bool
+CacheEntry_isCacheEntry(JSObject *cache)
+{
+    return JS_GetClass(cache) == &CacheEntry_class;
+}
+
+static JSString *
+CacheEntry_getSource(HandleObject cache)
+{
+    JS_ASSERT(CacheEntry_isCacheEntry(cache));
+    Value v = JS_GetReservedSlot(cache, CacheEntry_SOURCE);
+    if (!v.isString())
+        return nullptr;
+
+    return v.toString();
+}
+
+static uint8_t *
+CacheEntry_getBytecode(HandleObject cache, uint32_t *length)
+{
+    JS_ASSERT(CacheEntry_isCacheEntry(cache));
+    Value v = JS_GetReservedSlot(cache, CacheEntry_BYTECODE);
+    if (!v.isObject() || !v.toObject().is<ArrayBufferObject>())
+        return nullptr;
+
+    ArrayBufferObject *arrayBuffer = &v.toObject().as<ArrayBufferObject>();
+    *length = arrayBuffer->byteLength();
+    return arrayBuffer->dataPointer();
+}
+
+static bool
+CacheEntry_setBytecode(JSContext *cx, HandleObject cache, uint8_t *buffer, uint32_t length)
+{
+    JS_ASSERT(CacheEntry_isCacheEntry(cache));
+    Rooted<ArrayBufferObject*> arrayBuffer(cx, ArrayBufferObject::create(cx, length, buffer));
+
+    if (!arrayBuffer || !ArrayBufferObject::ensureNonInline(cx, arrayBuffer))
+        return false;
+
+    memcpy(arrayBuffer->dataPointer(), buffer, length);
+    SetReservedSlot(cache, CacheEntry_BYTECODE, OBJECT_TO_JSVAL(arrayBuffer));
+    return true;
+}
+
 class AutoSaveFrameChain
 {
     JSContext *cx_;
@@ -849,26 +1071,36 @@ Evaluate(JSContext *cx, unsigned argc, jsval *vp)
                              "evaluate");
         return false;
     }
-    if (!args[0].isString() || (args.length() == 2 && args[1].isPrimitive())) {
+
+    RootedString code(cx, nullptr);
+    RootedObject cacheEntry(cx, nullptr);
+    if (args[0].isString()) {
+        code = args[0].toString();
+    } else if (args[0].isObject() && CacheEntry_isCacheEntry(&args[0].toObject())) {
+        cacheEntry = &args[0].toObject();
+        code = CacheEntry_getSource(cacheEntry);
+    }
+
+    if (!code || (args.length() == 2 && args[1].isPrimitive())) {
         JS_ReportErrorNumber(cx, my_GetErrorMessage, nullptr, JSSMSG_INVALID_ARGS, "evaluate");
         return false;
     }
 
-    bool newContext = false;
-    bool compileAndGo = true;
-    bool noScriptRval = false;
-    const char *fileName = "@evaluate";
-    RootedObject element(cx);
-    RootedString elementProperty(cx);
+    CompileOptions options(cx);
     JSAutoByteString fileNameBytes;
-    RootedString sourceURL(cx);
+    bool newContext = false;
+    RootedString displayURL(cx);
     RootedString sourceMapURL(cx);
-    unsigned lineNumber = 1;
     RootedObject global(cx, nullptr);
     bool catchTermination = false;
     bool saveFrameChain = false;
+    bool loadBytecode = false;
+    bool saveBytecode = false;
+    bool assertEqBytecode = false;
     RootedObject callerGlobal(cx, cx->global());
-    CompileOptions::SourcePolicy sourcePolicy = CompileOptions::SAVE_SOURCE;
+
+    options.setIntroductionType("js shell evaluate")
+           .setFileAndLine("@evaluate", 1);
 
     global = JS_GetGlobalForObject(cx, &args.callee());
     if (!global)
@@ -878,52 +1110,19 @@ Evaluate(JSContext *cx, unsigned argc, jsval *vp)
         RootedObject opts(cx, &args[1].toObject());
         RootedValue v(cx);
 
+        if (!ParseCompileOptions(cx, options, opts, fileNameBytes))
+            return false;
+
         if (!JS_GetProperty(cx, opts, "newContext", &v))
             return false;
         if (!v.isUndefined())
             newContext = ToBoolean(v);
 
-        if (!JS_GetProperty(cx, opts, "compileAndGo", &v))
-            return false;
-        if (!v.isUndefined())
-            compileAndGo = ToBoolean(v);
-
-        if (!JS_GetProperty(cx, opts, "noScriptRval", &v))
-            return false;
-        if (!v.isUndefined())
-            noScriptRval = ToBoolean(v);
-
-        if (!JS_GetProperty(cx, opts, "fileName", &v))
-            return false;
-        if (v.isNull()) {
-            fileName = nullptr;
-        } else if (!v.isUndefined()) {
-            JSString *s = ToString(cx, v);
-            if (!s)
-                return false;
-            fileName = fileNameBytes.encodeLatin1(cx, s);
-            if (!fileName)
-                return false;
-        }
-
-        if (!JS_GetProperty(cx, opts, "element", &v))
-            return false;
-        if (v.isObject())
-            element = &v.toObject();
-
-        if (!JS_GetProperty(cx, opts, "elementProperty", &v))
+        if (!JS_GetProperty(cx, opts, "displayURL", &v))
             return false;
         if (!v.isUndefined()) {
-            elementProperty = ToString(cx, v);
-            if (!elementProperty)
-                return false;
-        }
-
-        if (!JS_GetProperty(cx, opts, "sourceURL", &v))
-            return false;
-        if (!v.isUndefined()) {
-            sourceURL = ToString(cx, v);
-            if (!sourceURL)
+            displayURL = ToString(cx, v);
+            if (!displayURL)
                 return false;
         }
 
@@ -933,15 +1132,6 @@ Evaluate(JSContext *cx, unsigned argc, jsval *vp)
             sourceMapURL = ToString(cx, v);
             if (!sourceMapURL)
                 return false;
-        }
-
-        if (!JS_GetProperty(cx, opts, "lineNumber", &v))
-            return false;
-        if (!v.isUndefined()) {
-            uint32_t u;
-            if (!ToUint32(cx, v, &u))
-                return false;
-            lineNumber = u;
         }
 
         if (!JS_GetProperty(cx, opts, "global", &v))
@@ -969,30 +1159,31 @@ Evaluate(JSContext *cx, unsigned argc, jsval *vp)
         if (!v.isUndefined())
             saveFrameChain = ToBoolean(v);
 
-        if (!JS_GetProperty(cx, opts, "sourcePolicy", &v))
+        if (!JS_GetProperty(cx, opts, "loadBytecode", &v))
             return false;
-        if (!v.isUndefined()) {
-            JSString *s = ToString(cx, v);
-            if (!s)
-                return false;
-            char *policy = JS_EncodeStringToUTF8(cx, s);
-            if (!policy)
-                return false;
-            if (strcmp(policy, "NO_SOURCE") == 0) {
-                sourcePolicy = CompileOptions::NO_SOURCE;
-            } else if (strcmp(policy, "LAZY_SOURCE") == 0) {
-                sourcePolicy = CompileOptions::LAZY_SOURCE;
-            } else if (strcmp(policy, "SAVE_SOURCE") == 0) {
-                sourcePolicy = CompileOptions::SAVE_SOURCE;
-            } else {
-                JS_ReportError(cx, "bad 'sourcePolicy' option passed to 'evaluate': '%s'",
-                               policy);
+        if (!v.isUndefined())
+            loadBytecode = ToBoolean(v);
+
+        if (!JS_GetProperty(cx, opts, "saveBytecode", &v))
+            return false;
+        if (!v.isUndefined())
+            saveBytecode = ToBoolean(v);
+
+        if (!JS_GetProperty(cx, opts, "assertEqBytecode", &v))
+            return false;
+        if (!v.isUndefined())
+            assertEqBytecode = ToBoolean(v);
+
+        // We cannot load or save the bytecode if we have no object where the
+        // bytecode cache is stored.
+        if (loadBytecode || saveBytecode) {
+            if (!cacheEntry) {
+                JS_ReportErrorNumber(cx, my_GetErrorMessage, nullptr, JSSMSG_INVALID_ARGS,
+                                     "evaluate");
                 return false;
             }
         }
     }
-
-    RootedString code(cx, args[0].toString());
 
     size_t codeLength;
     const jschar *codeChars = JS_GetStringCharsAndLength(cx, code, &codeLength);
@@ -1006,6 +1197,17 @@ Evaluate(JSContext *cx, unsigned argc, jsval *vp)
         cx = ancx.get();
     }
 
+    uint32_t loadLength = 0;
+    uint8_t *loadBuffer = nullptr;
+    uint32_t saveLength = 0;
+    ScopedJSFreePtr<uint8_t> saveBuffer;
+
+    if (loadBytecode) {
+        loadBuffer = CacheEntry_getBytecode(cacheEntry, &loadLength);
+        if (!loadBuffer)
+            return false;
+    }
+
     {
         AutoSaveFrameChain asfc(cx);
         if (saveFrameChain && !asfc.save())
@@ -1014,27 +1216,37 @@ Evaluate(JSContext *cx, unsigned argc, jsval *vp)
         JSAutoCompartment ac(cx, global);
         RootedScript script(cx);
 
+        if (!options.wrap(cx, cx->compartment()))
+            return false;
+
         {
             JS::AutoSaveContextOptions asco(cx);
-            JS::ContextOptionsRef(cx).setNoScriptRval(noScriptRval);
+            JS::ContextOptionsRef(cx).setNoScriptRval(options.noScriptRval);
+            if (saveBytecode) {
+                if (!JS::CompartmentOptionsRef(cx).getSingletonsAsTemplates()) {
+                    JS_ReportErrorNumber(cx, my_GetErrorMessage, nullptr,
+                                         JSSMSG_CACHE_SINGLETON_FAILED);
+                    return false;
+                }
+                JS::CompartmentOptionsRef(cx).cloneSingletonsOverride().set(true);
+            }
 
-            CompileOptions options(cx);
-            options.setFileAndLine(fileName, lineNumber)
-                   .setElement(element)
-                   .setElementProperty(elementProperty)
-                   .setSourcePolicy(sourcePolicy)
-                   .setCompileAndGo(compileAndGo);
+            if (loadBytecode) {
+                script = JS_DecodeScript(cx, loadBuffer, loadLength, cx->compartment()->principals,
+                                         options.originPrincipals(cx));
+            } else {
+                script = JS::Compile(cx, global, options, codeChars, codeLength);
+            }
 
-            script = JS::Compile(cx, global, options, codeChars, codeLength);
             if (!script)
                 return false;
         }
 
-        if (sourceURL && !script->scriptSource()->hasSourceURL()) {
-            const jschar *surl = JS_GetStringCharsZ(cx, sourceURL);
-            if (!surl)
+        if (displayURL && !script->scriptSource()->hasDisplayURL()) {
+            const jschar *durl = JS_GetStringCharsZ(cx, displayURL);
+            if (!durl)
                 return false;
-            if (!script->scriptSource()->setSourceURL(cx, surl))
+            if (!script->scriptSource()->setDisplayURL(cx, durl))
                 return false;
         }
         if (sourceMapURL && !script->scriptSource()->hasSourceMapURL()) {
@@ -1055,6 +1267,29 @@ Evaluate(JSContext *cx, unsigned argc, jsval *vp)
             }
             return false;
         }
+
+        if (saveBytecode) {
+            saveBuffer = reinterpret_cast<uint8_t *>(JS_EncodeScript(cx, script, &saveLength));
+            if (!saveBuffer)
+                return false;
+        }
+    }
+
+    if (saveBytecode) {
+        // If we are both loading and saving, we assert that we are going to
+        // replace the current bytecode by the same stream of bytes.
+        if (loadBytecode && assertEqBytecode) {
+            if (saveLength != loadLength) {
+                JS_ReportErrorNumber(cx, my_GetErrorMessage, nullptr, JSSMSG_CACHE_EQ_SIZE_FAILED,
+                                     loadLength, saveLength);
+            } else if (!mozilla::PodEqual(loadBuffer, saveBuffer.get(), loadLength)) {
+                JS_ReportErrorNumber(cx, my_GetErrorMessage, nullptr,
+                                     JSSMSG_CACHE_EQ_CONTENT_FAILED);
+            }
+        }
+
+        if (!CacheEntry_setBytecode(cx, cacheEntry, saveBuffer, saveLength))
+            return false;
     }
 
     return JS_WrapValue(cx, args.rval());
@@ -1183,7 +1418,8 @@ Run(JSContext *cx, unsigned argc, jsval *vp)
         JS::ContextOptionsRef(cx).setNoScriptRval(true);
 
         JS::CompileOptions options(cx);
-        options.setFileAndLine(filename.ptr(), 1)
+        options.setIntroductionType("js shell run")
+               .setFileAndLine(filename.ptr(), 1)
                .setCompileAndGo(true);
         script = JS_CompileUCScript(cx, thisobj, ucbuf, buflen, options);
         if (!script)
@@ -1358,7 +1594,7 @@ Quit(JSContext *cx, unsigned argc, jsval *vp)
 #endif
 
     CallArgs args = CallArgsFromVp(argc, vp);
-    JS_ConvertArguments(cx, args.length(), args.array(), "/ i", &gExitCode);
+    JS_ConvertArguments(cx, args, "/ i", &gExitCode);
 
     gQuitting = true;
     return false;
@@ -1468,6 +1704,13 @@ SetDebug(JSContext *cx, unsigned argc, jsval *vp)
     if (ok)
         args.rval().setBoolean(true);
     return ok;
+}
+
+static JSScript *
+GetTopScript(JSContext *cx)
+{
+    NonBuiltinScriptFrameIter iter(cx);
+    return iter.done() ? nullptr : iter.script();
 }
 
 static bool
@@ -2022,7 +2265,8 @@ DisassFile(JSContext *cx, unsigned argc, jsval *vp)
         JS::ContextOptionsRef(cx).setNoScriptRval(true);
 
         CompileOptions options(cx);
-        options.setUTF8(true)
+        options.setIntroductionType("js shell disFile")
+               .setUTF8(true)
                .setFileAndLine(filename.ptr(), 1)
                .setCompileAndGo(true);
 
@@ -2221,7 +2465,7 @@ DumpObject(JSContext *cx, unsigned argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     RootedObject arg0(cx);
-    if (!JS_ConvertArguments(cx, args.length(), args.array(), "o", arg0.address()))
+    if (!JS_ConvertArguments(cx, args, "o", arg0.address()))
         return false;
 
     js_DumpObject(arg0);
@@ -2330,7 +2574,7 @@ GetPDA(JSContext *cx, unsigned argc, jsval *vp)
         return true;
     }
 
-    RootedObject aobj(cx, JS_NewArrayObject(cx, 0, nullptr));
+    RootedObject aobj(cx, JS_NewArrayObject(cx, 0));
     if (!aobj)
         return false;
     args.rval().setObject(*aobj);
@@ -2347,16 +2591,14 @@ GetPDA(JSContext *cx, unsigned argc, jsval *vp)
     RootedValue alias(cx);
 
     for (uint32_t i = 0; i < pda.length; i++, pd++) {
-        pdobj = JS_NewObject(cx, nullptr, nullptr, nullptr);
+        pdobj = JS_NewObject(cx, nullptr, JS::NullPtr(), JS::NullPtr());
         if (!pdobj) {
             ok = false;
             break;
         }
 
         /* Protect pdobj from GC by setting it as an element of aobj now */
-        RootedValue v(cx);
-        v.setObject(*pdobj);
-        ok = !!JS_SetElement(cx, aobj, i, &v);
+        ok = !!JS_SetElement(cx, aobj, i, pdobj);
         if (!ok)
             break;
 
@@ -2476,9 +2718,11 @@ NewSandbox(JSContext *cx, bool lazy)
 static bool
 EvalInContext(JSContext *cx, unsigned argc, jsval *vp)
 {
+    CallArgs args = CallArgsFromVp(argc, vp);
+
     RootedString str(cx);
     RootedObject sobj(cx);
-    if (!JS_ConvertArguments(cx, argc, JS_ARGV(cx, vp), "S / o", str.address(), sobj.address()))
+    if (!JS_ConvertArguments(cx, args, "S / o", str.address(), sobj.address()))
         return false;
 
     size_t srclen;
@@ -2503,15 +2747,14 @@ EvalInContext(JSContext *cx, unsigned argc, jsval *vp)
     }
 
     if (srclen == 0) {
-        JS_SET_RVAL(cx, vp, OBJECT_TO_JSVAL(sobj));
+        args.rval().setObject(*sobj);
         return true;
     }
 
-    RootedScript script(cx);
+    JS::AutoFilename filename;
     unsigned lineno;
 
-    JS_DescribeScriptedCaller(cx, &script, &lineno);
-    RootedValue rval(cx);
+    DescribeScriptedCaller(cx, &filename, &lineno);
     {
         Maybe<JSAutoCompartment> ac;
         unsigned flags;
@@ -2529,17 +2772,16 @@ EvalInContext(JSContext *cx, unsigned argc, jsval *vp)
             return false;
         }
         if (!JS_EvaluateUCScript(cx, sobj, src, srclen,
-                                 script->filename(),
+                                 filename.get(),
                                  lineno,
-                                 rval.address())) {
+                                 args.rval())) {
             return false;
         }
     }
 
-    if (!cx->compartment()->wrap(cx, &rval))
+    if (!cx->compartment()->wrap(cx, args.rval()))
         return false;
 
-    JS_SET_RVAL(cx, vp, rval);
     return true;
 }
 
@@ -2600,6 +2842,105 @@ EvalInFrame(JSContext *cx, unsigned argc, jsval *vp)
     return ok;
 }
 
+#ifdef JS_THREADSAFE
+struct WorkerInput
+{
+    JSRuntime *runtime;
+    jschar *chars;
+    size_t length;
+
+    WorkerInput(JSRuntime *runtime, jschar *chars, size_t length)
+      : runtime(runtime), chars(chars), length(length)
+    {}
+
+    ~WorkerInput() {
+        js_free(chars);
+    }
+};
+
+static void
+WorkerMain(void *arg)
+{
+    WorkerInput *input = (WorkerInput *) arg;
+
+    JSRuntime *rt = JS_NewRuntime(8L * 1024L * 1024L,
+                                  JS_USE_HELPER_THREADS,
+                                  input->runtime);
+    if (!rt) {
+        js_delete(input);
+        return;
+    }
+
+    JSContext *cx = NewContext(rt);
+    if (!cx) {
+        JS_DestroyRuntime(rt);
+        js_delete(input);
+        return;
+    }
+
+    do {
+        JSAutoRequest ar(cx);
+
+        JS::CompartmentOptions compartmentOptions;
+        compartmentOptions.setVersion(JSVERSION_LATEST);
+        RootedObject global(cx, NewGlobalObject(cx, compartmentOptions, nullptr));
+        if (!global)
+            break;
+
+        JSAutoCompartment ac(cx, global);
+
+        JS::CompileOptions options(cx);
+        options.setFileAndLine("<string>", 1)
+               .setCompileAndGo(true);
+
+        JSScript *script = JS::Compile(cx, global, options,
+                                       input->chars, input->length);
+        if (!script)
+            break;
+        RootedValue result(cx);
+        JS_ExecuteScript(cx, global, script, result.address());
+    } while (0);
+
+    DestroyContext(cx, false);
+    JS_DestroyRuntime(rt);
+
+    js_delete(input);
+}
+
+Vector<PRThread *, 0, SystemAllocPolicy> workerThreads;
+
+static bool
+EvalInWorker(JSContext *cx, unsigned argc, jsval *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (argc < 1 || !args[0].isString()) {
+        JS_ReportError(cx, "Invalid arguments to evalInWorker");
+        return false;
+    }
+
+    if (!args[0].toString()->ensureLinear(cx))
+        return false;
+
+    JSLinearString *str = &args[0].toString()->asLinear();
+
+    jschar *chars = (jschar *) js_malloc(str->length() * sizeof(jschar));
+    if (!chars)
+        return false;
+    PodCopy(chars, str->chars(), str->length());
+
+    WorkerInput *input = js_new<WorkerInput>(cx->runtime(), chars, str->length());
+    if (!input)
+        return false;
+
+    PRThread *thread = PR_CreateThread(PR_USER_THREAD, WorkerMain, input,
+                                       PR_PRIORITY_NORMAL, PR_LOCAL_THREAD, PR_JOINABLE_THREAD, 0);
+    if (!thread || !workerThreads.append(thread))
+        return false;
+
+    return true;
+}
+#endif
+
 static bool
 ShapeOf(JSContext *cx, unsigned argc, JS::Value *vp)
 {
@@ -2624,7 +2965,6 @@ CopyProperty(JSContext *cx, HandleObject obj, HandleObject referent, HandleId id
 {
     RootedShape shape(cx);
     Rooted<PropertyDescriptor> desc(cx);
-    unsigned propFlags = 0;
     RootedObject obj2(cx);
 
     objp.set(nullptr);
@@ -2647,8 +2987,6 @@ CopyProperty(JSContext *cx, HandleObject obj, HandleObject referent, HandleId id
         desc.setSetter(shape->setter());
         if (!desc.setter() && !desc.hasSetterObject())
             desc.setSetter(JS_StrictPropertyStub);
-        desc.setShortId(shape->shortid());
-        propFlags = shape->getFlags();
     } else if (referent->is<ProxyObject>()) {
         if (!Proxy::getOwnPropertyDescriptor(cx, referent, id, &desc, 0))
             return false;
@@ -2669,12 +3007,11 @@ CopyProperty(JSContext *cx, HandleObject obj, HandleObject referent, HandleId id
         desc.attributesRef() &= JSPROP_ENUMERATE | JSPROP_READONLY | JSPROP_PERMANENT;
         desc.setGetter(JS_PropertyStub);
         desc.setSetter(JS_StrictPropertyStub);
-        desc.setShortId(0);
     }
 
     objp.set(obj);
     return DefineNativeProperty(cx, obj, id, desc.value(), desc.getter(), desc.setter(),
-                                desc.attributes(), propFlags, desc.shortid());
+                                desc.attributes(), 0);
 }
 
 static bool
@@ -3092,28 +3429,29 @@ Parent(JSContext *cx, unsigned argc, jsval *vp)
 static bool
 Compile(JSContext *cx, unsigned argc, jsval *vp)
 {
-    if (argc < 1) {
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (args.length() < 1) {
         JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_MORE_ARGS_NEEDED,
                              "compile", "0", "s");
         return false;
     }
-    jsval arg0 = JS_ARGV(cx, vp)[0];
-    if (!JSVAL_IS_STRING(arg0)) {
-        const char *typeName = JS_GetTypeName(cx, JS_TypeOfValue(cx, arg0));
+    if (!args[0].isString()) {
+        const char *typeName = JS_GetTypeName(cx, JS_TypeOfValue(cx, args[0]));
         JS_ReportError(cx, "expected string to compile, got %s", typeName);
         return false;
     }
 
     RootedObject global(cx, JS::CurrentGlobalOrNull(cx));
-    JSString *scriptContents = JSVAL_TO_STRING(arg0);
+    JSString *scriptContents = args[0].toString();
     JS::AutoSaveContextOptions asco(cx);
     JS::ContextOptionsRef(cx).setNoScriptRval(true);
     JS::CompileOptions options(cx);
-    options.setFileAndLine("<string>", 1)
+    options.setIntroductionType("js shell compile")
+           .setFileAndLine("<string>", 1)
            .setCompileAndGo(true);
     bool ok = JS_CompileUCScript(cx, global, JS_GetStringCharsZ(cx, scriptContents),
                                  JS_GetStringLength(scriptContents), options);
-    JS_SET_RVAL(cx, vp, UndefinedValue());
+    args.rval().setUndefined();
     return ok;
 }
 
@@ -3137,7 +3475,8 @@ Parse(JSContext *cx, unsigned argc, jsval *vp)
 
     JSString *scriptContents = args[0].toString();
     CompileOptions options(cx);
-    options.setFileAndLine("<string>", 1)
+    options.setIntroductionType("js shell parse")
+           .setFileAndLine("<string>", 1)
            .setCompileAndGo(false);
     Parser<FullParseHandler> parser(cx, &cx->tempLifoAlloc(), options,
                                     JS_GetStringCharsZ(cx, scriptContents),
@@ -3175,7 +3514,8 @@ SyntaxParse(JSContext *cx, unsigned argc, jsval *vp)
 
     JSString *scriptContents = args[0].toString();
     CompileOptions options(cx);
-    options.setFileAndLine("<string>", 1)
+    options.setIntroductionType("js shell syntaxParse")
+           .setFileAndLine("<string>", 1)
            .setCompileAndGo(false);
 
     const jschar *chars = JS_GetStringCharsZ(cx, scriptContents);
@@ -3303,21 +3643,40 @@ OffThreadCompileScript(JSContext *cx, unsigned argc, jsval *vp)
         return false;
     }
 
-    JSString *scriptContents = args[0].toString();
+    JSAutoByteString fileNameBytes;
     CompileOptions options(cx);
-    options.setFileAndLine("<string>", 1)
-           .setCompileAndGo(true)
-           .setSourcePolicy(CompileOptions::SAVE_SOURCE);
+    options.setIntroductionType("js shell offThreadCompileScript")
+           .setFileAndLine("<string>", 1);
 
-    if (!JS::CanCompileOffThread(cx, options)) {
-        JS_ReportError(cx, "cannot compile code on worker thread");
-        return false;
+    if (args.length() >= 2) {
+        if (args[1].isPrimitive()) {
+            JS_ReportErrorNumber(cx, my_GetErrorMessage, nullptr, JSSMSG_INVALID_ARGS, "evaluate");
+            return false;
+        }
+
+        RootedObject opts(cx, &args[1].toObject());
+        if (!ParseCompileOptions(cx, options, opts, fileNameBytes))
+            return false;
     }
 
+    // These option settings must override whatever the caller requested.
+    options.setCompileAndGo(true)
+           .setSourcePolicy(CompileOptions::SAVE_SOURCE);
+
+    // We assume the caller wants caching if at all possible, ignoring
+    // heuristics that make sense for a real browser.
+    options.forceAsync = true;
+
+    JSString *scriptContents = args[0].toString();
     const jschar *chars = JS_GetStringCharsZ(cx, scriptContents);
     if (!chars)
         return false;
     size_t length = JS_GetStringLength(scriptContents);
+
+    if (!JS::CanCompileOffThread(cx, options, length)) {
+        JS_ReportError(cx, "cannot compile code on worker thread");
+        return false;
+    }
 
     if (!offThreadState.startIfIdle(cx, scriptContents)) {
         JS_ReportError(cx, "called offThreadCompileScript without calling runOffThreadScript"
@@ -3680,14 +4039,15 @@ NestedShell(JSContext *cx, unsigned argc, jsval *vp)
 
 static bool
 DecompileFunctionSomehow(JSContext *cx, unsigned argc, Value *vp,
-                         JSString *(*decompiler)(JSContext *, JSFunction *, unsigned))
+                         JSString *(*decompiler)(JSContext *, HandleFunction, unsigned))
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     if (args.length() < 1 || !args[0].isObject() || !args[0].toObject().is<JSFunction>()) {
         args.rval().setUndefined();
         return true;
     }
-    JSString *result = decompiler(cx, &args[0].toObject().as<JSFunction>(), 0);
+    RootedFunction fun(cx, &args[0].toObject().as<JSFunction>());
+    JSString *result = decompiler(cx, fun, 0);
     if (!result)
         return false;
     args.rval().setString(result);
@@ -3710,17 +4070,21 @@ static bool
 DecompileThisScript(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    RootedScript script (cx);
-    if (!JS_DescribeScriptedCaller(cx, &script, nullptr)) {
+
+    NonBuiltinScriptFrameIter iter(cx);
+    if (iter.done()) {
         args.rval().setString(cx->runtime()->emptyString);
         return true;
     }
 
     {
-        JSAutoCompartment ac(cx, script);
+        JSAutoCompartment ac(cx, iter.script());
+
+        RootedScript script(cx, iter.script());
         JSString *result = JS_DecompileScript(cx, script, "test", 0);
         if (!result)
             return false;
+
         args.rval().setString(result);
     }
 
@@ -3731,44 +4095,19 @@ static bool
 ThisFilename(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    RootedScript script (cx);
-    if (!JS_DescribeScriptedCaller(cx, &script, nullptr) || !script->filename()) {
+
+    JS::AutoFilename filename;
+    if (!DescribeScriptedCaller(cx, &filename) || !filename.get()) {
         args.rval().setString(cx->runtime()->emptyString);
         return true;
     }
-    JSString *filename = JS_NewStringCopyZ(cx, script->filename());
-    if (!filename)
+
+    JSString *str = JS_NewStringCopyZ(cx, filename.get());
+    if (!str)
         return false;
-    args.rval().setString(filename);
+
+    args.rval().setString(str);
     return true;
-}
-
-/*
- * Internal class for testing hasPrototype easily.
- * Uses passed in prototype instead of target's.
- */
-class WrapperWithProto : public Wrapper
-{
-  public:
-    explicit WrapperWithProto(unsigned flags)
-      : Wrapper(flags, true)
-    { }
-
-    static JSObject *New(JSContext *cx, JSObject *obj, JSObject *proto, JSObject *parent,
-                         Wrapper *handler);
-};
-
-/* static */ JSObject *
-WrapperWithProto::New(JSContext *cx, JSObject *obj, JSObject *proto, JSObject *parent,
-                      Wrapper *handler)
-{
-    JS_ASSERT(parent);
-    AutoMarkInDeadZone amd(cx->zone());
-
-    RootedValue priv(cx, ObjectValue(*obj));
-    ProxyOptions options;
-    options.setCallable(obj->isCallable());
-    return NewProxyObject(cx, handler, priv, proto, parent, options);
 }
 
 static bool
@@ -3804,9 +4143,11 @@ WrapWithProto(JSContext *cx, unsigned argc, jsval *vp)
         return false;
     }
 
-    JSObject *wrapped = WrapperWithProto::New(cx, &obj.toObject(), proto.toObjectOrNull(),
-                                              &obj.toObject().global(),
-                                              &Wrapper::singletonWithPrototype);
+    WrapperOptions options(cx);
+    options.setProto(proto.toObjectOrNull());
+    options.selectDefaultClass(obj.toObject().isCallable());
+    JSObject *wrapped = Wrapper::New(cx, &obj.toObject(), &obj.toObject().global(),
+                                     &Wrapper::singletonWithPrototype, &options);
     if (!wrapped)
         return false;
 
@@ -3814,12 +4155,10 @@ WrapWithProto(JSContext *cx, unsigned argc, jsval *vp)
     return true;
 }
 
-static JSObject *
-NewGlobalObject(JSContext *cx, JS::CompartmentOptions &options);
-
 static bool
 NewGlobal(JSContext *cx, unsigned argc, jsval *vp)
 {
+    JSPrincipals *principals = nullptr;
     JS::CompartmentOptions options;
     options.setVersion(JSVERSION_LATEST);
 
@@ -3837,9 +4176,23 @@ NewGlobal(JSContext *cx, unsigned argc, jsval *vp)
             return false;
         if (v.isBoolean())
             options.setInvisibleToDebugger(v.toBoolean());
+
+        if (!JS_GetProperty(cx, opts, "principal", &v))
+            return false;
+        if (!v.isUndefined()) {
+            uint32_t bits;
+            if (!ToUint32(cx, v, &bits))
+                return false;
+            principals = cx->new_<ShellPrincipals>(bits);
+            if (!principals)
+                return false;
+            JS_HoldPrincipals(principals);
+        }
     }
 
-    RootedObject global(cx, NewGlobalObject(cx, options));
+    RootedObject global(cx, NewGlobalObject(cx, options, principals));
+    if (principals)
+        JS_DropPrincipals(cx->runtime(), principals);
     if (!global)
         return false;
 
@@ -3889,7 +4242,7 @@ ObjectEmulatingUndefined(JSContext *cx, unsigned argc, jsval *vp)
         JS_ConvertStub
     };
 
-    RootedObject obj(cx, JS_NewObject(cx, &cls, nullptr, nullptr));
+    RootedObject obj(cx, JS_NewObject(cx, &cls, JS::NullPtr(), JS::NullPtr()));
     if (!obj)
         return false;
     JS_SET_RVAL(cx, vp, ObjectValue(*obj));
@@ -3914,41 +4267,20 @@ GetSelfHostedValue(JSContext *cx, unsigned argc, jsval *vp)
 }
 
 class ShellSourceHook: public SourceHook {
-    // The runtime to which we attached a source hook.
-    JSRuntime *rt;
-
     // The function we should call to lazily retrieve source code.
-    // The constructor and destructor take care of rooting this with the
-    // runtime.
-    JSObject *fun;
+    PersistentRootedFunction fun;
 
   public:
-    ShellSourceHook() : rt(nullptr), fun(nullptr) { }
-    bool init(JSContext *cx, JSFunction &fun) {
-        JS_ASSERT(!this->rt);
-        JS_ASSERT(!this->fun);
-        this->rt = cx->runtime();
-        this->fun = &fun;
-        return JS_AddNamedObjectRoot(cx, &this->fun,
-                                     "lazy source callback, set with withSourceHook");
-    }
-
-    ~ShellSourceHook() {
-        if (fun)
-            JS_RemoveObjectRootRT(rt, &fun);
-    }
+    ShellSourceHook(JSContext *cx, JSFunction &fun) : fun(cx, &fun) {}
 
     bool load(JSContext *cx, const char *filename, jschar **src, size_t *length) {
-        JS_ASSERT(fun);
-
         RootedString str(cx, JS_NewStringCopyZ(cx, filename));
         if (!str)
             return false;
         RootedValue filenameValue(cx, StringValue(str));
 
         RootedValue result(cx);
-        if (!Call(cx, UndefinedValue(), &fun->as<JSFunction>(),
-                  1, filenameValue.address(), &result))
+        if (!Call(cx, UndefinedHandleValue, fun, filenameValue, &result))
             return false;
 
         str = JS::ToString(cx, result);
@@ -3986,15 +4318,14 @@ WithSourceHook(JSContext *cx, unsigned argc, jsval *vp)
         return false;
     }
 
-    ShellSourceHook *hook = new ShellSourceHook();
-    if (!hook->init(cx, args[0].toObject().as<JSFunction>())) {
-        delete hook;
+    ShellSourceHook *hook = new ShellSourceHook(cx, args[0].toObject().as<JSFunction>());
+    if (!hook)
         return false;
-    }
 
     SourceHook *savedHook = js::ForgetSourceHook(cx->runtime());
     js::SetSourceHook(cx->runtime(), hook);
-    bool result = Call(cx, UndefinedValue(), &args[1].toObject(), 0, nullptr, args.rval());
+    RootedObject fun(cx, &args[1].toObject());
+    bool result = Call(cx, UndefinedHandleValue, fun, JS::HandleValueArray::empty(), args.rval());
     js::SetSourceHook(cx->runtime(), savedHook);
     return result;
 }
@@ -4003,7 +4334,32 @@ static bool
 IsCachingEnabled(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    args.rval().setBoolean(jsCacheAsmJSPath != nullptr);
+    args.rval().setBoolean(jsCachingEnabled && jsCacheAsmJSPath != nullptr);
+    return true;
+}
+
+static bool
+SetCachingEnabled(JSContext *cx, unsigned argc, Value *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    jsCachingEnabled = ToBoolean(args.get(0));
+    args.rval().setUndefined();
+    return true;
+}
+
+static void
+PrintProfilerEvents_Callback(const char *msg)
+{
+    fprintf(stderr, "PROFILER EVENT: %s\n", msg);
+}
+
+static bool
+PrintProfilerEvents(JSContext *cx, unsigned argc, Value *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (cx->runtime()->spsProfiler.enabled())
+        js::RegisterRuntimeProfilingEventMarker(cx->runtime(), &PrintProfilerEvents_Callback);
+    args.rval().setUndefined();
     return true;
 }
 
@@ -4041,20 +4397,30 @@ static const JSFunctionSpecWithHelp shell_functions[] = {
 "      catchTermination: if true, catch termination (failure without\n"
 "         an exception value, as for slow scripts or out-of-memory)\n"
 "         and return 'terminated'\n"
-"      element: if present with value |v|, convert |v| to an object |o| mark\n"
-"         the source as being attached to the DOM element |o|. If the\n"
+"      element: if present with value |v|, convert |v| to an object |o| and\n"
+"         mark the source as being attached to the DOM element |o|. If the\n"
 "         property is omitted or |v| is null, don't attribute the source to\n"
 "         any DOM element.\n"
-"      elementProperty: if present and not undefined, the name of property\n"
-"         of 'element' that holds this code. This is what Debugger.Source\n"
-"         .prototype.elementProperty returns.\n"
+"      elementAttributeName: if present and not undefined, the name of\n"
+"         property of 'element' that holds this code. This is what\n"
+"         Debugger.Source.prototype.elementAttributeName returns.\n"
 "      sourceMapURL: if present with value |v|, convert |v| to a string, and\n"
 "         provide that as the code's source map URL. If omitted, attach no\n"
 "         source map URL to the code (although the code may provide one itself,\n"
 "         via a //#sourceMappingURL comment).\n"
 "      sourcePolicy: if present, the value converted to a string must be either\n"
 "         'NO_SOURCE', 'LAZY_SOURCE', or 'SAVE_SOURCE'; use the given source\n"
-"         retention policy for this compilation.\n"),
+"         retention policy for this compilation.\n"
+"      loadBytecode: if true, and if the source is a CacheEntryObject,\n"
+"         the bytecode would be loaded and decoded from the cache entry instead\n"
+"         of being parsed, then it would be executed as usual.\n"
+"      saveBytecode: if true, and if the source is a CacheEntryObject,\n"
+"         the bytecode would be encoded and saved into the cache entry after\n"
+"         the script execution.\n"
+"      assertEqBytecode: if true, and if both loadBytecode and saveBytecode are \n"
+"         true, then the loaded bytecode and the encoded bytecode are compared.\n"
+"         and an assertion is raised if they differ.\n"
+),
 
     JS_FN_HELP("run", Run, 1, 0,
 "run('foo.js')",
@@ -4187,6 +4553,12 @@ static const JSFunctionSpecWithHelp shell_functions[] = {
 "  Evaluate 'str' in the nth up frame.\n"
 "  If 'save' (default false), save the frame chain."),
 
+#ifdef JS_THREADSAFE
+    JS_FN_HELP("evalInWorker", EvalInWorker, 1, 0,
+"evalInWorker(str)",
+"  Evaluate 'str' in a separate thread with its own runtime.\n"),
+#endif
+
     JS_FN_HELP("shapeOf", ShapeOf, 1, 0,
 "shapeOf(obj)",
 "  Get the shape of obj (an implementation detail)."),
@@ -4200,14 +4572,14 @@ static const JSFunctionSpecWithHelp shell_functions[] = {
     JS_FN_HELP("arrayInfo", js_ArrayInfo, 1, 0,
 "arrayInfo(a1, a2, ...)",
 "  Report statistics about arrays."),
-
 #endif
+
 #ifdef JS_THREADSAFE
     JS_FN_HELP("sleep", Sleep_fn, 1, 0,
 "sleep(dt)",
 "  Sleep for dt seconds."),
-
 #endif
+
     JS_FN_HELP("snarf", Snarf, 1, 0,
 "snarf(filename, [\"binary\"])",
 "  Read filename into returned string. Filename is relative to the current\n"
@@ -4236,14 +4608,26 @@ static const JSFunctionSpecWithHelp shell_functions[] = {
 
 #ifdef JS_THREADSAFE
     JS_FN_HELP("offThreadCompileScript", OffThreadCompileScript, 1, 0,
-"offThreadCompileScript(code)",
-"  Trigger an off thread parse/emit for the input string"),
+"offThreadCompileScript(code[, options])",
+"  Compile |code| on a helper thread. To wait for the compilation to finish\n"
+"  and run the code, call |runOffThreadScript|. If present, |options| may\n"
+"  have properties saying how the code should be compiled:\n"
+"      noScriptRval: use the no-script-rval compiler option (default: false)\n"
+"      fileName: filename for error messages and debug info\n"
+"      lineNumber: starting line number for error messages and debug info\n"
+"      element: if present with value |v|, convert |v| to an object |o| and\n"
+"         mark the source as being attached to the DOM element |o|. If the\n"
+"         property is omitted or |v| is null, don't attribute the source to\n"
+"         any DOM element.\n"
+"      elementAttributeName: if present and not undefined, the name of\n"
+"         property of 'element' that holds this code. This is what\n"
+"         Debugger.Source.prototype.elementAttributeName returns.\n"),
 
     JS_FN_HELP("runOffThreadScript", runOffThreadScript, 0, 0,
 "runOffThreadScript()",
 "  Wait for off-thread compilation to complete. If an error occurred,\n"
 "  throw the appropriate exception; otherwise, run the script and return\n"
-               "  its value."),
+"  its value."),
 
 #endif
 
@@ -4286,7 +4670,15 @@ static const JSFunctionSpecWithHelp shell_functions[] = {
 "  Return a new global object in a new compartment. If options\n"
 "  is given, it may have any of the following properties:\n"
 "      sameZoneAs: the compartment will be in the same zone as the given object (defaults to a new zone)\n"
-"      invisibleToDebugger: the global will be invisible to the debugger (default false)"),
+"      invisibleToDebugger: the global will be invisible to the debugger (default false)\n"
+"      principal: if present, its value converted to a number must be an\n"
+"         integer that fits in 32 bits; use that as the new compartment's\n"
+"         principal. Shell principals are toys, meant only for testing; one\n"
+"         shell principal subsumes another if its set bits are a superset of\n"
+"         the other's. Thus, a principal of 0 subsumes nothing, while a\n"
+"         principals of ~0 subsumes all other principals. The absence of a\n"
+"         principal is treated as if its bits were 0xffff, for subsumption\n"
+"         purposes. If this property is omitted, supply no principal."),
 
     JS_FN_HELP("enableStackWalkingAssertion", EnableStackWalkingAssertion, 1, 0,
 "enableStackWalkingAssertion(enabled)",
@@ -4306,7 +4698,23 @@ static const JSFunctionSpecWithHelp shell_functions[] = {
 
     JS_FN_HELP("isCachingEnabled", IsCachingEnabled, 0, 0,
 "isCachingEnabled()",
-"  Return whether --js-cache was set."),
+"  Return whether JS caching is enabled."),
+
+    JS_FN_HELP("setCachingEnabled", SetCachingEnabled, 1, 0,
+"setCachingEnabled(b)",
+"  Enable or disable JS caching."),
+
+    JS_FN_HELP("cacheEntry", CacheEntry, 1, 0,
+"cacheEntry(code)",
+"  Return a new opaque object which emulates a cache entry of a script.  This\n"
+"  object encapsulates the code and its cached content. The cache entry is filled\n"
+"  and read by the \"evaluate\" function by using it in place of the source, and\n"
+"  by setting \"saveBytecode\" and \"loadBytecode\" options."),
+
+    JS_FN_HELP("printProfilerEvents", PrintProfilerEvents, 0, 0,
+"printProfilerEvents()",
+"  Register a callback with the profiler that prints javascript profiler events\n"
+"  to stderr.  Callback is only registered if profiling is enabled."),
 
     JS_FS_HELP_END
 };
@@ -4465,7 +4873,8 @@ Help(JSContext *cx, unsigned argc, jsval *vp)
 
         for (size_t i = 0; i < ida.length(); i++) {
             RootedValue v(cx);
-            if (!JS_LookupPropertyById(cx, global, ida[i], &v))
+            RootedId id(cx, ida[i]);
+            if (!JS_LookupPropertyById(cx, global, id, &v))
                 return false;
             if (JSVAL_IS_PRIMITIVE(v)) {
                 JS_ReportError(cx, "primitive arg");
@@ -4521,74 +4930,6 @@ my_ErrorReporter(JSContext *cx, const char *message, JSErrorReport *report)
     }
 }
 
-#if defined(SHELL_HACK) && defined(DEBUG) && defined(XP_UNIX)
-static bool
-Exec(JSContext *cx, unsigned argc, jsval *vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-
-    JSFunction *fun;
-    const char *name, **nargv;
-    unsigned i, nargc;
-    JSString *str;
-    bool ok;
-    pid_t pid;
-    int status;
-
-    JS_SET_RVAL(cx, vp, UndefinedValue());
-
-    RootedValue arg(cx, vp[0]);
-    fun = JS_ValueToFunction(cx, arg);
-    if (!fun)
-        return false;
-    if (!fun->atom)
-        return true;
-
-    nargc = 1 + argc;
-
-    /* nargc + 1 accounts for the terminating nullptr. */
-    nargv = new (char *)[nargc + 1];
-    if (!nargv)
-        return false;
-    memset(nargv, 0, sizeof(nargv[0]) * (nargc + 1));
-    nargv[0] = name;
-    jsval *argv = JS_ARGV(cx, vp);
-    for (i = 0; i < nargc; i++) {
-        str = (i == 0) ? fun->atom : JS::ToString(cx, args[i-1]);
-        if (!str) {
-            ok = false;
-            goto done;
-        }
-        nargv[i] = JSStringToUTF8(cx, str);
-        if (!nargv[i]) {
-            ok = false;
-            goto done;
-        }
-    }
-    pid = fork();
-    switch (pid) {
-      case -1:
-        perror("js");
-        break;
-      case 0:
-        (void) execvp(name, (char **)nargv);
-        perror("js");
-        exit(127);
-      default:
-        while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
-            continue;
-        break;
-    }
-    ok = true;
-
-  done:
-    for (i = 0; i < nargc; i++)
-        JS_free(cx, nargv[i]);
-    delete[] nargv;
-    return ok;
-}
-#endif
-
 static bool
 global_enumerate(JSContext *cx, HandleObject obj)
 {
@@ -4614,56 +4955,7 @@ global_resolve(JSContext *cx, HandleObject obj, HandleId id, unsigned flags,
     }
 #endif
 
-#if defined(SHELL_HACK) && defined(DEBUG) && defined(XP_UNIX)
-    /*
-     * Do this expensive hack only for unoptimized Unix builds, which are
-     * not used for benchmarking.
-     */
-    char *path, *comp, *full;
-    const char *name;
-    bool ok, found;
-    JSFunction *fun;
-
-    if (!JSVAL_IS_STRING(id))
-        return true;
-    path = getenv("PATH");
-    if (!path)
-        return true;
-    path = JS_strdup(cx, path);
-    if (!path)
-        return false;
-    JSAutoByteString name(cx, JSVAL_TO_STRING(id));
-    if (!name)
-        return false;
-    ok = true;
-    for (comp = strtok(path, ":"); comp; comp = strtok(nullptr, ":")) {
-        if (*comp != '\0') {
-            full = JS_smprintf("%s/%s", comp, name.ptr());
-            if (!full) {
-                JS_ReportOutOfMemory(cx);
-                ok = false;
-                break;
-            }
-        } else {
-            full = (char *)name;
-        }
-        found = (access(full, X_OK) == 0);
-        if (*comp != '\0')
-            free(full);
-        if (found) {
-            fun = JS_DefineFunction(cx, obj, name, Exec, 0,
-                                    JSPROP_ENUMERATE);
-            ok = (fun != nullptr);
-            if (ok)
-                objp.set(obj);
-            break;
-        }
-    }
-    JS_free(cx, path);
-    return ok;
-#else
     return true;
-#endif
 }
 
 static const JSClass global_class = {
@@ -4678,7 +4970,7 @@ static bool
 env_setProperty(JSContext *cx, HandleObject obj, HandleId id, bool strict, MutableHandleValue vp)
 {
 /* XXX porting may be easy, but these don't seem to supply setenv by default */
-#if !defined XP_OS2 && !defined SOLARIS
+#if !defined SOLARIS
     int rv;
 
     RootedValue idvalue(cx, IdToValue(id));
@@ -4721,7 +5013,7 @@ env_setProperty(JSContext *cx, HandleObject obj, HandleId id, bool strict, Mutab
         return false;
     }
     vp.set(StringValue(value));
-#endif /* !defined XP_OS2 && !defined SOLARIS */
+#endif /* !defined SOLARIS */
     return true;
 }
 
@@ -4838,15 +5130,14 @@ static const JSJitInfo dom_x_getterinfo = {
     { (JSJitGetterOp)dom_get_x },
     0,        /* protoID */
     0,        /* depth */
+    JSJitInfo::AliasNone, /* aliasSet */
     JSJitInfo::Getter,
+    JSVAL_TYPE_UNKNOWN, /* returnType */
     true,     /* isInfallible. False in setters. */
     true,     /* isMovable */
-    JSJitInfo::AliasNone, /* aliasSet */
     false,    /* isInSlot */
-    0,        /* slotIndex */
-    JSVAL_TYPE_UNKNOWN, /* returnType */
-    nullptr,  /* argTypes */
-    nullptr   /* parallelNative */
+    false,    /* isTypedMethod */
+    0         /* slotIndex */
 };
 
 static const JSJitInfo dom_x_setterinfo = {
@@ -4854,14 +5145,13 @@ static const JSJitInfo dom_x_setterinfo = {
     0,        /* protoID */
     0,        /* depth */
     JSJitInfo::Setter,
+    JSJitInfo::AliasEverything, /* aliasSet */
+    JSVAL_TYPE_UNKNOWN, /* returnType */
     false,    /* isInfallible. False in setters. */
     false,    /* isMovable. */
-    JSJitInfo::AliasEverything, /* aliasSet */
     false,    /* isInSlot */
-    0,        /* slotIndex */
-    JSVAL_TYPE_UNKNOWN, /* returnType */
-    nullptr,  /* argTypes */
-    nullptr   /* parallelNative */
+    false,    /* isTypedMethod */
+    0         /* slotIndex */
 };
 
 static const JSJitInfo doFoo_methodinfo = {
@@ -4869,23 +5159,22 @@ static const JSJitInfo doFoo_methodinfo = {
     0,        /* protoID */
     0,        /* depth */
     JSJitInfo::Method,
+    JSJitInfo::AliasEverything, /* aliasSet */
+    JSVAL_TYPE_UNKNOWN, /* returnType */
     false,    /* isInfallible. False in setters. */
     false,    /* isMovable */
-    JSJitInfo::AliasEverything, /* aliasSet */
     false,    /* isInSlot */
-    0,        /* slotIndex */
-    JSVAL_TYPE_UNKNOWN, /* returnType */
-    nullptr,  /* argTypes */
-    nullptr   /* parallelNative */
+    false,    /* isTypedMethod */
+    0         /* slotIndex */
 };
 
 static const JSPropertySpec dom_props[] = {
     {"x", 0,
      JSPROP_SHARED | JSPROP_ENUMERATE | JSPROP_NATIVE_ACCESSORS,
-     { (JSPropertyOp)dom_genericGetter, &dom_x_getterinfo },
-     { (JSStrictPropertyOp)dom_genericSetter, &dom_x_setterinfo }
+     { { (JSPropertyOp)dom_genericGetter, &dom_x_getterinfo } },
+     { { (JSStrictPropertyOp)dom_genericSetter, &dom_x_setterinfo } }
     },
-    {nullptr,0,0,JSOP_NULLWRAPPER, JSOP_NULLWRAPPER}
+    JS_PS_END
 };
 
 static const JSFunctionSpec dom_methods[] = {
@@ -4903,7 +5192,6 @@ static const JSClass dom_class = {
     JS_ResolveStub,
     JS_ConvertStub,
     nullptr,               /* finalize */
-    nullptr,               /* checkAccess */
     nullptr,               /* call */
     nullptr,               /* hasInstance */
     nullptr,               /* construct */
@@ -4933,7 +5221,7 @@ dom_genericGetter(JSContext *cx, unsigned argc, JS::Value *vp)
     JS::Value val = js::GetReservedSlot(obj, DOM_OBJECT_SLOT);
 
     const JSJitInfo *info = FUNCTION_VALUE_TO_JITINFO(JS_CALLEE(cx, vp));
-    MOZ_ASSERT(info->type == JSJitInfo::Getter);
+    MOZ_ASSERT(info->type() == JSJitInfo::Getter);
     JSJitGetterOp getter = info->getter;
     return getter(cx, obj, val.toPrivate(), JSJitGetterCallArgs(args));
 }
@@ -4956,7 +5244,7 @@ dom_genericSetter(JSContext* cx, unsigned argc, JS::Value* vp)
     JS::Value val = js::GetReservedSlot(obj, DOM_OBJECT_SLOT);
 
     const JSJitInfo *info = FUNCTION_VALUE_TO_JITINFO(JS_CALLEE(cx, vp));
-    MOZ_ASSERT(info->type == JSJitInfo::Setter);
+    MOZ_ASSERT(info->type() == JSJitInfo::Setter);
     JSJitSetterOp setter = info->setter;
     if (!setter(cx, obj, val.toPrivate(), JSJitSetterCallArgs(args)))
         return false;
@@ -4980,7 +5268,7 @@ dom_genericMethod(JSContext* cx, unsigned argc, JS::Value *vp)
     JS::Value val = js::GetReservedSlot(obj, DOM_OBJECT_SLOT);
 
     const JSJitInfo *info = FUNCTION_VALUE_TO_JITINFO(JS_CALLEE(cx, vp));
-    MOZ_ASSERT(info->type == JSJitInfo::Method);
+    MOZ_ASSERT(info->type() == JSJitInfo::Method);
     JSJitMethodOp method = info->method;
     return method(cx, obj, val.toPrivate(), JSJitMethodCallArgs(args));
 }
@@ -5007,7 +5295,8 @@ dom_constructor(JSContext* cx, unsigned argc, JS::Value *vp)
         return false;
     }
 
-    RootedObject domObj(cx, JS_NewObject(cx, &dom_class, &protov.toObject(), nullptr));
+    RootedObject proto(cx, &protov.toObject());
+    RootedObject domObj(cx, JS_NewObject(cx, &dom_class, proto, JS::NullPtr()));
     if (!domObj)
         return false;
 
@@ -5067,7 +5356,7 @@ ShellOpenAsmJSCacheEntryForRead(HandleObject global, const jschar *begin, const 
                                 size_t *serializedSizeOut, const uint8_t **memoryOut,
                                 intptr_t *handleOut)
 {
-    if (!jsCacheAsmJSPath)
+    if (!jsCachingEnabled || !jsCacheAsmJSPath)
         return false;
 
     ScopedFileDesc fd(open(jsCacheAsmJSPath, O_RDWR), ScopedFileDesc::READ_LOCK);
@@ -5136,10 +5425,11 @@ ShellCloseAsmJSCacheEntryForRead(HandleObject global, size_t serializedSize, con
 }
 
 static bool
-ShellOpenAsmJSCacheEntryForWrite(HandleObject global, const jschar *begin, const jschar *end,
+ShellOpenAsmJSCacheEntryForWrite(HandleObject global, bool installed,
+                                 const jschar *begin, const jschar *end,
                                  size_t serializedSize, uint8_t **memoryOut, intptr_t *handleOut)
 {
-    if (!jsCacheAsmJSPath)
+    if (!jsCachingEnabled || !jsCacheAsmJSPath)
         return false;
 
     // Create the cache directory if it doesn't already exist.
@@ -5235,7 +5525,7 @@ ShellCloseAsmJSCacheEntryForWrite(HandleObject global, size_t serializedSize, ui
 }
 
 static bool
-ShellBuildId(js::Vector<char> *buildId)
+ShellBuildId(JS::BuildIdCharVector *buildId)
 {
     // The browser embeds the date into the buildid and the buildid is embedded
     // in the binary, so every 'make' necessarily builds a new firefox binary.
@@ -5294,14 +5584,6 @@ NewContext(JSRuntime *rt)
 
     JS_SetContextPrivate(cx, data);
     JS_SetErrorReporter(cx, my_ErrorReporter);
-    if (enableTypeInference)
-        JS::ContextOptionsRef(cx).toggleTypeInference();
-    if (enableIon)
-        JS::ContextOptionsRef(cx).toggleIon();
-    if (enableBaseline)
-        JS::ContextOptionsRef(cx).toggleBaseline();
-    if (enableAsmJS)
-        JS::ContextOptionsRef(cx).toggleAsmJS();
     return cx;
 }
 
@@ -5315,9 +5597,10 @@ DestroyContext(JSContext *cx, bool withGC)
 }
 
 static JSObject *
-NewGlobalObject(JSContext *cx, JS::CompartmentOptions &options)
+NewGlobalObject(JSContext *cx, JS::CompartmentOptions &options,
+                JSPrincipals *principals)
 {
-    RootedObject glob(cx, JS_NewGlobalObject(cx, &global_class, nullptr,
+    RootedObject glob(cx, JS_NewGlobalObject(cx, &global_class, principals,
                                              JS::DontFireOnNewGlobalHook, options));
     if (!glob)
         return nullptr;
@@ -5357,8 +5640,8 @@ NewGlobalObject(JSContext *cx, JS::CompartmentOptions &options)
         };
         SetDOMCallbacks(cx->runtime(), &DOMcallbacks);
 
-        RootedObject domProto(cx, JS_InitClass(cx, glob, nullptr, &dom_class, dom_constructor, 0,
-                                               dom_props, dom_methods, nullptr, nullptr));
+        RootedObject domProto(cx, JS_InitClass(cx, glob, js::NullPtr(), &dom_class, dom_constructor,
+                                               0, dom_props, dom_methods, nullptr, nullptr));
         if (!domProto)
             return nullptr;
 
@@ -5378,7 +5661,7 @@ BindScriptArgs(JSContext *cx, JSObject *obj_, OptionParser *op)
 
     MultiStringRange msr = op->getMultiStringArg("scriptArgs");
     RootedObject scriptArgs(cx);
-    scriptArgs = JS_NewArrayObject(cx, 0, nullptr);
+    scriptArgs = JS_NewArrayObject(cx, 0);
     if (!scriptArgs)
         return false;
 
@@ -5403,11 +5686,11 @@ BindScriptArgs(JSContext *cx, JSObject *obj_, OptionParser *op)
 // so we're guarding the function definition with an #ifdef, too, to avoid
 // build warning for unused function in non-ion-enabled builds:
 #if defined(JS_ION)
-static int
+static bool
 OptionFailure(const char *option, const char *str)
 {
     fprintf(stderr, "Unrecognized option for %s: %s\n", option, str);
-    return EXIT_FAILURE;
+    return false;
 }
 #endif /* JS_ION */
 
@@ -5416,14 +5699,6 @@ ProcessArgs(JSContext *cx, JSObject *obj_, OptionParser *op)
 {
     RootedObject obj(cx, obj_);
 
-    if (op->getBoolOption('c'))
-        compileOnly = true;
-
-    if (op->getBoolOption('w'))
-        reportWarnings = true;
-    else if (op->getBoolOption('W'))
-        reportWarnings = false;
-
     if (op->getBoolOption('s'))
         JS::ContextOptionsRef(cx).toggleExtraWarnings();
 
@@ -5431,166 +5706,6 @@ ProcessArgs(JSContext *cx, JSObject *obj_, OptionParser *op)
         JS_SetRuntimeDebugMode(JS_GetRuntime(cx), true);
         JS_SetDebugMode(cx, true);
     }
-
-    jsCacheDir = op->getStringOption("js-cache");
-    if (jsCacheDir) {
-        if (op->getBoolOption("js-cache-per-process"))
-            jsCacheDir = JS_smprintf("%s/%u", jsCacheDir, (unsigned)getpid());
-        jsCacheAsmJSPath = JS_smprintf("%s/asmjs.cache", jsCacheDir);
-    }
-
-    if (op->getBoolOption('b'))
-        printTiming = true;
-
-    if (op->getBoolOption('D')) {
-        cx->runtime()->profilingScripts = true;
-        enableDisassemblyDumps = true;
-    }
-
-#ifdef JS_THREADSAFE
-    int32_t threadCount = op->getIntOption("thread-count");
-    if (threadCount >= 0)
-        cx->runtime()->setFakeCPUCount(threadCount);
-#endif /* JS_THREADSAFE */
-
-#if defined(JS_ION)
-    if (op->getBoolOption("no-ion")) {
-        enableIon = false;
-        JS::ContextOptionsRef(cx).toggleIon();
-    }
-    if (op->getBoolOption("no-asmjs")) {
-        enableAsmJS = false;
-        JS::ContextOptionsRef(cx).toggleAsmJS();
-    }
-
-    if (op->getBoolOption("no-baseline")) {
-        enableBaseline = false;
-        JS::ContextOptionsRef(cx).toggleBaseline();
-    }
-
-    if (const char *str = op->getStringOption("ion-gvn")) {
-        if (strcmp(str, "off") == 0) {
-            jit::js_JitOptions.disableGvn = true;
-        } else if (strcmp(str, "pessimistic") == 0) {
-            jit::js_JitOptions.forceGvnKind = true;
-            jit::js_JitOptions.forcedGvnKind = jit::GVN_Pessimistic;
-        } else if (strcmp(str, "optimistic") == 0) {
-            jit::js_JitOptions.forceGvnKind = true;
-            jit::js_JitOptions.forcedGvnKind = jit::GVN_Optimistic;
-        } else {
-            return OptionFailure("ion-gvn", str);
-        }
-    }
-
-    if (const char *str = op->getStringOption("ion-licm")) {
-        if (strcmp(str, "on") == 0)
-            jit::js_JitOptions.disableLicm = false;
-        else if (strcmp(str, "off") == 0)
-            jit::js_JitOptions.disableLicm = true;
-        else
-            return OptionFailure("ion-licm", str);
-    }
-
-    if (const char *str = op->getStringOption("ion-edgecase-analysis")) {
-        if (strcmp(str, "on") == 0)
-            jit::js_JitOptions.disableEdgeCaseAnalysis = false;
-        else if (strcmp(str, "off") == 0)
-            jit::js_JitOptions.disableEdgeCaseAnalysis = true;
-        else
-            return OptionFailure("ion-edgecase-analysis", str);
-    }
-
-     if (const char *str = op->getStringOption("ion-range-analysis")) {
-         if (strcmp(str, "on") == 0)
-             jit::js_JitOptions.disableRangeAnalysis = false;
-         else if (strcmp(str, "off") == 0)
-             jit::js_JitOptions.disableRangeAnalysis = true;
-         else
-             return OptionFailure("ion-range-analysis", str);
-     }
-
-    if (op->getBoolOption("ion-check-range-analysis"))
-        jit::js_JitOptions.checkRangeAnalysis = true;
-
-    if (op->getBoolOption("ion-check-thread-safety"))
-        jit::js_JitOptions.checkThreadSafety = true;
-
-    if (const char *str = op->getStringOption("ion-inlining")) {
-        if (strcmp(str, "on") == 0)
-            jit::js_JitOptions.disableInlining = false;
-        else if (strcmp(str, "off") == 0)
-            jit::js_JitOptions.disableInlining = true;
-        else
-            return OptionFailure("ion-inlining", str);
-    }
-
-    if (const char *str = op->getStringOption("ion-osr")) {
-        if (strcmp(str, "on") == 0)
-            jit::js_JitOptions.osr = true;
-        else if (strcmp(str, "off") == 0)
-            jit::js_JitOptions.osr = false;
-        else
-            return OptionFailure("ion-osr", str);
-    }
-
-    if (const char *str = op->getStringOption("ion-limit-script-size")) {
-        if (strcmp(str, "on") == 0)
-            jit::js_JitOptions.limitScriptSize = true;
-        else if (strcmp(str, "off") == 0)
-            jit::js_JitOptions.limitScriptSize = false;
-        else
-            return OptionFailure("ion-limit-script-size", str);
-    }
-
-    int32_t useCount = op->getIntOption("ion-uses-before-compile");
-    if (useCount >= 0)
-        jit::js_JitOptions.setUsesBeforeCompile(useCount);
-
-    useCount = op->getIntOption("baseline-uses-before-compile");
-    if (useCount >= 0)
-        jit::js_JitOptions.baselineUsesBeforeCompile = useCount;
-
-    if (op->getBoolOption("baseline-eager"))
-        jit::js_JitOptions.baselineUsesBeforeCompile = 0;
-
-    if (const char *str = op->getStringOption("ion-regalloc")) {
-        if (strcmp(str, "lsra") == 0) {
-            jit::js_JitOptions.forceRegisterAllocator = true;
-            jit::js_JitOptions.forcedRegisterAllocator = jit::RegisterAllocator_LSRA;
-        } else if (strcmp(str, "backtracking") == 0) {
-            jit::js_JitOptions.forceRegisterAllocator = true;
-            jit::js_JitOptions.forcedRegisterAllocator = jit::RegisterAllocator_Backtracking;
-        } else if (strcmp(str, "stupid") == 0) {
-            jit::js_JitOptions.forceRegisterAllocator = true;
-            jit::js_JitOptions.forcedRegisterAllocator = jit::RegisterAllocator_Stupid;
-        } else {
-            return OptionFailure("ion-regalloc", str);
-        }
-    }
-
-    if (op->getBoolOption("ion-eager"))
-        jit::js_JitOptions.setEagerCompilation();
-
-    if (op->getBoolOption("ion-compile-try-catch"))
-        jit::js_JitOptions.compileTryCatch = true;
-
-    bool parallelCompilation = true;
-    if (const char *str = op->getStringOption("ion-parallel-compile")) {
-        if (strcmp(str, "off") == 0)
-            parallelCompilation = false;
-        else if (strcmp(str, "on") != 0)
-            return OptionFailure("ion-parallel-compile", str);
-    }
-#ifdef JS_THREADSAFE
-    cx->runtime()->setParallelIonCompilationEnabled(parallelCompilation);
-#endif
-
-#endif /* JS_ION */
-
-#ifdef DEBUG
-    if (op->getBoolOption("dump-entrained-variables"))
-        dumpEntrainedVariables = true;
-#endif
 
     /* |scriptArgs| gets bound on the global before any code is run. */
     if (!BindScriptArgs(cx, obj, op))
@@ -5635,19 +5750,174 @@ ProcessArgs(JSContext *cx, JSObject *obj_, OptionParser *op)
     return gExitCode ? gExitCode : EXIT_SUCCESS;
 }
 
+static bool
+SetRuntimeOptions(JSRuntime *rt, const OptionParser &op)
+{
+#if defined(JS_ION)
+    bool enableBaseline = !op.getBoolOption("no-baseline");
+    bool enableIon = !op.getBoolOption("no-ion");
+    bool enableTypeInference = !op.getBoolOption("no-ti");
+    bool enableAsmJS = !op.getBoolOption("no-asmjs");
+
+    JS::RuntimeOptionsRef(rt).setBaseline(enableBaseline)
+                             .setIon(enableIon)
+                             .setTypeInference(enableTypeInference)
+                             .setAsmJS(enableAsmJS);
+
+    if (const char *str = op.getStringOption("ion-gvn")) {
+        if (strcmp(str, "off") == 0) {
+            jit::js_JitOptions.disableGvn = true;
+        } else if (strcmp(str, "pessimistic") == 0) {
+            jit::js_JitOptions.forceGvnKind = true;
+            jit::js_JitOptions.forcedGvnKind = jit::GVN_Pessimistic;
+        } else if (strcmp(str, "optimistic") == 0) {
+            jit::js_JitOptions.forceGvnKind = true;
+            jit::js_JitOptions.forcedGvnKind = jit::GVN_Optimistic;
+        } else {
+            return OptionFailure("ion-gvn", str);
+        }
+    }
+
+    if (const char *str = op.getStringOption("ion-licm")) {
+        if (strcmp(str, "on") == 0)
+            jit::js_JitOptions.disableLicm = false;
+        else if (strcmp(str, "off") == 0)
+            jit::js_JitOptions.disableLicm = true;
+        else
+            return OptionFailure("ion-licm", str);
+    }
+
+    if (const char *str = op.getStringOption("ion-edgecase-analysis")) {
+        if (strcmp(str, "on") == 0)
+            jit::js_JitOptions.disableEdgeCaseAnalysis = false;
+        else if (strcmp(str, "off") == 0)
+            jit::js_JitOptions.disableEdgeCaseAnalysis = true;
+        else
+            return OptionFailure("ion-edgecase-analysis", str);
+    }
+
+     if (const char *str = op.getStringOption("ion-range-analysis")) {
+         if (strcmp(str, "on") == 0)
+             jit::js_JitOptions.disableRangeAnalysis = false;
+         else if (strcmp(str, "off") == 0)
+             jit::js_JitOptions.disableRangeAnalysis = true;
+         else
+             return OptionFailure("ion-range-analysis", str);
+     }
+
+    if (op.getBoolOption("ion-check-range-analysis"))
+        jit::js_JitOptions.checkRangeAnalysis = true;
+
+    if (const char *str = op.getStringOption("ion-inlining")) {
+        if (strcmp(str, "on") == 0)
+            jit::js_JitOptions.disableInlining = false;
+        else if (strcmp(str, "off") == 0)
+            jit::js_JitOptions.disableInlining = true;
+        else
+            return OptionFailure("ion-inlining", str);
+    }
+
+    if (const char *str = op.getStringOption("ion-osr")) {
+        if (strcmp(str, "on") == 0)
+            jit::js_JitOptions.osr = true;
+        else if (strcmp(str, "off") == 0)
+            jit::js_JitOptions.osr = false;
+        else
+            return OptionFailure("ion-osr", str);
+    }
+
+    if (const char *str = op.getStringOption("ion-limit-script-size")) {
+        if (strcmp(str, "on") == 0)
+            jit::js_JitOptions.limitScriptSize = true;
+        else if (strcmp(str, "off") == 0)
+            jit::js_JitOptions.limitScriptSize = false;
+        else
+            return OptionFailure("ion-limit-script-size", str);
+    }
+
+    int32_t useCount = op.getIntOption("ion-uses-before-compile");
+    if (useCount >= 0)
+        jit::js_JitOptions.setUsesBeforeCompile(useCount);
+
+    useCount = op.getIntOption("baseline-uses-before-compile");
+    if (useCount >= 0)
+        jit::js_JitOptions.baselineUsesBeforeCompile = useCount;
+
+    if (op.getBoolOption("baseline-eager"))
+        jit::js_JitOptions.baselineUsesBeforeCompile = 0;
+
+    if (const char *str = op.getStringOption("ion-regalloc")) {
+        if (strcmp(str, "lsra") == 0) {
+            jit::js_JitOptions.forceRegisterAllocator = true;
+            jit::js_JitOptions.forcedRegisterAllocator = jit::RegisterAllocator_LSRA;
+        } else if (strcmp(str, "backtracking") == 0) {
+            jit::js_JitOptions.forceRegisterAllocator = true;
+            jit::js_JitOptions.forcedRegisterAllocator = jit::RegisterAllocator_Backtracking;
+        } else if (strcmp(str, "stupid") == 0) {
+            jit::js_JitOptions.forceRegisterAllocator = true;
+            jit::js_JitOptions.forcedRegisterAllocator = jit::RegisterAllocator_Stupid;
+        } else {
+            return OptionFailure("ion-regalloc", str);
+        }
+    }
+
+    if (op.getBoolOption("ion-eager"))
+        jit::js_JitOptions.setEagerCompilation();
+
+    if (op.getBoolOption("ion-compile-try-catch"))
+        jit::js_JitOptions.compileTryCatch = true;
+
+    bool parallelCompilation = true;
+    if (const char *str = op.getStringOption("ion-parallel-compile")) {
+        if (strcmp(str, "off") == 0)
+            parallelCompilation = false;
+        else if (strcmp(str, "on") != 0)
+            return OptionFailure("ion-parallel-compile", str);
+    }
+#ifdef JS_THREADSAFE
+    rt->setParallelIonCompilationEnabled(parallelCompilation);
+#endif
+
+#endif // JS_ION
+
+#ifdef JS_ARM_SIMULATOR
+    if (op.getBoolOption("arm-sim-icache-checks"))
+        jit::Simulator::ICacheCheckingEnabled = true;
+
+    int32_t stopAt = op.getIntOption("arm-sim-stop-at");
+    if (stopAt >= 0)
+        jit::Simulator::StopSimAt = stopAt;
+#endif
+
+    reportWarnings = op.getBoolOption('w');
+    compileOnly = op.getBoolOption('c');
+    printTiming = op.getBoolOption('b');
+    rt->profilingScripts = enableDisassemblyDumps = op.getBoolOption('D');
+
+    jsCacheDir = op.getStringOption("js-cache");
+    if (jsCacheDir) {
+        if (op.getBoolOption("js-cache-per-process"))
+            jsCacheDir = JS_smprintf("%s/%u", jsCacheDir, (unsigned)getpid());
+        jsCacheAsmJSPath = JS_smprintf("%s/asmjs.cache", jsCacheDir);
+    }
+
+#ifdef JS_THREADSAFE
+    int32_t threadCount = op.getIntOption("thread-count");
+    if (threadCount >= 0)
+        SetFakeCPUCount(threadCount);
+#endif /* JS_THREADSAFE */
+
+#ifdef DEBUG
+    dumpEntrainedVariables = op.getBoolOption("dump-entrained-variables");
+#endif
+
+    return true;
+}
+
 static int
 Shell(JSContext *cx, OptionParser *op, char **envp)
 {
     JSAutoRequest ar(cx);
-
-    /*
-     * First check to see if type inference is enabled. These flags
-     * must be set on the compartment when it is constructed.
-     */
-    if (op->getBoolOption("no-ti")) {
-        enableTypeInference = false;
-        JS::ContextOptionsRef(cx).toggleTypeInference();
-    }
 
     if (op->getBoolOption("fuzzing-safe"))
         fuzzingSafe = true;
@@ -5657,7 +5927,7 @@ Shell(JSContext *cx, OptionParser *op, char **envp)
     RootedObject glob(cx);
     JS::CompartmentOptions options;
     options.setVersion(JSVERSION_LATEST);
-    glob = NewGlobalObject(cx, options);
+    glob = NewGlobalObject(cx, options, nullptr);
     if (!glob)
         return 1;
 
@@ -5695,18 +5965,6 @@ MaybeOverrideOutFileFromEnv(const char* const envVar,
     }
 }
 
-static bool
-CheckObjectAccess(JSContext *cx, HandleObject obj, HandleId id, JSAccessMode mode,
-                  MutableHandleValue vp)
-{
-    return true;
-}
-
-static const JSSecurityCallbacks securityCallbacks = {
-    CheckObjectAccess,
-    nullptr
-};
-
 /* Pretend we can always preserve wrappers for dummy DOM objects. */
 static bool
 DummyPreserveWrapperCallback(JSContext *cx, JSObject *obj)
@@ -5720,7 +5978,6 @@ main(int argc, char **argv, char **envp)
     sArgc = argc;
     sArgv = argv;
 
-    int stackDummy;
     JSRuntime *rt;
     JSContext *cx;
     int result;
@@ -5736,22 +5993,6 @@ main(int argc, char **argv, char **envp)
 
 #ifdef HAVE_SETLOCALE
     setlocale(LC_ALL, "");
-#endif
-
-#ifdef JS_THREADSAFE
-    if (PR_FAILURE == PR_NewThreadPrivateIndex(&gStackBaseThreadIndex, nullptr) ||
-        PR_FAILURE == PR_SetThreadPrivate(gStackBaseThreadIndex, &stackDummy)) {
-        return 1;
-    }
-#else
-    gStackBase = (uintptr_t) &stackDummy;
-#endif
-
-#ifdef XP_OS2
-   /* these streams are normally line buffered on OS/2 and need a \n, *
-    * so we need to unbuffer then to get a reasonable prompt          */
-    setbuf(stdout,0);
-    setbuf(stderr,0);
 #endif
 
     MaybeOverrideOutFileFromEnv("JS_STDERR", stderr, &gErrFile);
@@ -5818,8 +6059,6 @@ main(int argc, char **argv, char **envp)
                                "Range analysis (default: on, off to disable)")
         || !op.addBoolOption('\0', "ion-check-range-analysis",
                                "Range analysis checking")
-        || !op.addBoolOption('\0', "ion-check-thread-safety",
-                             "IonBuilder thread safety checking")
         || !op.addStringOption('\0', "ion-inlining", "on/off",
                                "Inline methods where possible (default: on, off to disable)")
         || !op.addStringOption('\0', "ion-osr", "on/off",
@@ -5861,6 +6100,12 @@ main(int argc, char **argv, char **envp)
 #endif
         || !op.addIntOption('\0', "available-memory", "SIZE",
                             "Select GC settings based on available memory (MB)", 0)
+#ifdef JS_ARM_SIMULATOR
+        || !op.addBoolOption('\0', "arm-sim-icache-checks", "Enable icache flush checks in the ARM "
+                             "simulator.")
+        || !op.addIntOption('\0', "arm-sim-stop-at", "NUMBER", "Stop the ARM simulator after the given "
+                            "NUMBER of instructions.", -1)
+#endif
     )
     {
         return EXIT_FAILURE;
@@ -5889,15 +6134,14 @@ main(int argc, char **argv, char **envp)
      * Process OOM options as early as possible so that we can observe as many
      * allocations as possible.
      */
-    if (op.getBoolOption('O'))
-        OOM_printAllocationCount = true;
+    OOM_printAllocationCount = op.getBoolOption('O');
 
-#if defined(JS_CPU_X86) && defined(JS_ION)
+#if defined(JS_CODEGEN_X86) && defined(JS_ION)
     if (op.getBoolOption("no-fpu"))
         JSC::MacroAssembler::SetFloatingPointDisabled();
 #endif
 
-#if (defined(JS_CPU_X86) || defined(JS_CPU_X64)) && defined(JS_ION)
+#if (defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)) && defined(JS_ION)
     if (op.getBoolOption("no-sse3")) {
         JSC::MacroAssembler::SetSSE3Disabled();
         PropagateFlagToNestedShells("--no-sse3");
@@ -5907,43 +6151,40 @@ main(int argc, char **argv, char **envp)
         PropagateFlagToNestedShells("--no-sse4");
     }
 #endif
-#endif
+
+#endif // DEBUG
 
     // Start the engine.
     if (!JS_Init())
         return 1;
 
-    // When doing thread safety checks for VM accesses made during Ion compilation,
-    // we rely on protected memory and only the main thread should be active.
-    JSUseHelperThreads useHelperThreads =
-        op.getBoolOption("ion-check-thread-safety")
-        ? JS_NO_HELPER_THREADS
-        : JS_USE_HELPER_THREADS;
-
     /* Use the same parameters as the browser in xpcjsruntime.cpp. */
-    rt = JS_NewRuntime(32L * 1024L * 1024L, useHelperThreads);
+    rt = JS_NewRuntime(32L * 1024L * 1024L, JS_USE_HELPER_THREADS);
     if (!rt)
         return 1;
+
+    if (!SetRuntimeOptions(rt, op))
+        return 1;
+
     gTimeoutFunc = NullValue();
     if (!JS_AddNamedValueRootRT(rt, &gTimeoutFunc, "gTimeoutFunc"))
         return 1;
 
     JS_SetGCParameter(rt, JSGC_MAX_BYTES, 0xffffffff);
 #ifdef JSGC_GENERATIONAL
+    Maybe<JS::AutoDisableGenerationalGC> noggc;
     if (op.getBoolOption("no-ggc"))
-        JS::DisableGenerationalGC(rt);
+        noggc.construct(rt);
 #endif
 
     size_t availMem = op.getIntOption("available-memory");
     if (availMem > 0)
         JS_SetGCParametersBasedOnAvailableMemory(rt, availMem);
 
-    /* Set the initial counter to 1 so the principal will never be destroyed. */
-    JSPrincipals shellTrustedPrincipals;
-    shellTrustedPrincipals.refcount = 1;
+    JS_SetTrustedPrincipals(rt, &ShellPrincipals::fullyTrusted);
+    JS_SetSecurityCallbacks(rt, &ShellPrincipals::securityCallbacks);
+    JS_InitDestroyPrincipalsCallback(rt, ShellPrincipals::destroy);
 
-    JS_SetTrustedPrincipals(rt, &shellTrustedPrincipals);
-    JS_SetSecurityCallbacks(rt, &securityCallbacks);
     JS_SetOperationCallback(rt, ShellOperationCallback);
     JS::SetAsmJSCacheOps(rt, &asmJSCacheOps);
 
@@ -5979,6 +6220,11 @@ main(int argc, char **argv, char **envp)
     DestroyContext(cx, true);
 
     KillWatchdog();
+
+#ifdef JS_THREADSAFE
+    for (size_t i = 0; i < workerThreads.length(); i++)
+        PR_JoinThread(workerThreads[i]);
+#endif
 
     JS_DestroyRuntime(rt);
     JS_ShutDown();

@@ -26,7 +26,7 @@
 #endif // !XPCOM_GLUE_AVOID_NSPR
 
 #include "nsDebug.h"
-#include "nsTraceRefcnt.h"
+#include "nsXPCOM.h"
 #ifndef XPCOM_GLUE
 #include "mozilla/Atomics.h"
 #endif
@@ -71,6 +71,60 @@ private:
 #define NS_ASSERT_OWNINGTHREAD(_class)  ((void)0)
 
 #endif // DEBUG || (NIGHTLY_BUILD && !MOZ_PROFILING)
+
+
+// Macros for reference-count and constructor logging
+
+#ifdef NS_BUILD_REFCNT_LOGGING
+
+#define NS_LOG_ADDREF(_p, _rc, _type, _size) \
+  NS_LogAddRef((_p), (_rc), (_type), (uint32_t) (_size))
+
+#define NS_LOG_RELEASE(_p, _rc, _type) \
+  NS_LogRelease((_p), (_rc), (_type))
+
+#define MOZ_COUNT_CTOR(_type)                                 \
+do {                                                          \
+  NS_LogCtor((void*)this, #_type, sizeof(*this));             \
+} while (0)
+
+#define MOZ_COUNT_CTOR_INHERITED(_type, _base)                    \
+do {                                                              \
+  NS_LogCtor((void*)this, #_type, sizeof(*this) - sizeof(_base)); \
+} while (0)
+
+#define MOZ_COUNT_DTOR(_type)                                 \
+do {                                                          \
+  NS_LogDtor((void*)this, #_type, sizeof(*this));             \
+} while (0)
+
+#define MOZ_COUNT_DTOR_INHERITED(_type, _base)                    \
+do {                                                              \
+  NS_LogDtor((void*)this, #_type, sizeof(*this) - sizeof(_base)); \
+} while (0)
+
+/* nsCOMPtr.h allows these macros to be defined by clients
+ * These logging functions require dynamic_cast<void*>, so they don't
+ * do anything useful if we don't have dynamic_cast<void*>. */
+#define NSCAP_LOG_ASSIGNMENT(_c, _p)                                \
+  if (_p)                                                           \
+    NS_LogCOMPtrAddRef((_c),static_cast<nsISupports*>(_p))
+
+#define NSCAP_LOG_RELEASE(_c, _p)                                   \
+  if (_p)                                                           \
+    NS_LogCOMPtrRelease((_c), static_cast<nsISupports*>(_p))
+
+#else /* !NS_BUILD_REFCNT_LOGGING */
+
+#define NS_LOG_ADDREF(_p, _rc, _type, _size)
+#define NS_LOG_RELEASE(_p, _rc, _type)
+#define MOZ_COUNT_CTOR(_type)
+#define MOZ_COUNT_CTOR_INHERITED(_type, _base)
+#define MOZ_COUNT_DTOR(_type)
+#define MOZ_COUNT_DTOR_INHERITED(_type, _base)
+
+#endif /* NS_BUILD_REFCNT_LOGGING */
+
 
 // Support for ISupports classes which interact with cycle collector.
 
@@ -593,8 +647,8 @@ struct QITableEntry
 };
 
 NS_COM_GLUE nsresult NS_FASTCALL
-NS_TableDrivenQI(void* aThis, const QITableEntry* entries,
-                 REFNSIID aIID, void **aInstancePtr);
+NS_TableDrivenQI(void* aThis, REFNSIID aIID,
+                 void **aInstancePtr, const QITableEntry* entries);
 
 /**
  * Implement table-driven queryinterface
@@ -636,7 +690,7 @@ NS_IMETHODIMP _class::QueryInterface(REFNSIID aIID, void** aInstancePtr)      \
   { nullptr, 0 } };                                                           \
   static_assert((sizeof(table)/sizeof(table[0])) > 1, "need at least 1 interface"); \
   rv = NS_TableDrivenQI(static_cast<void*>(_ptr),                             \
-                        table, aIID, aInstancePtr);
+                        aIID, aInstancePtr, table);
 
 #define NS_INTERFACE_TABLE_END                                                \
   NS_INTERFACE_TABLE_END_WITH_PTR(this)
@@ -899,6 +953,24 @@ NS_IMETHODIMP _class::QueryInterface(REFNSIID aIID, void** aInstancePtr)      \
     NS_INTERFACE_TABLE_ENTRY_AMBIGUOUS(_class, nsISupports, _i1)              \
   NS_INTERFACE_TABLE_END
 
+#define NS_INTERFACE_TABLE12(_class, _i1, _i2, _i3, _i4, _i5, _i6, _i7,       \
+                             _i8, _i9, _i10, _i11, _i12)                      \
+  NS_INTERFACE_TABLE_BEGIN                                                    \
+    NS_INTERFACE_TABLE_ENTRY(_class, _i1)                                     \
+    NS_INTERFACE_TABLE_ENTRY(_class, _i2)                                     \
+    NS_INTERFACE_TABLE_ENTRY(_class, _i3)                                     \
+    NS_INTERFACE_TABLE_ENTRY(_class, _i4)                                     \
+    NS_INTERFACE_TABLE_ENTRY(_class, _i5)                                     \
+    NS_INTERFACE_TABLE_ENTRY(_class, _i6)                                     \
+    NS_INTERFACE_TABLE_ENTRY(_class, _i7)                                     \
+    NS_INTERFACE_TABLE_ENTRY(_class, _i8)                                     \
+    NS_INTERFACE_TABLE_ENTRY(_class, _i9)                                     \
+    NS_INTERFACE_TABLE_ENTRY(_class, _i10)                                    \
+    NS_INTERFACE_TABLE_ENTRY(_class, _i11)                                    \
+    NS_INTERFACE_TABLE_ENTRY(_class, _i12)                                    \
+    NS_INTERFACE_TABLE_ENTRY_AMBIGUOUS(_class, nsISupports, _i1)              \
+  NS_INTERFACE_TABLE_END
+
 #define NS_IMPL_QUERY_INTERFACE0(_class)                                      \
   NS_INTERFACE_TABLE_HEAD(_class)                                             \
   NS_INTERFACE_TABLE0(_class)                                                 \
@@ -963,6 +1035,13 @@ NS_IMETHODIMP _class::QueryInterface(REFNSIID aIID, void** aInstancePtr)      \
   NS_INTERFACE_TABLE_HEAD(_class)                                             \
   NS_INTERFACE_TABLE11(_class, _i1, _i2, _i3, _i4, _i5, _i6, _i7, _i8,        \
                        _i9, _i10, _i11)                                       \
+  NS_INTERFACE_TABLE_TAIL
+
+#define NS_IMPL_QUERY_INTERFACE12(_class, _i1, _i2, _i3, _i4, _i5, _i6,       \
+                                  _i7, _i8, _i9, _i10, _i11, _i12)            \
+  NS_INTERFACE_TABLE_HEAD(_class)                                             \
+  NS_INTERFACE_TABLE12(_class, _i1, _i2, _i3, _i4, _i5, _i6, _i7, _i8,        \
+                       _i9, _i10, _i11, _i12)                                 \
   NS_INTERFACE_TABLE_TAIL
 
 
@@ -1287,6 +1366,13 @@ NS_IMETHODIMP_(nsrefcnt) Class::Release(void)                                 \
   NS_IMPL_RELEASE(_class)                                                     \
   NS_IMPL_QUERY_INTERFACE11(_class, _i1, _i2, _i3, _i4, _i5, _i6, _i7, _i8,   \
                             _i9, _i10, _i11)
+
+#define NS_IMPL_ISUPPORTS12(_class, _i1, _i2, _i3, _i4, _i5, _i6, _i7, _i8,   \
+                            _i9, _i10, _i11, _i12)                            \
+  NS_IMPL_ADDREF(_class)                                                      \
+  NS_IMPL_RELEASE(_class)                                                     \
+  NS_IMPL_QUERY_INTERFACE12(_class, _i1, _i2, _i3, _i4, _i5, _i6, _i7, _i8,   \
+                            _i9, _i10, _i11, _i12)
 
 #define NS_IMPL_ISUPPORTS_INHERITED0(Class, Super)                            \
     NS_IMPL_QUERY_INTERFACE_INHERITED0(Class, Super)                          \

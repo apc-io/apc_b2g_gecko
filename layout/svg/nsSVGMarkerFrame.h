@@ -62,9 +62,9 @@ public:
                                 const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) MOZ_OVERRIDE {}
 
-  NS_IMETHOD AttributeChanged(int32_t         aNameSpaceID,
-                              nsIAtom*        aAttribute,
-                              int32_t         aModType) MOZ_OVERRIDE;
+  virtual nsresult AttributeChanged(int32_t         aNameSpaceID,
+                                    nsIAtom*        aAttribute,
+                                    int32_t         aModType) MOZ_OVERRIDE;
   /**
    * Get the "type" of the frame
    *
@@ -72,8 +72,8 @@ public:
    */
   virtual nsIAtom* GetType() const MOZ_OVERRIDE;
 
-#ifdef DEBUG
-  NS_IMETHOD GetFrameName(nsAString& aResult) const MOZ_OVERRIDE
+#ifdef DEBUG_FRAME_DUMP
+  virtual nsresult GetFrameName(nsAString& aResult) const MOZ_OVERRIDE
   {
     return MakeFrameName(NS_LITERAL_STRING("SVGMarker"), aResult);
   }
@@ -94,7 +94,7 @@ public:
                      nsSVGMark *aMark,
                      float aStrokeWidth);
 
-  SVGBBox GetMarkBBoxContribution(const gfxMatrix &aToBBoxUserspace,
+  SVGBBox GetMarkBBoxContribution(const Matrix &aToBBoxUserspace,
                                   uint32_t aFlags,
                                   nsSVGPathGeometryFrame *aMarkedFrame,
                                   const nsSVGMark *aMark,
@@ -115,14 +115,16 @@ private:
   // prevent nasty reference loops) as well as the reference to the marked
   // frame and its coordinate context. It's easy to mess this up
   // and break things, so this helper makes the code far more robust.
-  class AutoMarkerReferencer
+  class MOZ_STACK_CLASS AutoMarkerReferencer
   {
   public:
     AutoMarkerReferencer(nsSVGMarkerFrame *aFrame,
-                         nsSVGPathGeometryFrame *aMarkedFrame);
+                         nsSVGPathGeometryFrame *aMarkedFrame
+                         MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
     ~AutoMarkerReferencer();
   private:
     nsSVGMarkerFrame *mFrame;
+    MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
   };
 
   // nsSVGMarkerFrame methods:
@@ -160,8 +162,10 @@ public:
   virtual void Init(nsIContent* aContent,
                     nsIFrame* aParent,
                     nsIFrame* aPrevInFlow) MOZ_OVERRIDE;
+#endif
 
-  NS_IMETHOD GetFrameName(nsAString& aResult) const MOZ_OVERRIDE {
+#ifdef DEBUG_FRAME_DUMP
+  virtual nsresult GetFrameName(nsAString& aResult) const MOZ_OVERRIDE {
     return MakeFrameName(NS_LITERAL_STRING("SVGMarkerAnonChild"), aResult);
   }
 #endif

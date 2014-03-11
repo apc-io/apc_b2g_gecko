@@ -16,7 +16,7 @@ const {Services} = Cu.import("resource://gre/modules/Services.jsm");
 const {FileUtils} = Cu.import("resource://gre/modules/FileUtils.jsm");
 const {installHosted, installPackaged, getTargetForApp,
        reloadApp, launchApp, closeApp} = require("devtools/app-actor-front");
-const {EventEmitter} = Cu.import("resource:///modules/devtools/shared/event-emitter.js");
+const {EventEmitter} = Cu.import("resource://gre/modules/devtools/event-emitter.js");
 
 const promise = require("sdk/core/promise");
 
@@ -132,7 +132,7 @@ let UI = {
       }
     }
     if (!icon)
-      return null;
+      return "chrome://browser/skin/devtools/app-manager/default-app-icon.png";
     if (project.type == "hosted") {
       let manifestURL = Services.io.newURI(project.location, null, null);
       let origin = Services.io.newURI(manifestURL.prePath, null, null);

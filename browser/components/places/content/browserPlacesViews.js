@@ -9,8 +9,9 @@ Components.utils.import("resource://gre/modules/Services.jsm");
  * The base view implements everything that's common to the toolbar and
  * menu views.
  */
-function PlacesViewBase(aPlace) {
+function PlacesViewBase(aPlace, aOptions) {
   this.place = aPlace;
+  this.options = aOptions;
   this._controller = new PlacesController(this);
   this._viewElt.controllers.appendController(this._controller);
 }
@@ -80,6 +81,19 @@ PlacesViewBase.prototype = {
       this._resultNode = null;
       delete this._domNodes;
     }
+
+    return val;
+  },
+
+  _options: null,
+  get options() this._options,
+  set options(val) {
+    if (!val)
+      val = {};
+
+    if (!("extraClasses" in val))
+      val.extraClasses = {};
+    this._options = val;
 
     return val;
   },
@@ -279,6 +293,7 @@ PlacesViewBase.prototype = {
     let type = aPlacesNode.type;
     if (type == Ci.nsINavHistoryResultNode.RESULT_TYPE_SEPARATOR) {
       element = document.createElement("menuseparator");
+      element.setAttribute("class", "small-separator");
     }
     else {
       let itemId = aPlacesNode.itemId;
@@ -352,6 +367,15 @@ PlacesViewBase.prototype = {
   function PVB__insertNewItemToPopup(aNewChild, aPopup, aBefore) {
     let element = this._createMenuItemForPlacesNode(aNewChild);
     let before = aBefore || aPopup._endMarker;
+
+    if (element.localName == "menuitem" || element.localName == "menu") {
+      let extraClasses = this.options.extraClasses;
+      if (aPopup == this._rootElt && typeof extraClasses.mainLevel == "string") {
+        element.classList.add(extraClasses.mainLevel);
+      } else if (typeof extraClasses.secondaryLevel == "string")
+        element.classList.add(extraClasses.secondaryLevel);
+    }
+
     aPopup.insertBefore(element, before);
     return element;
   },
@@ -697,8 +721,16 @@ PlacesViewBase.prototype = {
 
     if (this._controller) {
       this._controller.terminate();
-      this._viewElt.controllers.removeController(this._controller);
-      this._controller = null;
+      // Removing the controller will fail if it is already no longer there.
+      // This can happen if the view element was removed/reinserted without
+      // our knowledge. There is no way to check for that having happened
+      // without the possibility of an exception. :-(
+      try {
+        this._viewElt.controllers.removeController(this._controller);
+      } catch (ex) {
+      } finally {
+        this._controller = null;
+      }
     }
 
     delete this._viewElt._placesView;
@@ -782,9 +814,16 @@ PlacesViewBase.prototype = {
     aPopup._startMarker.hidden = true;
     aPopup.insertBefore(aPopup._startMarker, aPopup.firstChild);
 
-    // _endMarker is an hidden menuseparator that lives after places nodes.
-    aPopup._endMarker = document.createElement("menuseparator");
-    aPopup._endMarker.hidden = true;
+    // _endMarker is a DOM node that lives after places nodes, specified with
+    // the 'insertionPoint' option or will be a hidden menuseparator.
+    let node = ("insertionPoint" in this.options) ?
+               aPopup.querySelector(this.options.insertionPoint) : null;
+    if (node) {
+      aPopup._endMarker = node;
+    } else {
+      aPopup._endMarker = document.createElement("menuseparator");
+      aPopup._endMarker.hidden = true;
+    }
     aPopup.appendChild(aPopup._endMarker);
 
     // Move the markers to the right position.
@@ -1536,6 +1575,7 @@ PlacesToolbar.prototype = {
       // Dragging over a normal toolbarbutton,
       // show indicator bar and move it to the appropriate drop point.
       let ind = this._dropIndicator;
+      ind.parentNode.collapsed = false;
       let halfInd = ind.clientWidth / 2;
       let translateX;
       if (this.isRTL) {
@@ -1670,7 +1710,7 @@ PlacesToolbar.prototype = {
  * View for Places menus.  This object should be created during the first
  * popupshowing that's dispatched on the menu.
  */
-function PlacesMenu(aPopupShowingEvent, aPlace) {
+function PlacesMenu(aPopupShowingEvent, aPlace, aOptions) {
   this._rootElt = aPopupShowingEvent.target; // <menupopup>
   this._viewElt = this._rootElt.parentNode;   // <menu>
   this._viewElt._placesView = this;
@@ -1687,7 +1727,7 @@ function PlacesMenu(aPopupShowingEvent, aPlace) {
   }
 #endif
 
-  PlacesViewBase.call(this, aPlace);
+  PlacesViewBase.call(this, aPlace, aOptions);
   this._onPopupShowing(aPopupShowingEvent);
 }
 
@@ -1750,12 +1790,13 @@ PlacesMenu.prototype = {
   }
 };
 
-function PlacesPanelMenuView(aPlace, aViewId, aRootId) {
+function PlacesPanelMenuView(aPlace, aViewId, aRootId, aOptions) {
   this._viewElt = document.getElementById(aViewId);
   this._rootElt = document.getElementById(aRootId);
   this._viewElt._placesView = this;
+  this.options = aOptions;
 
-  PlacesViewBase.call(this, aPlace);
+  PlacesViewBase.call(this, aPlace, aOptions);
 }
 
 PlacesPanelMenuView.prototype = {
@@ -1777,10 +1818,14 @@ PlacesPanelMenuView.prototype = {
     let button;
     if (type == Ci.nsINavHistoryResultNode.RESULT_TYPE_SEPARATOR) {
       button = document.createElement("toolbarseparator");
+      button.setAttribute("class", "small-separator");
     }
     else {
       button = document.createElement("toolbarbutton");
-      button.className = "bookmark-item";
+      let className = "bookmark-item";
+      if (typeof this.options.extraClasses.mainLevel == "string")
+        className += " " + this.options.extraClasses.mainLevel;
+      button.className = className;
       button.setAttribute("label", aChild.title);
       let icon = aChild.icon;
       if (icon)

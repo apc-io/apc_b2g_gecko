@@ -20,6 +20,7 @@
 #include "mozilla/mozalloc.h"           // for operator delete
 #include "nsCOMPtr.h"                   // for already_AddRefed
 #include "nsDebug.h"                    // for NS_RUNTIMEABORT
+#include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "nsRegion.h"                   // for nsIntRegion
 #include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
 #include "nscore.h"                     // for nsACString
@@ -43,6 +44,7 @@ class CompositableHost;
 class CompositableBackendSpecificData;
 class SurfaceDescriptor;
 class ISurfaceAllocator;
+class TextureHostOGL;
 class TextureSourceOGL;
 class TextureSourceD3D9;
 class TextureSourceD3D11;
@@ -81,6 +83,7 @@ public:
 class TextureSource : public RefCounted<TextureSource>
 {
 public:
+  MOZ_DECLARE_REFCOUNTED_TYPENAME(TextureSource)
   TextureSource();
   virtual ~TextureSource();
 
@@ -93,7 +96,7 @@ public:
   /**
    * Return the pixel format of this texture
    */
-  virtual gfx::SurfaceFormat GetFormat() const { return gfx::FORMAT_UNKNOWN; }
+  virtual gfx::SurfaceFormat GetFormat() const { return gfx::SurfaceFormat::UNKNOWN; }
 
   /**
    * Cast to a TextureSource for for each backend..
@@ -149,6 +152,8 @@ public:
    */
   virtual void DeallocateDeviceData() = 0;
 
+  virtual void SetCompositor(Compositor* aCompositor) {}
+
   void SetNextSibling(NewTextureSource* aTexture)
   {
     mNextSibling = aTexture;
@@ -195,7 +200,6 @@ public:
    * the device texture it uploads to internally.
    */
   virtual bool Update(gfx::DataSourceSurface* aSurface,
-                      TextureFlags aFlags,
                       nsIntRegion* aDestRegion = nullptr,
                       gfx::IntPoint* aSrcOffset = nullptr) = 0;
 
@@ -378,7 +382,9 @@ public:
    * are for use with the managing IPDL protocols only (so that they can
    * implement AllocPTextureParent and DeallocPTextureParent).
    */
-  static PTextureParent* CreateIPDLActor(ISurfaceAllocator* aAllocator);
+  static PTextureParent* CreateIPDLActor(ISurfaceAllocator* aAllocator,
+                                         const SurfaceDescriptor& aSharedData,
+                                         TextureFlags aFlags);
   static bool DestroyIPDLActor(PTextureParent* actor);
 
   /**
@@ -390,6 +396,14 @@ public:
    * Get the TextureHost corresponding to the actor passed in parameter.
    */
   static TextureHost* AsTextureHost(PTextureParent* actor);
+
+  /**
+   * Return a pointer to the IPDLActor.
+   *
+   * This is to be used with IPDL messages only. Do not store the returned
+   * pointer.
+   */
+  PTextureParent* GetIPDLActor();
 
   /**
    * Specific to B2G's Composer2D
@@ -408,12 +422,30 @@ public:
   // to forget about the shmem _without_ releasing it.
   virtual void OnShutdown() {}
 
+  // Forget buffer actor. Used only for hacky fix for bug 966446. 
+  virtual void ForgetBufferActor() {}
+
   virtual const char *Name() { return "TextureHost"; }
   virtual void PrintInfo(nsACString& aTo, const char* aPrefix);
 
+  /**
+   * Indicates whether the TextureHost implementation is backed by an
+   * in-memory buffer. The consequence of this is that locking the
+   * TextureHost does not contend with locking the texture on the client side.
+   */
+  virtual bool HasInternalBuffer() const { return false; }
+
+  /**
+   * Cast to a TextureHost for each backend.
+   */
+  virtual TextureHostOGL* AsHostOGL() { return nullptr; }
+
 protected:
+  PTextureParent* mActor;
   TextureFlags mFlags;
   RefPtr<CompositableBackendSpecificData> mCompositableBackendData;
+
+  friend class TextureParent;
 };
 
 /**
@@ -439,6 +471,8 @@ public:
 
   virtual uint8_t* GetBuffer() = 0;
 
+  virtual size_t GetBufferSize() = 0;
+
   virtual void Updated(const nsIntRegion* aRegion = nullptr) MOZ_OVERRIDE;
 
   virtual bool Lock() MOZ_OVERRIDE;
@@ -456,13 +490,15 @@ public:
    * GetTextureSources.
    *
    * If the shared format is YCbCr and the compositor does not support it,
-   * GetFormat will be RGB32 (even though mFormat is FORMAT_YUV).
+   * GetFormat will be RGB32 (even though mFormat is SurfaceFormat::YUV).
    */
   virtual gfx::SurfaceFormat GetFormat() const MOZ_OVERRIDE;
 
   virtual gfx::IntSize GetSize() const MOZ_OVERRIDE { return mSize; }
 
   virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() MOZ_OVERRIDE;
+
+  virtual bool HasInternalBuffer() const MOZ_OVERRIDE { return true; }
 
 protected:
   bool Upload(nsIntRegion *aRegion = nullptr);
@@ -500,6 +536,8 @@ public:
 
   virtual uint8_t* GetBuffer() MOZ_OVERRIDE;
 
+  virtual size_t GetBufferSize() MOZ_OVERRIDE;
+
   virtual const char *Name() MOZ_OVERRIDE { return "ShmemTextureHost"; }
 
   virtual void OnShutdown() MOZ_OVERRIDE;
@@ -529,6 +567,8 @@ public:
   virtual void ForgetSharedData() MOZ_OVERRIDE;
 
   virtual uint8_t* GetBuffer() MOZ_OVERRIDE;
+
+  virtual size_t GetBufferSize() MOZ_OVERRIDE;
 
   virtual const char *Name() MOZ_OVERRIDE { return "MemoryTextureHost"; }
 
@@ -786,18 +826,17 @@ public:
   AutoLockTextureHost(TextureHost* aTexture)
     : mTexture(aTexture)
   {
-    MOZ_ASSERT(mTexture);
-    mLocked = aTexture->Lock();
+    mLocked = mTexture ? mTexture->Lock() : false;
   }
 
   ~AutoLockTextureHost()
   {
-    if (mLocked) {
+    if (mTexture && mLocked) {
       mTexture->Unlock();
     }
   }
 
-  bool Failed() { return !mLocked; }
+  bool Failed() { return mTexture && !mLocked; }
 
 private:
   RefPtr<TextureHost> mTexture;
@@ -843,7 +882,7 @@ public:
   virtual ~CompositingRenderTarget() {}
 
 #ifdef MOZ_DUMP_PAINTING
-  virtual already_AddRefed<gfxImageSurface> Dump(Compositor* aCompositor) { return nullptr; }
+  virtual TemporaryRef<gfx::DataSourceSurface> Dump(Compositor* aCompositor) { return nullptr; }
 #endif
 
   const gfx::IntPoint& GetOrigin() { return mOrigin; }

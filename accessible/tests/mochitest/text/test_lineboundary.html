@@ -109,10 +109,34 @@
                        [ [ 0, 3, "foo\n", 0, 4 ], [ 4, 4, "", 4, 4 ] ]);
 
       //////////////////////////////////////////////////////////////////////////
+      // 'Hello world ' (\n is rendered as space)
+
+      testTextAtOffset([ "ht_4" ], BOUNDARY_LINE_START,
+                       [ [ 0, 12, "Hello world ", 0, 12 ] ]);
+
+      //////////////////////////////////////////////////////////////////////////
       // list items
 
       testTextAtOffset([ "li1" ], BOUNDARY_LINE_START,
                        [ [ 0, 5, kDiscBulletChar + "Item", 0, 5 ] ]);
+      testTextAtOffset([ "li2" ], BOUNDARY_LINE_START,
+                       [ [ 0, 1, kDiscBulletChar, 0, 1 ] ]);
+      testTextAtOffset([ "li3" ], BOUNDARY_LINE_START,
+                       [ [ 0, 7, kDiscBulletChar + "a long ", 0, 8 ],
+                         [ 8, 11, "and ", 8, 12 ] ]);
+      testTextAtOffset([ "li4" ], BOUNDARY_LINE_START,
+                       [ [ 0, 6, kDiscBulletChar + "a " + kEmbedChar + " c", 0, 6 ] ]);
+      testTextAtOffset([ "ul1" ], BOUNDARY_LINE_START,
+                       [ [ 0, 0, kEmbedChar, 0, 1 ],
+                         [ 1, 1, kEmbedChar, 1, 2 ],
+                         [ 2, 2, kEmbedChar, 2, 3 ],
+                         [ 3, 4, kEmbedChar, 3, 4 ] ]);
+
+      //////////////////////////////////////////////////////////////////////////
+      // Nested hypertexts
+
+      testTextAtOffset(["ht_5" ], BOUNDARY_LINE_START,
+                       [ [ 0, 0, kEmbedChar, 0, 1 ] ]);
 
       SimpleTest.finish();
     }
@@ -138,7 +162,12 @@
      href="https://bugzilla.mozilla.org/show_bug.cgi?id=882292">
     Bug 882292
   </a>
-  
+  <a target="_blank"
+     title="getTextAtOffset broken for last object when closing tag is preceded by newline char"
+     href="https://bugzilla.mozilla.org/show_bug.cgi?id=947170">
+    Bug 947170
+  </a>
+
   <p id="display"></p>
   <div id="content" style="display: none"></div>
   <pre id="test">
@@ -173,8 +202,22 @@ two words
   <iframe id="ht_2" src="data:text/html,<div contentEditable='true'>foo<br/></div>"></iframe>
   <iframe id="ht_3" src="data:text/html,<div contentEditable='true'>foo<br/><br/></div>"></iframe>
 
-  <ul>
+  <p id="ht_4">Hello world
+</p>
+
+  <ul id="ul1">
     <li id="li1">Item</li>
+    <li id="li2"></li>
+    <li id="li3" style="width:10ex; font-family:monospace; font-size:10pt;">a long and winding road that lead me to your door</li>
+    <li id="li4">a <a href=''>b</a> c</li>
   </ul>
+
+  <div id="ht_5">
+    <div>
+      <p>sectiounus</p>
+      <p>seciofarus</p>
+    </div>
+  </div>
+
 </body>
 </html>

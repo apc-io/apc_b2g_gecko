@@ -59,8 +59,6 @@ typedef void (*EnterJitCode)(void *code, unsigned argc, Value *argv, StackFrame 
 
 class IonBuilder;
 
-typedef Vector<IonBuilder*, 0, SystemAllocPolicy> OffThreadCompilationVector;
-
 // ICStubSpace is an abstraction for allocation policy and storage for stub data.
 // There are two kinds of stubs: optimized stubs and fallback stubs (the latter
 // also includes stubs that can make non-tail calls that can GC).
@@ -191,6 +189,9 @@ class JitRuntime
     // Thunk used by the debugger for breakpoint and step mode.
     JitCode *debugTrapHandler_;
 
+    // Stub used to inline the ForkJoinGetSlice intrinsic.
+    JitCode *forkJoinGetSliceStub_;
+
     // Map VMFunction addresses to the JitCode of the wrapper.
     typedef WeakCache<const VMFunction *, JitCode *> VMWrapperMap;
     VMWrapperMap *functionWrappers_;
@@ -221,6 +222,7 @@ class JitRuntime
     JitCode *generateInvalidator(JSContext *cx);
     JitCode *generatePreBarrier(JSContext *cx, MIRType type);
     JitCode *generateDebugTrapHandler(JSContext *cx);
+    JitCode *generateForkJoinGetSliceStub(JSContext *cx);
     JitCode *generateVMWrapper(JSContext *cx, const VMFunction &f);
 
     JSC::ExecutableAllocator *createIonAlloc(JSContext *cx);
@@ -323,6 +325,11 @@ class JitRuntime
     JitCode *shapePreBarrier() const {
         return shapePreBarrier_;
     }
+
+    bool ensureForkJoinGetSliceStubExists(JSContext *cx);
+    JitCode *forkJoinGetSliceStub() const {
+        return forkJoinGetSliceStub_;
+    }
 };
 
 class JitCompartment
@@ -331,12 +338,6 @@ class JitCompartment
 
     // Ion state for the compartment's runtime.
     JitRuntime *rt;
-
-    // Any scripts for which off thread compilation has successfully finished,
-    // failed, or been cancelled. All off thread compilations which are started
-    // will eventually appear in this list asynchronously. Protected by the
-    // runtime's analysis lock.
-    OffThreadCompilationVector finishedOffThreadCompilations_;
 
     // Map ICStub keys to ICStub shared code objects.
     typedef WeakValueCache<uint32_t, ReadBarriered<JitCode> > ICStubCodeMap;
@@ -361,10 +362,6 @@ class JitCompartment
     JitCode *generateStringConcatStub(JSContext *cx, ExecutionMode mode);
 
   public:
-    OffThreadCompilationVector &finishedOffThreadCompilations() {
-        return finishedOffThreadCompilations_;
-    }
-
     JitCode *getStubCode(uint32_t key) {
         ICStubCodeMap::AddPtr p = stubCodes_->lookupForAdd(key);
         if (p)

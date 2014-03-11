@@ -7,6 +7,7 @@
 
 #include "nsISupportsImpl.h"
 #include "nsXPCOM.h"
+#include "nsDOMNavigationTiming.h"
 #include "mozilla/RefPtr.h"
 #include "CodecConfig.h"
 #include "VideoTypes.h"
@@ -135,6 +136,23 @@ public:
    * with the new one.
    */
   virtual MediaConduitErrorCode AttachTransport(RefPtr<TransportInterface> aTransport) = 0;
+
+  virtual bool GetLocalSSRC(unsigned int* ssrc) = 0;
+  virtual bool GetRemoteSSRC(unsigned int* ssrc) = 0;
+
+  /**
+   * Functions returning stats needed by w3c stats model.
+   */
+  virtual bool GetRTPStats(unsigned int* jitterMs,
+                           unsigned int* cumulativeLost) = 0;
+  virtual bool GetRTCPReceiverReport(DOMHighResTimeStamp* timestamp,
+                                     unsigned int* jitterMs,
+                                     unsigned int* packetsReceived,
+                                     uint64_t* bytesReceived,
+                                     unsigned int* cumulativeLost) = 0;
+  virtual bool GetRTCPSenderReport(DOMHighResTimeStamp* timestamp,
+                                   unsigned int* packetsSent,
+                                   uint64_t* bytesSent) = 0;
 
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(MediaSessionConduit)
 
@@ -328,15 +346,17 @@ public:
     */
   virtual MediaConduitErrorCode ConfigureRecvMediaCodecs(
                                 const std::vector<AudioCodecConfig* >& recvCodecConfigList) = 0;
+   /**
+    * Function to enable the audio level extension
+    * @param enabled: enable extension
+    * @param id: id to be used for this rtp header extension
+    * NOTE: See AudioConduit for more information
+    */
+  virtual MediaConduitErrorCode EnableAudioLevelExtension(bool enabled, uint8_t id) = 0;
 
 };
-
-
 }
-
 #endif
-
-
 
 
 

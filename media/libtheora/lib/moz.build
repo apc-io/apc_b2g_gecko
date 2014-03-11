@@ -20,7 +20,7 @@ UNIFIED_SOURCES += [
     'state.c',
 ]
 
-if CONFIG['OS_TEST'] == 'arm' and CONFIG['GNU_AS']:
+if CONFIG['CPU_ARCH'] == 'arm' and CONFIG['GNU_AS']:
     GENERATED_SOURCES += [ '%s.%s' % (f, CONFIG['ASM_SUFFIX']) for f in [
         'armbits-gnu',
         'armfrag-gnu',
@@ -76,3 +76,7 @@ FINAL_LIBRARY = 'gkmedias'
 
 # The encoder is currently not included.
 DEFINES['THEORA_DISABLE_ENCODE'] = True
+
+# Suppress warnings in third-party code.
+if CONFIG['OS_TARGET'] == 'Darwin':
+    CFLAGS += ['-Wno-tautological-compare']

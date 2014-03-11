@@ -326,7 +326,7 @@ public:
     // outputs.
     request->dstFrame = new imgFrame();
     nsresult rv = request->dstFrame->Init(0, 0, request->dstSize.width, request->dstSize.height,
-                                          gfxImageFormatARGB32);
+                                          gfxImageFormat::ARGB32);
 
     if (NS_FAILED(rv) || !request->GetSurfaces(aSrcFrame)) {
       return;
@@ -387,6 +387,7 @@ RasterImage::RasterImage(imgStatusTracker* aStatusTracker,
   mAnim(nullptr),
   mLockCount(0),
   mDecodeCount(0),
+  mRequestedSampleSize(0),
 #ifdef DEBUG
   mFramesNotified(0),
 #endif
@@ -834,7 +835,7 @@ RasterImage::CopyFrame(uint32_t aWhichFrame,
 
   nsresult rv;
 
-  if (!ApplyDecodeFlags(aFlags))
+  if (!ApplyDecodeFlags(aFlags, aWhichFrame))
     return NS_ERROR_NOT_AVAILABLE;
 
   // If requested, synchronously flush any data we have lying around to the decoder
@@ -864,7 +865,7 @@ RasterImage::CopyFrame(uint32_t aWhichFrame,
   // Create a 32-bit image surface of our size, but draw using the frame's
   // rect, implicitly padding the frame out to the image's size.
   nsRefPtr<gfxImageSurface> imgsurface = new gfxImageSurface(gfxIntSize(mSize.width, mSize.height),
-                                                             gfxImageFormatARGB32);
+                                                             gfxImageFormat::ARGB32);
   gfxContext ctx(imgsurface);
   ctx.SetOperator(gfxContext::OPERATOR_SOURCE);
   ctx.Rectangle(framerect);
@@ -895,7 +896,7 @@ RasterImage::GetFrame(uint32_t aWhichFrame,
   if (mInDecoder && (aFlags & imgIContainer::FLAG_SYNC_DECODE))
     return nullptr;
 
-  if (!ApplyDecodeFlags(aFlags))
+  if (!ApplyDecodeFlags(aFlags, aWhichFrame))
     return nullptr;
 
   // If the caller requested a synchronous decode, do it
@@ -921,8 +922,24 @@ RasterImage::GetFrame(uint32_t aWhichFrame,
   nsIntRect framerect = frame->GetRect();
   if (framerect.x == 0 && framerect.y == 0 &&
       framerect.width == mSize.width &&
-      framerect.height == mSize.height)
+      framerect.height == mSize.height) {
     frame->GetSurface(getter_AddRefs(framesurf));
+    if (!framesurf && !frame->IsSinglePixel()) {
+      // No reason to be optimized away here - the OS threw out the data
+      if (!(aFlags & FLAG_SYNC_DECODE))
+        return nullptr;
+
+      // Unconditionally call ForceDiscard() here because GetSurface can only
+      // return null when we can forcibly discard and redecode. There are two
+      // other cases where GetSurface() can return null - when it is a single
+      // pixel image, which we check before getting here, or when this is an
+      // indexed image, in which case we shouldn't be in this function at all.
+      // The only remaining possibility is that SetDiscardable() was called on
+      // this imgFrame, which implies the image can be redecoded.
+      ForceDiscard();
+      return GetFrame(aWhichFrame, aFlags);
+    }
+  }
 
   // The image doesn't have a surface because it's been optimized away. Create
   // one.
@@ -946,22 +963,29 @@ RasterImage::GetCurrentImage()
   }
 
   nsRefPtr<gfxASurface> imageSurface = GetFrame(FRAME_CURRENT, FLAG_NONE);
-  NS_ENSURE_TRUE(imageSurface, nullptr);
+  if (!imageSurface) {
+    // The OS threw out some or all of our buffer. Start decoding again.
+    // GetFrame will only return null in the case that the image was
+    // discarded. We already checked that the image is decoded, so other
+    // error paths are not possible.
+    ForceDiscard();
+    RequestDecodeCore(ASYNCHRONOUS);
+    return nullptr;
+  }
 
   if (!mImageContainer) {
     mImageContainer = LayerManager::CreateImageContainer();
   }
 
   CairoImage::Data cairoData;
-  cairoData.mSurface = imageSurface;
+  cairoData.mDeprecatedSurface = imageSurface;
   GetWidth(&cairoData.mSize.width);
   GetHeight(&cairoData.mSize.height);
+  cairoData.mSourceSurface = gfxPlatform::GetPlatform()->GetSourceSurfaceForSurface(nullptr, imageSurface);
 
-  ImageFormat cairoFormat = CAIRO_SURFACE;
-  nsRefPtr<layers::Image> image = mImageContainer->CreateImage(&cairoFormat, 1);
+  nsRefPtr<layers::Image> image = mImageContainer->CreateImage(ImageFormat::CAIRO_SURFACE);
   NS_ASSERTION(image, "Failed to create Image");
 
-  NS_ASSERTION(image->GetFormat() == cairoFormat, "Wrong format");
   static_cast<CairoImage*>(image.get())->SetData(cairoData);
 
   return image.forget();
@@ -981,6 +1005,10 @@ RasterImage::GetImageContainer(LayerManager* aManager, ImageContainer **_retval)
     mStatusTracker->OnUnlockedDraw();
   }
 
+  if (!mImageContainer) {
+    mImageContainer = mImageContainerCache;
+  }
+
   if (mImageContainer) {
     *_retval = mImageContainer;
     NS_ADDREF(*_retval);
@@ -995,6 +1023,13 @@ RasterImage::GetImageContainer(LayerManager* aManager, ImageContainer **_retval)
 
   *_retval = mImageContainer;
   NS_ADDREF(*_retval);
+  // We only need to be careful about holding on to the image when it is
+  // discardable by the OS.
+  if (CanForciblyDiscardAndRedecode()) {
+    mImageContainerCache = mImageContainer->asWeakPtr();
+    mImageContainer = nullptr;
+  }
+
   return NS_OK;
 }
 
@@ -1045,21 +1080,21 @@ RasterImage::SizeOfDecodedWithComputedFallbackIfHeap(gfxMemoryLocation aLocation
 size_t
 RasterImage::HeapSizeOfDecodedWithComputedFallback(MallocSizeOf aMallocSizeOf) const
 {
-  return SizeOfDecodedWithComputedFallbackIfHeap(GFX_MEMORY_IN_PROCESS_HEAP,
+  return SizeOfDecodedWithComputedFallbackIfHeap(gfxMemoryLocation::IN_PROCESS_HEAP,
                                                  aMallocSizeOf);
 }
 
 size_t
 RasterImage::NonHeapSizeOfDecoded() const
 {
-  return SizeOfDecodedWithComputedFallbackIfHeap(GFX_MEMORY_IN_PROCESS_NONHEAP,
+  return SizeOfDecodedWithComputedFallbackIfHeap(gfxMemoryLocation::IN_PROCESS_NONHEAP,
                                                  nullptr);
 }
 
 size_t
 RasterImage::OutOfProcessSizeOfDecoded() const
 {
-  return SizeOfDecodedWithComputedFallbackIfHeap(GFX_MEMORY_OUT_OF_PROCESS,
+  return SizeOfDecodedWithComputedFallbackIfHeap(gfxMemoryLocation::OUT_OF_PROCESS,
                                                  nullptr);
 }
 
@@ -1183,18 +1218,29 @@ RasterImage::InternalAddFrame(uint32_t framenum,
 }
 
 bool
-RasterImage::ApplyDecodeFlags(uint32_t aNewFlags)
+RasterImage::ApplyDecodeFlags(uint32_t aNewFlags, uint32_t aWhichFrame)
 {
   if (mFrameDecodeFlags == (aNewFlags & DECODE_FLAGS_MASK))
     return true; // Not asking very much of us here.
 
   if (mDecoded) {
+    // If the requested frame is opaque and the current and new decode flags
+    // only differ in the premultiply alpha bit then we can use the existing
+    // frame, we don't need to discard and re-decode.
+    uint32_t currentNonAlphaFlags =
+      (mFrameDecodeFlags & DECODE_FLAGS_MASK) & ~FLAG_DECODE_NO_PREMULTIPLY_ALPHA;
+    uint32_t newNonAlphaFlags =
+      (aNewFlags & DECODE_FLAGS_MASK) & ~FLAG_DECODE_NO_PREMULTIPLY_ALPHA;
+    if (currentNonAlphaFlags == newNonAlphaFlags && FrameIsOpaque(aWhichFrame)) {
+      return true;
+    }
+
     // if we can't discard, then we're screwed; we have no way
     // to re-decode.  Similarly if we aren't allowed to do a sync
     // decode.
     if (!(aNewFlags & FLAG_SYNC_DECODE))
       return false;
-    if (!CanForciblyDiscard() || mDecoder || mAnim)
+    if (!CanForciblyDiscardAndRedecode())
       return false;
     ForceDiscard();
   }
@@ -1381,6 +1427,12 @@ RasterImage::DecodingComplete()
   // We don't optimize the frame for multipart images because we reuse
   // the frame.
   if ((GetNumFrames() == 1) && !mMultipart) {
+    // CanForciblyDiscard is used instead of CanForciblyDiscardAndRedecode
+    // because we know decoding is complete at this point and this is not
+    // an animation
+    if (DiscardingEnabled() && CanForciblyDiscard()) {
+      mFrameBlender.RawGetFrame(0)->SetDiscardable();
+    }
     rv = mFrameBlender.RawGetFrame(0)->Optimize();
     NS_ENSURE_SUCCESS(rv, rv);
   }
@@ -1937,6 +1989,14 @@ RasterImage::CanForciblyDiscard() {
          mHasSourceData;         // ...have the source data...
 }
 
+bool
+RasterImage::CanForciblyDiscardAndRedecode() {
+  return mDiscardable &&         // ...Enabled at creation time...
+         mHasSourceData &&       // ...have the source data...
+         !mDecoder &&            // Can't discard with an open decoder
+         !mAnim;                 // Can never discard animated images
+}
+
 // Helper method to tell us whether the clock is currently running for
 // discarding this image. Mainly for assertions.
 bool
@@ -2025,7 +2085,7 @@ RasterImage::InitDecoder(bool aDoSizeDecode)
     // frame.  By default, we create an ARGB frame with no offset. If decoders
     // need a different type, they need to ask for it themselves.
     mDecoder->NeedNewFrame(0, 0, 0, mSize.width, mSize.height,
-                           gfxImageFormatARGB32);
+                           gfxImageFormat::ARGB32);
     mDecoder->AllocateFrame();
   }
   mDecoder->Init();
@@ -2074,13 +2134,6 @@ RasterImage::ShutdownDecoder(eShutdownIntent aIntent)
   // Figure out what kind of decode we were doing before we get rid of our decoder
   bool wasSizeDecode = mDecoder->IsSizeDecode();
 
-  // Unlock the last frame (if we have any). Our invariant is that, while we
-  // have a decoder open, the last frame is always locked.
-  if (GetNumFrames() > 0) {
-    imgFrame *curframe = mFrameBlender.RawGetFrame(GetNumFrames() - 1);
-    curframe->UnlockImageData();
-  }
-
   // Finalize the decoder
   // null out mDecoder, _then_ check for errors on the close (otherwise the
   // error routine might re-invoke ShutdownDecoder)
@@ -2092,6 +2145,13 @@ RasterImage::ShutdownDecoder(eShutdownIntent aIntent)
   decoder->Finish(aIntent);
   mInDecoder = false;
   mFinishing = false;
+
+  // Unlock the last frame (if we have any). Our invariant is that, while we
+  // have a decoder open, the last frame is always locked.
+  if (GetNumFrames() > 0) {
+    imgFrame *curframe = mFrameBlender.RawGetFrame(GetNumFrames() - 1);
+    curframe->UnlockImageData();
+  }
 
   // Kill off our decode request, if it's pending.  (If not, this call is
   // harmless.)
@@ -2373,6 +2433,15 @@ RasterImage::SyncDecode()
   if (mDecoder && mDecoder->GetDecodeFlags() != mFrameDecodeFlags) {
     nsresult rv = FinishedSomeDecoding(eShutdownIntent_NotNeeded);
     CONTAINER_ENSURE_SUCCESS(rv);
+
+    if (mDecoded) {
+      // If we've finished decoding we need to discard so we can re-decode
+      // with the new flags. If we can't discard then there isn't
+      // anything we can do.
+      if (!CanForciblyDiscardAndRedecode())
+        return NS_ERROR_NOT_AVAILABLE;
+      ForceDiscard();
+    }
   }
 
   // If we're currently waiting on a new frame for this image, we have to create
@@ -2599,9 +2668,17 @@ RasterImage::Draw(gfxContext *aContext,
 
   NS_ENSURE_ARG_POINTER(aContext);
 
-  // We can only draw with the default decode flags
-  if (mFrameDecodeFlags != DECODE_FLAGS_DEFAULT) {
-    if (!CanForciblyDiscard())
+  // We can only draw without discarding and redecoding in these cases:
+  //  * We have the default decode flags.
+  //  * We have exactly FLAG_DECODE_NO_PREMULTIPLY_ALPHA and the current frame
+  //    is opaque.
+  bool haveDefaultFlags = (mFrameDecodeFlags == DECODE_FLAGS_DEFAULT);
+  bool haveSafeAlphaFlags =
+    (mFrameDecodeFlags == FLAG_DECODE_NO_PREMULTIPLY_ALPHA) &&
+    FrameIsOpaque(FRAME_CURRENT);
+
+  if (!(haveDefaultFlags || haveSafeAlphaFlags)) {
+    if (!CanForciblyDiscardAndRedecode())
       return NS_ERROR_NOT_AVAILABLE;
     ForceDiscard();
 
@@ -2639,6 +2716,17 @@ RasterImage::Draw(gfxContext *aContext,
   imgFrame* frame = GetDrawableImgFrame(frameIndex);
   if (!frame) {
     return NS_OK; // Getting the frame (above) touches the image and kicks off decoding
+  }
+
+  nsRefPtr<gfxASurface> surf;
+  if (!frame->IsSinglePixel()) {
+    frame->GetSurface(getter_AddRefs(surf));
+    if (!surf) {
+      // The OS threw out some or all of our buffer. Start decoding again.
+      ForceDiscard();
+      WantDecodedFrames();
+      return NS_OK;
+    }
   }
 
   DrawWithPreDownscaleIfNeeded(frame, aContext, aFilter, aUserSpaceToImageSpace, aFill, aSubimage, aFlags);
@@ -2724,7 +2812,7 @@ RasterImage::UnlockImage()
 NS_IMETHODIMP
 RasterImage::RequestDiscard()
 {
-  if (CanDiscard()) {
+  if (CanDiscard() && CanForciblyDiscardAndRedecode()) {
     ForceDiscard();
   }
 
@@ -2926,7 +3014,7 @@ RasterImage::RequestDecodeIfNeeded(nsresult aStatus,
 
   // If we were a size decode and a full decode was requested, now's the time.
   if (NS_SUCCEEDED(aStatus) &&
-      aIntent != eShutdownIntent_Error &&
+      aIntent == eShutdownIntent_Done &&
       aDone &&
       aWasSize &&
       mWantFullDecode) {
@@ -3134,7 +3222,7 @@ RasterImage::DecodePool::~DecodePool()
 
 NS_IMETHODIMP
 RasterImage::DecodePool::Observe(nsISupports *subject, const char *topic,
-                                 const PRUnichar *data)
+                                 const char16_t *data)
 {
   NS_ASSERTION(strcmp(topic, "xpcom-shutdown-threads") == 0, "oops");
 
@@ -3342,6 +3430,11 @@ RasterImage::DecodePool::DecodeSomeOfImage(RasterImage* aImg,
   // If an error is flagged, it probably happened while we were waiting
   // in the event queue.
   if (aImg->mError)
+    return NS_OK;
+
+  // If there is an error worker pending (say because the main thread has enqueued
+  // another decode request for us before processing the error worker) then bail out.
+  if (aImg->mPendingError)
     return NS_OK;
 
   // If mDecoded or we don't have a decoder, we must have finished already (for

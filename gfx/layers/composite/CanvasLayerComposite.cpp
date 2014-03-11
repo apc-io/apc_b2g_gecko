@@ -16,12 +16,13 @@
 #include "mozilla/mozalloc.h"           // for operator delete
 #include "nsAString.h"
 #include "nsAutoPtr.h"                  // for nsRefPtr
+#include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "nsPoint.h"                    // for nsIntPoint
 #include "nsString.h"                   // for nsAutoCString
-#include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
 
 using namespace mozilla;
 using namespace mozilla::layers;
+using namespace mozilla::gfx;
 
 CanvasLayerComposite::CanvasLayerComposite(LayerManagerComposite* aManager)
   : CanvasLayer(aManager, nullptr)
@@ -39,9 +40,19 @@ CanvasLayerComposite::~CanvasLayerComposite()
   CleanupResources();
 }
 
-void
-CanvasLayerComposite::SetCompositableHost(CompositableHost* aHost) {
-  mImageHost = aHost;
+bool
+CanvasLayerComposite::SetCompositableHost(CompositableHost* aHost)
+{
+  switch (aHost->GetType()) {
+    case BUFFER_IMAGE_SINGLE:
+    case BUFFER_IMAGE_BUFFERED:
+    case COMPOSITABLE_IMAGE:
+      mImageHost = aHost;
+      return true;
+    default:
+      return false;
+  }
+
 }
 
 Layer*
@@ -70,13 +81,7 @@ CanvasLayerComposite::RenderLayer(const nsIntRect& aClipRect)
 
 #ifdef MOZ_DUMP_PAINTING
   if (gfxUtils::sDumpPainting) {
-    RefPtr<gfx::DataSourceSurface> dSurf = mImageHost->GetAsSurface();
-    gfxPlatform *platform = gfxPlatform::GetPlatform();
-    RefPtr<gfx::DrawTarget> dt = platform->CreateDrawTargetForData(dSurf->GetData(),
-                                                                   dSurf->GetSize(),
-                                                                   dSurf->Stride(),
-                                                                   dSurf->GetFormat());
-    nsRefPtr<gfxASurface> surf = platform->GetThebesSurfaceForDrawTarget(dt);
+    RefPtr<gfx::DataSourceSurface> surf = mImageHost->GetAsSurface();
     WriteSnapshotToDumpFile(this, surf);
   }
 #endif
@@ -86,9 +91,9 @@ CanvasLayerComposite::RenderLayer(const nsIntRect& aClipRect)
   // Bug 691354
   // Using the LINEAR filter we get unexplained artifacts.
   // Use NEAREST when no scaling is required.
-  gfxMatrix matrix;
+  Matrix matrix;
   bool is2D = GetEffectiveTransform().Is2D(&matrix);
-  if (is2D && !matrix.HasNonTranslationOrFlip()) {
+  if (is2D && !ThebesMatrix(matrix).HasNonTranslationOrFlip()) {
     filter = GraphicsFilter::FILTER_NEAREST;
   }
 #endif
@@ -96,13 +101,11 @@ CanvasLayerComposite::RenderLayer(const nsIntRect& aClipRect)
   EffectChain effectChain(this);
 
   LayerManagerComposite::AutoAddMaskEffect autoMaskEffect(mMaskLayer, effectChain);
-  gfx::Matrix4x4 transform;
-  ToMatrix4x4(GetEffectiveTransform(), transform);
   gfx::Rect clipRect(aClipRect.x, aClipRect.y, aClipRect.width, aClipRect.height);
 
   mImageHost->Composite(effectChain,
                         GetEffectiveOpacity(),
-                        transform,
+                        GetEffectiveTransform(),
                         gfx::ToFilter(filter),
                         clipRect);
 }

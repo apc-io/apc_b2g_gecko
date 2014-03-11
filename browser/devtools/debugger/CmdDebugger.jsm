@@ -9,7 +9,8 @@ const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
 this.EXPORTED_SYMBOLS = [ ];
 
-Cu.import("resource://gre/modules/devtools/gcli.jsm");
+let devtools = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools;
+var gcli = devtools.require('gcli/index');
 Cu.import('resource://gre/modules/XPCOMUtils.jsm');
 
 XPCOMUtils.defineLazyModuleGetter(this, "gDevTools",
@@ -41,7 +42,7 @@ function getAllBreakpoints(dbg) {
     for (let { attachment: breakpoint } of source) {
       breakpoints.push({
         url: source.value,
-        label: source.label + ":" + breakpoint.line,
+        label: source.attachment.label + ":" + breakpoint.line,
         lineNumber: breakpoint.line,
         lineText: breakpoint.text,
         truncatedLineText: trim(breakpoint.text, MAX_LINE_TEXT_LENGTH, "end")

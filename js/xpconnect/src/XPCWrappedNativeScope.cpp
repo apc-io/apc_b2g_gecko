@@ -1,11 +1,13 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
+ * vim: set ts=8 sw=4 et tw=78:
+ * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* Class used to manage the wrapped native objects within a JS scope. */
 
 #include "xpcprivate.h"
+#include "XPCWrapper.h"
 #include "nsContentUtils.h"
 #include "nsCycleCollectionNoteRootCallback.h"
 #include "nsPrincipal.h"
@@ -131,27 +133,58 @@ JSObject*
 XPCWrappedNativeScope::GetComponentsJSObject()
 {
     AutoJSContext cx;
-    if (!mComponents)
-        mComponents = new nsXPCComponents(this);
+    if (!mComponents) {
+        nsIPrincipal *p = GetPrincipal();
+        bool system = XPCWrapper::GetSecurityManager()->IsSystemPrincipal(p);
+        mComponents = system ? new nsXPCComponents(this)
+                             : new nsXPCComponentsBase(this);
+    }
 
-    AutoMarkingNativeInterfacePtr iface(cx);
-    iface = XPCNativeInterface::GetNewOrUsed(&NS_GET_IID(nsIXPCComponents));
-    if (!iface)
+    RootedValue val(cx);
+    xpcObjectHelper helper(mComponents);
+    bool ok = XPCConvert::NativeInterface2JSObject(&val, nullptr, helper,
+                                                   nullptr, nullptr, false,
+                                                   nullptr);
+    if (NS_WARN_IF(!ok))
         return nullptr;
 
-    nsCOMPtr<nsIXPCComponents> cholder(mComponents);
-    xpcObjectHelper helper(cholder);
-    nsCOMPtr<XPCWrappedNative> wrapper;
-    XPCWrappedNative::GetNewOrUsed(helper, this, iface, getter_AddRefs(wrapper));
-    if (!wrapper)
+    if (NS_WARN_IF(!val.isObject()))
         return nullptr;
 
     // The call to wrap() here is necessary even though the object is same-
     // compartment, because it applies our security wrapper.
-    JS::RootedObject obj(cx, wrapper->GetFlatJSObject());
-    if (!JS_WrapObject(cx, &obj))
+    JS::RootedObject obj(cx, &val.toObject());
+    if (NS_WARN_IF(!JS_WrapObject(cx, &obj)))
         return nullptr;
     return obj;
+}
+
+void
+XPCWrappedNativeScope::ForcePrivilegedComponents()
+{
+    // This may only be called on unprivileged scopes during automation where
+    // we allow insecure things.
+    MOZ_RELEASE_ASSERT(Preferences::GetBool("security.turn_off_all_security_so_"
+                                            "that_viruses_can_take_over_this_"
+                                            "computer"));
+    nsCOMPtr<nsIXPCComponents> c = do_QueryInterface(mComponents);
+    if (!c)
+        mComponents = new nsXPCComponents(this);
+}
+
+bool
+XPCWrappedNativeScope::AttachComponentsObject(JSContext* aCx)
+{
+    RootedObject components(aCx, GetComponentsJSObject());
+    if (!components)
+        return false;
+
+    RootedObject global(aCx, GetGlobalJSObject());
+    MOZ_ASSERT(js::IsObjectInContextCompartment(global, aCx));
+
+    RootedId id(aCx, XPCJSRuntime::Get()->GetStringID(XPCJSRuntime::IDX_COMPONENTS));
+    return JS_DefinePropertyById(aCx, global, id, ObjectValue(*components),
+                                 nullptr, nullptr, JSPROP_PERMANENT | JSPROP_READONLY);
 }
 
 JSObject*
@@ -268,6 +301,9 @@ XPCWrappedNativeScope::~XPCWrappedNativeScope()
     // XXX we should assert that we are dead or that xpconnect has shutdown
     // XXX might not want to do this at xpconnect shutdown time???
     mComponents = nullptr;
+
+    if (mXrayExpandos.initialized())
+        mXrayExpandos.destroy();
 
     JSRuntime *rt = XPCJSRuntime::Get()->Runtime();
     mXBLScope.finalize(rt);
@@ -564,6 +600,27 @@ XPCWrappedNativeScope::RemoveWrappedNativeProtos()
 {
     mWrappedNativeProtoMap->Enumerate(WNProtoRemover,
                                       GetRuntime()->GetDetachedWrappedNativeProtoMap());
+}
+
+JSObject *
+XPCWrappedNativeScope::GetExpandoChain(JSObject *target)
+{
+    MOZ_ASSERT(GetObjectScope(target) == this);
+    if (!mXrayExpandos.initialized())
+        return nullptr;
+    return mXrayExpandos.lookup(target);
+}
+
+bool
+XPCWrappedNativeScope::SetExpandoChain(JSContext *cx, HandleObject target,
+                                       HandleObject chain)
+{
+    MOZ_ASSERT(GetObjectScope(target) == this);
+    MOZ_ASSERT(js::IsObjectInContextCompartment(target, cx));
+    MOZ_ASSERT_IF(chain, GetObjectScope(chain) == this);
+    if (!mXrayExpandos.initialized() && !mXrayExpandos.init(cx))
+        return false;
+    return mXrayExpandos.put(target, chain);
 }
 
 /***************************************************************************/

@@ -70,7 +70,7 @@ static nsresult MacErrorMapper(OSErr inErr);
 #endif
 
 #include "nsNativeCharsetUtils.h"
-#include "nsTraceRefcntImpl.h"
+#include "nsTraceRefcnt.h"
 #include "nsHashKeys.h"
 
 using namespace mozilla;
@@ -382,7 +382,7 @@ nsLocalFile::OpenNSPRFileDesc(int32_t flags, int32_t mode, PRFileDesc **_retval)
         PR_Delete(mPath.get());
     }
 
-#if defined(LINUX) && !defined(ANDROID)
+#if defined(HAVE_POSIX_FADVISE)
     if (flags & OS_READAHEAD) {
         posix_fadvise(PR_FileDesc2NativeHandle(*_retval), 0, 0,
                       POSIX_FADV_SEQUENTIAL);
@@ -1440,10 +1440,10 @@ nsLocalFile::IsExecutable(bool *_retval)
     else
         GetPath(path);
 
-    int32_t dotIdx = path.RFindChar(PRUnichar('.'));
+    int32_t dotIdx = path.RFindChar(char16_t('.'));
     if (dotIdx != kNotFound) {
         // Convert extension to lower case.
-        PRUnichar *p = path.BeginWriting();
+        char16_t *p = path.BeginWriting();
         for(p += dotIdx + 1; *p; p++)
             *p +=  (*p >= L'A' && *p <= L'Z') ? 'a' - 'A' : 0; 
         
@@ -1737,13 +1737,13 @@ nsLocalFile::Load(PRLibrary **_retval)
         return NS_ERROR_INVALID_ARG;
 
 #ifdef NS_BUILD_REFCNT_LOGGING
-    nsTraceRefcntImpl::SetActivityIsLegal(false);
+    nsTraceRefcnt::SetActivityIsLegal(false);
 #endif
 
     *_retval = PR_LoadLibrary(mPath.get());
 
 #ifdef NS_BUILD_REFCNT_LOGGING
-    nsTraceRefcntImpl::SetActivityIsLegal(true);
+    nsTraceRefcnt::SetActivityIsLegal(true);
 #endif
 
     if (!*_retval)
@@ -1892,8 +1892,7 @@ nsLocalFile::Launch()
     if (NS_SUCCEEDED(rv))
         rv = mimeService->GetTypeFromFile(this, type);
 
-    nsDependentCString fileUri = NS_LITERAL_CSTRING("file://");
-    fileUri.Append(mPath);
+    nsAutoCString fileUri = NS_LITERAL_CSTRING("file://") + mPath;
     return GeckoAppShell::OpenUriExternal(NS_ConvertUTF8toUTF16(fileUri), NS_ConvertUTF8toUTF16(type)) ? NS_OK : NS_ERROR_FAILURE;
 #elif defined(MOZ_WIDGET_COCOA)
     CFURLRef url;
@@ -2001,6 +2000,43 @@ nsLocalFile::MoveTo(nsIFile *newParentDir, const nsAString &newName)
 {
     SET_UCS_2ARGS_2(MoveToNative, newParentDir, newName);
 }
+
+NS_IMETHODIMP
+nsLocalFile::RenameTo(nsIFile *newParentDir, const nsAString &newName)
+{
+  nsresult rv;
+
+  // check to make sure that this has been initialized properly
+  CHECK_mPath();
+
+  // check to make sure that we have a new parent
+  nsAutoCString newPathName;
+  nsAutoCString newNativeName;
+  rv = NS_CopyUnicodeToNative(newName, newNativeName);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  rv = GetNativeTargetPathName(newParentDir, newNativeName, newPathName);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  // try for atomic rename
+  if (rename(mPath.get(), newPathName.get()) < 0) {
+#ifdef VMS
+    if (errno == EXDEV || errno == ENXIO) {
+#else
+    if (errno == EXDEV) {
+#endif
+      rv = NS_ERROR_FILE_ACCESS_DENIED;
+    } else {
+      rv = NSRESULT_FOR_ERRNO();
+    }
+  }
+
+  return rv;
+}
+
 nsresult
 nsLocalFile::GetTarget(nsAString &_retval)
 {   

@@ -110,6 +110,8 @@ class BaselineFrame
     inline void pushOnScopeChain(ScopeObject &scope);
     inline void popOffScopeChain();
 
+    inline void popWith(JSContext *cx);
+
     CalleeToken calleeToken() const {
         uint8_t *pointer = (uint8_t *)this + Size() + offsetOfCalleeToken();
         return *(CalleeToken *)pointer;
@@ -149,9 +151,9 @@ class BaselineFrame
         return (Value *)this - (slot + 1);
     }
 
-    Value &unaliasedVar(unsigned i, MaybeCheckAliasing checkAliasing = CHECK_ALIASING) const {
+    Value &unaliasedVar(uint32_t i, MaybeCheckAliasing checkAliasing = CHECK_ALIASING) const {
+        JS_ASSERT(i < script()->nfixedvars());
         JS_ASSERT_IF(checkAliasing, !script()->varIsAliased(i));
-        JS_ASSERT(i < script()->nfixed());
         return *valueSlot(i);
     }
 
@@ -169,7 +171,8 @@ class BaselineFrame
         return argv()[i];
     }
 
-    Value &unaliasedLocal(unsigned i, MaybeCheckAliasing checkAliasing = CHECK_ALIASING) const {
+    Value &unaliasedLocal(uint32_t i, MaybeCheckAliasing checkAliasing = CHECK_ALIASING) const {
+        JS_ASSERT(i < script()->nfixed());
 #ifdef DEBUG
         CheckLocalUnaliased(checkAliasing, script(), i);
 #endif
@@ -182,7 +185,7 @@ class BaselineFrame
                              offsetOfNumActualArgs());
     }
     unsigned numFormalArgs() const {
-        return script()->function()->nargs();
+        return script()->functionNonDelazifying()->nargs();
     }
     Value &thisValue() const {
         return *(Value *)(reinterpret_cast<const uint8_t *>(this) +
@@ -200,12 +203,12 @@ class BaselineFrame
     bool hasReturnValue() const {
         return flags_ & HAS_RVAL;
     }
-    Value *returnValue() {
-        return reinterpret_cast<Value *>(&loReturnValue_);
+    MutableHandleValue returnValue() {
+        return MutableHandleValue::fromMarkedLocation(reinterpret_cast<Value *>(&loReturnValue_));
     }
     void setReturnValue(const Value &v) {
         flags_ |= HAS_RVAL;
-        *returnValue() = v;
+        returnValue().set(v);
     }
     inline Value *addressOfReturnValue() {
         return reinterpret_cast<Value *>(&loReturnValue_);
@@ -293,7 +296,7 @@ class BaselineFrame
         flags_ |= OVER_RECURSED;
     }
 
-    void trace(JSTracer *trc);
+    void trace(JSTracer *trc, IonFrameIterator &frame);
 
     bool isFunctionFrame() const {
         return CalleeTokenIsFunction(calleeToken());

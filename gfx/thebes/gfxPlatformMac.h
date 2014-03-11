@@ -25,8 +25,10 @@ public:
         return (gfxPlatformMac*) gfxPlatform::GetPlatform();
     }
 
-    already_AddRefed<gfxASurface> CreateOffscreenSurface(const gfxIntSize& size,
-                                                         gfxContentType contentType);
+    virtual already_AddRefed<gfxASurface>
+      CreateOffscreenSurface(const IntSize& size,
+                             gfxContentType contentType) MOZ_OVERRIDE;
+
     virtual already_AddRefed<gfxASurface>
       CreateOffscreenImageSurface(const gfxIntSize& aSize,
                                   gfxContentType aContentType);
@@ -82,7 +84,7 @@ public:
     virtual already_AddRefed<gfxASurface>
     CreateThebesSurfaceAliasForDrawTarget_hack(mozilla::gfx::DrawTarget *aTarget);
 private:
-    virtual qcms_profile* GetPlatformCMSOutputProfile();
+    virtual void GetPlatformCMSOutputProfile(void* &mem, size_t &size);
 
     virtual bool SupportsOffMainThreadCompositing();
 

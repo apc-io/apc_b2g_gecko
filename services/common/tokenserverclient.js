@@ -34,6 +34,12 @@ this.TokenServerClientError = function TokenServerClientError(message) {
 }
 TokenServerClientError.prototype = new Error();
 TokenServerClientError.prototype.constructor = TokenServerClientError;
+TokenServerClientError.prototype._toStringFields = function() {
+  return {message: this.message};
+}
+TokenServerClientError.prototype.toString = function() {
+  return this.name + "(" + JSON.stringify(this._toStringFields()) + ")";
+}
 
 /**
  * Represents a TokenServerClient error that occurred in the network layer.
@@ -49,6 +55,9 @@ this.TokenServerClientNetworkError =
 TokenServerClientNetworkError.prototype = new TokenServerClientError();
 TokenServerClientNetworkError.prototype.constructor =
   TokenServerClientNetworkError;
+TokenServerClientNetworkError.prototype._toStringFields = function() {
+  return {error: this.error};
+}
 
 /**
  * Represents a TokenServerClient error that occurred on the server.
@@ -82,6 +91,7 @@ TokenServerClientNetworkError.prototype.constructor =
  */
 this.TokenServerClientServerError =
  function TokenServerClientServerError(message, cause="general") {
+  this.now = new Date().toISOString(); // may be useful to diagnose time-skew issues.
   this.name = "TokenServerClientServerError";
   this.message = message || "Server error.";
   this.cause = cause;
@@ -89,6 +99,20 @@ this.TokenServerClientServerError =
 TokenServerClientServerError.prototype = new TokenServerClientError();
 TokenServerClientServerError.prototype.constructor =
   TokenServerClientServerError;
+
+TokenServerClientServerError.prototype._toStringFields = function() {
+  let fields = {
+    now: this.now,
+    message: this.message,
+    cause: this.cause,
+  };
+  if (this.response) {
+    fields.response_body = this.response.body;
+    fields.response_headers = this.response.headers;
+    fields.response_status = this.response.status;
+  }
+  return fields;
+};
 
 /**
  * Represents a client to the Token Server.
@@ -206,8 +230,7 @@ TokenServerClient.prototype = {
    *         (bool) Whether to send acceptance to service conditions.
    */
   getTokenFromBrowserIDAssertion:
-    function getTokenFromBrowserIDAssertion(url, assertion, cb,
-                                            conditionsAccepted=false) {
+    function getTokenFromBrowserIDAssertion(url, assertion, cb, addHeaders={}) {
     if (!url) {
       throw new TokenServerClientError("url argument is not valid.");
     }
@@ -222,13 +245,12 @@ TokenServerClient.prototype = {
 
     this._log.debug("Beginning BID assertion exchange: " + url);
 
-    let req = new RESTRequest(url);
+    let req = this.newRESTRequest(url);
     req.setHeader("Accept", "application/json");
-    req.setHeader("Authorization", "Browser-ID " + assertion);
+    req.setHeader("Authorization", "BrowserID " + assertion);
 
-    if (conditionsAccepted) {
-      // Value is irrelevant.
-      req.setHeader("X-Conditions-Accepted", "1");
+    for (let header in addHeaders) {
+      req.setHeader(header, addHeaders[header]);
     }
 
     let client = this;
@@ -326,8 +348,10 @@ TokenServerClient.prototype = {
         error.message = "Malformed request.";
         error.cause = "malformed-request";
       } else if (response.status == 401) {
+        // Cause can be invalid-credentials, invalid-timestamp, or
+        // invalid-generation.
         error.message = "Authentication failed.";
-        error.cause = "invalid-credentials";
+        error.cause = result.status;
       }
 
       // 403 should represent a "condition acceptance needed" response.
@@ -379,5 +403,10 @@ TokenServerClient.prototype = {
       uid:      result.uid,
       duration: result.duration,
     });
+  },
+
+  // override points for testing.
+  newRESTRequest: function(url) {
+    return new RESTRequest(url);
   }
 };

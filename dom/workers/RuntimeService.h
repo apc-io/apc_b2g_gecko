@@ -37,11 +37,11 @@ private:
   {
     WorkerPrivate* mWorkerPrivate;
     nsCString mScriptSpec;
-    nsString mName;
+    nsCString mName;
 
     SharedWorkerInfo(WorkerPrivate* aWorkerPrivate,
                      const nsACString& aScriptSpec,
-                     const nsAString& aName)
+                     const nsACString& aName)
     : mWorkerPrivate(aWorkerPrivate), mScriptSpec(aScriptSpec), mName(aName)
     { }
   };
@@ -100,7 +100,7 @@ private:
   static bool sDefaultPreferences[WORKERPREF_COUNT];
 
 public:
-  struct NavigatorStrings
+  struct NavigatorProperties
   {
     nsString mAppName;
     nsString mAppVersion;
@@ -109,12 +109,12 @@ public:
   };
 
 private:
-  NavigatorStrings mNavigatorStrings;
+  NavigatorProperties mNavigatorProperties;
 
   // True when the observer service holds a reference to this object.
   bool mObserved;
   bool mShuttingDown;
-  bool mNavigatorStringsLoaded;
+  bool mNavigatorPropertiesLoaded;
 
 public:
   NS_DECL_ISUPPORTS
@@ -144,16 +144,16 @@ public:
   nsresult
   CreateSharedWorker(const GlobalObject& aGlobal,
                      const nsAString& aScriptURL,
-                     const nsAString& aName,
+                     const nsACString& aName,
                      SharedWorker** aSharedWorker);
 
   void
   ForgetSharedWorker(WorkerPrivate* aWorkerPrivate);
 
-  const NavigatorStrings&
-  GetNavigatorStrings() const
+  const NavigatorProperties&
+  GetNavigatorProperties() const
   {
-    return mNavigatorStrings;
+    return mNavigatorProperties;
   }
 
   void
@@ -174,16 +174,19 @@ public:
   }
 
   static void
-  SetDefaultJSContextOptions(const JS::ContextOptions& aContentOptions,
-                             const JS::ContextOptions& aChromeOptions)
+  SetDefaultRuntimeAndContextOptions(
+                                    const JS::RuntimeOptions& aRuntimeOptions,
+                                    const JS::ContextOptions& aContentCxOptions,
+                                    const JS::ContextOptions& aChromeCxOptions)
   {
     AssertIsOnMainThread();
-    sDefaultJSSettings.content.contextOptions = aContentOptions;
-    sDefaultJSSettings.chrome.contextOptions = aChromeOptions;
+    sDefaultJSSettings.runtimeOptions = aRuntimeOptions;
+    sDefaultJSSettings.content.contextOptions = aContentCxOptions;
+    sDefaultJSSettings.chrome.contextOptions = aChromeCxOptions;
   }
 
   void
-  UpdateAllWorkerJSContextOptions();
+  UpdateAllWorkerRuntimeAndContextOptions();
 
   void
   UpdateAllWorkerPreference(WorkerPreference aPref, bool aValue);
@@ -223,21 +226,14 @@ public:
   UpdateAllWorkerGCZeal();
 #endif
 
-  static void
-  SetDefaultJITHardening(bool aJITHardening)
-  {
-    AssertIsOnMainThread();
-    sDefaultJSSettings.jitHardening = aJITHardening;
-  }
-
-  void
-  UpdateAllWorkerJITHardening(bool aJITHardening);
-
   void
   GarbageCollectAllWorkers(bool aShrinking);
 
   void
   CycleCollectAllWorkers();
+
+  void
+  SendOfflineStatusChangeEventToAllWorkers(bool aIsOffline);
 
 private:
   RuntimeService();

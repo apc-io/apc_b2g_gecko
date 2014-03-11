@@ -21,7 +21,8 @@ namespace js {
 
 inline
 Bindings::Bindings()
-    : callObjShape_(nullptr), bindingArrayAndFlag_(TEMPORARY_STORAGE_BIT), numArgs_(0), numVars_(0)
+    : callObjShape_(nullptr), bindingArrayAndFlag_(TEMPORARY_STORAGE_BIT),
+      numArgs_(0), numBlockScoped_(0), numVars_(0)
 {}
 
 inline
@@ -45,7 +46,28 @@ void
 SetFrameArgumentsObject(JSContext *cx, AbstractFramePtr frame,
                         HandleScript script, JSObject *argsobj);
 
+inline JSFunction *
+LazyScript::functionDelazifying(JSContext *cx) const
+{
+    if (function_ && !function_->getOrCreateScript(cx))
+        return nullptr;
+    return function_;
+}
+
 } // namespace js
+
+inline JSFunction *
+JSScript::functionDelazifying() const
+{
+    if (function_ && function_->isInterpretedLazy()) {
+        function_->setUnlazifiedScript(const_cast<JSScript *>(this));
+        // If this script has a LazyScript, make sure the LazyScript has a
+        // reference to the script when delazifying its canonical function.
+        if (lazyScript && !lazyScript->maybeScript())
+            lazyScript->initScript(const_cast<JSScript *>(this));
+    }
+    return function_;
+}
 
 inline void
 JSScript::setFunction(JSFunction *fun)
@@ -54,13 +76,19 @@ JSScript::setFunction(JSFunction *fun)
     function_ = fun;
 }
 
+inline void
+JSScript::ensureNonLazyCanonicalFunction(JSContext *cx)
+{
+    // Infallibly delazify the canonical script.
+    if (function_ && function_->isInterpretedLazy())
+        functionDelazifying();
+}
+
 inline JSFunction *
 JSScript::getFunction(size_t index)
 {
     JSFunction *fun = &getObject(index)->as<JSFunction>();
-#ifdef DEBUG
     JS_ASSERT_IF(fun->isNative(), IsAsmJSModuleNative(fun->native()));
-#endif
     return fun;
 }
 
@@ -74,8 +102,8 @@ JSScript::getCallerFunction()
 inline JSFunction *
 JSScript::functionOrCallerFunction()
 {
-    if (function())
-        return function();
+    if (functionNonDelazifying())
+        return functionNonDelazifying();
     if (savedCallerFun())
         return getCallerFunction();
     return nullptr;
@@ -91,6 +119,13 @@ JSScript::getRegExp(size_t index)
     return (js::RegExpObject *) obj;
 }
 
+inline js::RegExpObject *
+JSScript::getRegExp(jsbytecode *pc)
+{
+    JS_ASSERT(containsPC(pc) && containsPC(pc + sizeof(uint32_t)));
+    return getRegExp(GET_UINT32_INDEX(pc));
+}
+
 inline js::GlobalObject &
 JSScript::global() const
 {
@@ -98,7 +133,6 @@ JSScript::global() const
      * A JSScript always marks its compartment's global (via bindings) so we
      * can assert that maybeGlobal is non-null here.
      */
-    js::AutoThreadSafeAccess ts(this);
     return *compartment()->maybeGlobal();
 }
 
@@ -109,14 +143,16 @@ JSScript::principals()
 }
 
 inline JSFunction *
-JSScript::originalFunction() const {
+JSScript::donorFunction() const
+{
     if (!isCallsiteClone())
         return nullptr;
     return &enclosingScopeOrOriginalFunction_->as<JSFunction>();
 }
 
 inline void
-JSScript::setIsCallsiteClone(JSObject *fun) {
+JSScript::setIsCallsiteClone(JSObject *fun)
+{
     JS_ASSERT(shouldCloneAtCallsite());
     shouldCloneAtCallsite_ = false;
     isCallsiteClone_ = true;
@@ -126,14 +162,12 @@ JSScript::setIsCallsiteClone(JSObject *fun) {
 }
 
 inline void
-JSScript::setBaselineScript(JSContext *maybecx, js::jit::BaselineScript *baselineScript) {
+JSScript::setBaselineScript(JSContext *maybecx, js::jit::BaselineScript *baselineScript)
+{
 #ifdef JS_ION
     if (hasBaselineScript())
         js::jit::BaselineScript::writeBarrierPre(tenuredZone(), baseline);
 #endif
-    mozilla::Maybe<js::AutoLockForCompilation> lock;
-    if (maybecx)
-        lock.construct(maybecx);
     baseline = baselineScript;
     updateBaselineOrIonRaw();
 }

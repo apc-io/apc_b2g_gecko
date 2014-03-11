@@ -16,6 +16,7 @@ let { Task } = Cu.import("resource://gre/modules/Task.jsm", {});
 let { Promise: promise } = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js", {});
 let { gDevTools } = Cu.import("resource:///modules/devtools/gDevTools.jsm", {});
 let { devtools } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
+let { require } = devtools;
 let { DevToolsUtils } = Cu.import("resource://gre/modules/devtools/DevToolsUtils.jsm", {});
 let { BrowserToolboxProcess } = Cu.import("resource:///modules/devtools/ToolboxProcess.jsm", {});
 let { DebuggerServer } = Cu.import("resource://gre/modules/devtools/dbg-server.jsm", {});
@@ -153,6 +154,7 @@ function getTabActorForUrl(aClient, aUrl) {
 }
 
 function getAddonActorForUrl(aClient, aUrl) {
+  info("Get addon actor for URL: " + aUrl);
   let deferred = promise.defer();
 
   aClient.listAddons(aResponse => {
@@ -234,6 +236,11 @@ function waitForSourceShown(aPanel, aUrl) {
       ok(true, "The correct source has been shown.");
     }
   });
+}
+
+function waitForEditorLocationSet(aPanel) {
+  return waitForDebuggerEvents(aPanel,
+                               aPanel.panelWin.EVENTS.EDITOR_LOCATION_SET);
 }
 
 function ensureSourceIs(aPanel, aUrl, aWaitFlag = false) {
@@ -410,7 +417,7 @@ function ensureThreadClientState(aPanel, aState) {
 
 function navigateActiveTabTo(aPanel, aUrl, aWaitForEventName, aEventRepeat) {
   let finished = waitForDebuggerEvents(aPanel, aWaitForEventName, aEventRepeat);
-  let activeTab = aPanel.panelWin.gClient.activeTab;
+  let activeTab = aPanel.panelWin.DebuggerController._target.activeTab;
   aUrl ? activeTab.navigateTo(aUrl) : activeTab.reload();
   return finished;
 }
@@ -506,9 +513,11 @@ function initChromeDebugger(aOnClose) {
 
 function prepareDebugger(aDebugger) {
   if ("target" in aDebugger) {
-    let variables = aDebugger.panelWin.DebuggerView.Variables;
-    variables.lazyEmpty = false;
-    variables.lazySearch = false;
+    let view = aDebugger.panelWin.DebuggerView;
+    view.Variables.lazyEmpty = false;
+    view.Variables.lazySearch = false;
+    view.FilteredSources._autoSelectFirstItem = true;
+    view.FilteredFunctions._autoSelectFirstItem = true;
   } else {
     // Nothing to do here yet.
   }
@@ -653,3 +662,14 @@ function filterTraces(aPanel, f) {
   return Array.filter(traces, f);
 }
 
+function attachAddonActorForUrl(aClient, aUrl) {
+  let deferred = promise.defer();
+
+  getAddonActorForUrl(aClient, aUrl).then(aGrip => {
+    aClient.attachAddon(aGrip.actor, aResponse => {
+      deferred.resolve([aGrip, aResponse]);
+    });
+  });
+
+  return deferred.promise;
+}

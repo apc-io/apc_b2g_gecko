@@ -183,6 +183,7 @@ destroying the MediaDecoder object.
 #include "nsIObserver.h"
 #include "nsAutoPtr.h"
 #include "MediaResource.h"
+#include "mozilla/gfx/Rect.h"
 #include "mozilla/ReentrantMonitor.h"
 #include "mozilla/TimeStamp.h"
 #include "MediaStreamGraph.h"
@@ -350,12 +351,12 @@ public:
   // replaying after the input as ended. In the latter case, the new source is
   // not connected to streams created by captureStreamUntilEnded.
 
-  struct DecodedStreamData MOZ_FINAL : public MainThreadMediaStreamListener {
+  struct DecodedStreamData {
+    typedef gfx::IntSize IntSize;
+
     DecodedStreamData(MediaDecoder* aDecoder,
                       int64_t aInitialTime, SourceMediaStream* aStream);
     ~DecodedStreamData();
-
-    virtual void NotifyMainThreadStateChanged() MOZ_OVERRIDE;
 
     StreamTime GetLastOutputTime() { return mListener->GetLastOutputTime(); }
     bool IsFinished() { return mListener->IsFinishedOnMainThread(); }
@@ -377,7 +378,7 @@ public:
     // The last video image sent to the stream. Useful if we need to replicate
     // the image.
     nsRefPtr<layers::Image> mLastVideoImage;
-    gfxIntSize mLastVideoImageDisplaySize;
+    IntSize mLastVideoImageDisplaySize;
     // This is set to true when the stream is initialized (audio and
     // video tracks added).
     bool mStreamInitialized;
@@ -400,8 +401,11 @@ public:
 
   class DecodedStreamGraphListener : public MediaStreamListener {
   public:
-    DecodedStreamGraphListener(MediaStream* aStream);
+    DecodedStreamGraphListener(MediaStream* aStream, DecodedStreamData* aData);
     virtual void NotifyOutput(MediaStreamGraph* aGraph, GraphTime aCurrentTime) MOZ_OVERRIDE;
+    virtual void NotifyFinished(MediaStreamGraph* aGraph) MOZ_OVERRIDE;
+
+    void DoNotifyFinished();
 
     StreamTime GetLastOutputTime()
     {
@@ -410,13 +414,18 @@ public:
     }
     void Forget()
     {
+      NS_ASSERTION(NS_IsMainThread(), "Main thread only");
+      mData = nullptr;
+
       MutexAutoLock lock(mMutex);
       mStream = nullptr;
     }
-    void SetFinishedOnMainThread(bool aFinished)
+    bool SetFinishedOnMainThread(bool aFinished)
     {
       MutexAutoLock lock(mMutex);
+      bool result = !mStreamFinishedOnMainThread;
       mStreamFinishedOnMainThread = aFinished;
+      return result;
     }
     bool IsFinishedOnMainThread()
     {
@@ -424,6 +433,9 @@ public:
       return mStreamFinishedOnMainThread;
     }
   private:
+    // Main thread only
+    DecodedStreamData* mData;
+
     Mutex mMutex;
     // Protected by mMutex
     nsRefPtr<MediaStream> mStream;
@@ -465,12 +477,6 @@ public:
    * Decoder monitor must be held.
    */
   void UpdateStreamBlockingForStateMachinePlaying();
-  /**
-   * Called when the state of mDecodedStream as visible on the main thread
-   * has changed. In particular we want to know when the stream has finished
-   * so we can call PlaybackEnded.
-   */
-  void NotifyDecodedStreamMainThreadStateChanged();
   nsTArray<OutputStreamData>& OutputStreams()
   {
     GetReentrantMonitor().AssertCurrentThreadIn();
@@ -639,7 +645,7 @@ public:
   // Returns the size, in bytes, of the heap memory used by the currently
   // queued decoded video and audio data.
   virtual int64_t VideoQueueMemoryInUse();
-  virtual int64_t AudioQueueMemoryInUse();
+  size_t SizeOfAudioQueue();
 
   VideoFrameContainer* GetVideoFrameContainer() MOZ_FINAL MOZ_OVERRIDE
   {
@@ -810,10 +816,8 @@ public:
   static bool IsRawEnabled();
 #endif
 
-#ifdef MOZ_OGG
   static bool IsOggEnabled();
   static bool IsOpusEnabled();
-#endif
 
 #ifdef MOZ_WAVE
   static bool IsWaveEnabled();
@@ -889,7 +893,6 @@ public:
 
     FrameStatistics() :
         mReentrantMonitor("MediaDecoder::FrameStats"),
-        mTotalFrameDelay(0.0),
         mParsedFrames(0),
         mDecodedFrames(0),
         mPresentedFrames(0) {}
@@ -916,11 +919,6 @@ public:
       return mPresentedFrames;
     }
 
-    double GetTotalFrameDelay() {
-      ReentrantMonitorAutoEnter mon(mReentrantMonitor);
-      return mTotalFrameDelay;
-    }
-
     // Increments the parsed and decoded frame counters by the passed in counts.
     // Can be called on any thread.
     void NotifyDecodedFrames(uint32_t aParsed, uint32_t aDecoded) {
@@ -938,21 +936,10 @@ public:
       ++mPresentedFrames;
     }
 
-    // Tracks the sum of display delay.
-    // Can be called on any thread.
-    void NotifyFrameDelay(double aFrameDelay) {
-      ReentrantMonitorAutoEnter mon(mReentrantMonitor);
-      mTotalFrameDelay += aFrameDelay;
-    }
-
   private:
 
     // ReentrantMonitor to protect access of playback statistics.
     ReentrantMonitor mReentrantMonitor;
-
-    // Sum of displayed frame delays.
-    // Access protected by mReentrantMonitor.
-    double mTotalFrameDelay;
 
     // Number of frames parsed and demuxed from media.
     // Access protected by mReentrantMonitor.
@@ -1133,10 +1120,6 @@ protected:
 
   // True if the stream is infinite (e.g. a webradio).
   bool mInfiniteStream;
-
-  // True if NotifyDecodedStreamMainThreadStateChanged should retrigger
-  // PlaybackEnded when mDecodedStream->mStream finishes.
-  bool mTriggerPlaybackEndedWhenSourceStreamFinishes;
 
   // Start timer to update download progress information.
   nsresult StartProgress();

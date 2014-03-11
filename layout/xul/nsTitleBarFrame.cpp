@@ -55,7 +55,7 @@ nsTitleBarFrame::BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
   nsBoxFrame::BuildDisplayListForChildren(aBuilder, aDirtyRect, aLists);
 }
 
-NS_IMETHODIMP
+nsresult
 nsTitleBarFrame::HandleEvent(nsPresContext* aPresContext,
                              WidgetGUIEvent* aEvent,
                              nsEventStatus* aEventStatus)
@@ -74,9 +74,7 @@ nsTitleBarFrame::HandleEvent(nsPresContext* aPresContext,
          // titlebar has no effect in non-chrome shells
          nsCOMPtr<nsIDocShellTreeItem> dsti = aPresContext->GetDocShell();
          if (dsti) {
-           int32_t type = -1;
-           if (NS_SUCCEEDED(dsti->GetItemType(&type)) &&
-               type == nsIDocShellTreeItem::typeChrome) {
+           if (dsti->ItemType() == nsIDocShellTreeItem::typeChrome) {
              // we're tracking.
              mTrackingMouseMove = true;
 

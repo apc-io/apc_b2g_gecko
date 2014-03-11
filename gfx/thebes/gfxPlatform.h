@@ -22,10 +22,6 @@
 
 #include "mozilla/layers/CompositorTypes.h"
 
-#ifdef XP_OS2
-#undef OS2EMX_PLAIN_CHAR
-#endif
-
 class gfxASurface;
 class gfxImageSurface;
 class gfxFont;
@@ -44,12 +40,19 @@ struct gfxRGBA;
 namespace mozilla {
 namespace gl {
 class GLContext;
+class SkiaGLGlue;
 }
 namespace gfx {
 class DrawTarget;
 class SourceSurface;
 class ScaledFont;
 class DrawEventRecorder;
+
+inline uint32_t
+BackendTypeBit(BackendType b)
+{
+  return 1 << uint8_t(b);
+}
 }
 }
 
@@ -91,13 +94,12 @@ enum eFontPrefLang {
     eFontPrefLang_Sinhala     = 28,
     eFontPrefLang_Tibetan     = 29,
 
-    eFontPrefLang_LangCount   = 30, // except Others and UserDefined.
+    eFontPrefLang_LangCount   = 30, // except Others.
 
     eFontPrefLang_Others      = 30, // x-unicode
-    eFontPrefLang_UserDefined = 31,
 
-    eFontPrefLang_CJKSet      = 32, // special code for CJK set
-    eFontPrefLang_AllCount    = 33
+    eFontPrefLang_CJKSet      = 31, // special code for CJK set
+    eFontPrefLang_AllCount    = 32
 };
 
 enum eCMSMode {
@@ -131,21 +133,21 @@ inline const char*
 GetBackendName(mozilla::gfx::BackendType aBackend)
 {
   switch (aBackend) {
-      case mozilla::gfx::BACKEND_DIRECT2D:
+      case mozilla::gfx::BackendType::DIRECT2D:
         return "direct2d";
-      case mozilla::gfx::BACKEND_COREGRAPHICS_ACCELERATED:
+      case mozilla::gfx::BackendType::COREGRAPHICS_ACCELERATED:
         return "quartz accelerated";
-      case mozilla::gfx::BACKEND_COREGRAPHICS:
+      case mozilla::gfx::BackendType::COREGRAPHICS:
         return "quartz";
-      case mozilla::gfx::BACKEND_CAIRO:
+      case mozilla::gfx::BackendType::CAIRO:
         return "cairo";
-      case mozilla::gfx::BACKEND_SKIA:
+      case mozilla::gfx::BackendType::SKIA:
         return "skia";
-      case mozilla::gfx::BACKEND_RECORDING:
+      case mozilla::gfx::BackendType::RECORDING:
         return "recording";
-      case mozilla::gfx::BACKEND_DIRECT2D1_1:
+      case mozilla::gfx::BackendType::DIRECT2D1_1:
         return "direct2d 1.1";
-      case mozilla::gfx::BACKEND_NONE:
+      case mozilla::gfx::BackendType::NONE:
         return "none";
   }
   MOZ_CRASH("Incomplete switch");
@@ -153,6 +155,8 @@ GetBackendName(mozilla::gfx::BackendType aBackend)
 
 class gfxPlatform {
 public:
+    typedef mozilla::gfx::IntSize IntSize;
+
     /**
      * Return a pointer to the current active platform.
      * This is a singleton; it contains mostly convenience
@@ -171,8 +175,9 @@ public:
      * Create an offscreen surface of the given dimensions
      * and image format.
      */
-    virtual already_AddRefed<gfxASurface> CreateOffscreenSurface(const gfxIntSize& size,
-                                                                 gfxContentType contentType) = 0;
+    virtual already_AddRefed<gfxASurface>
+      CreateOffscreenSurface(const IntSize& size,
+                             gfxContentType contentType) = 0;
 
     /**
      * Create an offscreen surface of the given dimensions and image format which
@@ -262,7 +267,7 @@ public:
      * supported for content drawing.
      */
     bool SupportsAzureContent() {
-      return GetContentBackend() != mozilla::gfx::BACKEND_NONE;
+      return GetContentBackend() != mozilla::gfx::BackendType::NONE;
     }
 
     /**
@@ -275,12 +280,11 @@ public:
     bool SupportsAzureContentForDrawTarget(mozilla::gfx::DrawTarget* aTarget);
 
     bool SupportsAzureContentForType(mozilla::gfx::BackendType aType) {
-      return (1 << aType) & mContentBackendBitmask;
+      return BackendTypeBit(aType) & mContentBackendBitmask;
     }
 
     virtual bool UseAcceleratedSkiaCanvas();
-
-    virtual void InitializeSkiaCaches();
+    virtual void InitializeSkiaCacheLimits();
 
     void GetAzureBackendInfo(mozilla::widget::InfoObject &aObj) {
       aObj.DefineProperty("AzureCanvasBackend", GetBackendName(mPreferredCanvasBackend));
@@ -297,7 +301,7 @@ public:
      * Font bits
      */
 
-    virtual void SetupClusterBoundaries(gfxTextRun *aTextRun, const PRUnichar *aString);
+    virtual void SetupClusterBoundaries(gfxTextRun *aTextRun, const char16_t *aString);
 
     /**
      * Fill aListOfFonts with the results of querying the list of font names
@@ -481,16 +485,6 @@ public:
         // platform-specific override, by default do nothing
     }
 
-    // Break large OMTC tiled thebes layer painting into small paints.
-    static bool UseProgressiveTilePainting();
-
-    // When a critical display-port is set, render the visible area outside of
-    // it into a buffer at a lower precision. Requires tiled buffers.
-    static bool UseLowPrecisionBuffer();
-
-    // Retrieve the resolution that a low precision buffer should render at.
-    static float GetLowPrecisionResolution();
-
     static bool OffMainThreadCompositingEnabled();
 
     /** Use gfxPlatform::GetPref* methods instead of direct calls to Preferences
@@ -498,26 +492,17 @@ public:
      * only once, and remain the same until restart.
      */
     static bool GetPrefLayersOffMainThreadCompositionEnabled();
-    static bool GetPrefLayersOffMainThreadCompositionForceEnabled();
-    static bool GetPrefLayersAccelerationForceEnabled();
-    static bool GetPrefLayersAccelerationDisabled();
-    static bool GetPrefLayersPreferOpenGL();
-    static bool GetPrefLayersPreferD3D9();
     static bool CanUseDirect3D9();
-    static int  GetPrefLayoutFrameRate();
-    static bool GetPrefLayersDump();
-    static bool GetPrefLayersScrollGraph();
-    static bool GetPrefLayersEnableTiles();
 
     static bool OffMainThreadCompositionRequired();
 
     /**
-     * Is it possible to use buffer rotation
+     * Is it possible to use buffer rotation.  Note that these
+     * check the preference, but also allow for the override to
+     * disable it using DisableBufferRotation.
      */
     static bool BufferRotationEnabled();
     static void DisableBufferRotation();
-
-    static bool ComponentAlphaEnabled();
 
     /**
      * Are we going to try color management?
@@ -570,8 +555,6 @@ public:
 
     virtual void FontsPrefsChanged(const char *aPref);
 
-    void OrientationSyncPrefsObserverChanged();
-
     int32_t GetBidiNumeralOption();
 
     /**
@@ -586,27 +569,20 @@ public:
     virtual gfxImageFormat OptimalFormatForContent(gfxContentType aContent);
 
     virtual gfxImageFormat GetOffscreenFormat()
-    { return gfxImageFormatRGB24; }
+    { return gfxImageFormat::RGB24; }
 
     /**
      * Returns a logger if one is available and logging is enabled
      */
     static PRLogModuleInfo* GetLog(eGfxLog aWhichLog);
 
-    bool WorkAroundDriverBugs() const { return mWorkAroundDriverBugs; }
-
     virtual int GetScreenDepth() const;
-
-    bool WidgetUpdateFlashing() const { return mWidgetUpdateFlashing; }
-
-    uint32_t GetOrientationSyncMillis() const;
 
     /**
      * Return the layer debugging options to use browser-wide.
      */
     mozilla::layers::DiagnosticTypes GetLayerDiagnosticTypes();
 
-    static bool DrawFrameCounter();
     static nsIntRect FrameCounterBounds() {
       int bits = 16;
       int sizeOfBit = 3;
@@ -621,6 +597,9 @@ public:
      */
     bool PreferMemoryOverShmem() const;
     bool UseDeprecatedTextures() const { return mLayersUseDeprecated; }
+
+    mozilla::gl::SkiaGLGlue* GetSkiaGLGlue();
+    void PurgeSkiaCache();
 
 protected:
     gfxPlatform();
@@ -676,6 +655,9 @@ protected:
       return mContentBackend;
     }
 
+    static mozilla::TemporaryRef<mozilla::gfx::ScaledFont>
+      GetScaledFontForFontWithCairoSkia(mozilla::gfx::DrawTarget* aTarget, gfxFont* aFont);
+
     int8_t  mAllowDownloadableFonts;
     int8_t  mGraphiteShapingEnabled;
     int8_t  mOpenTypeSVGEnabled;
@@ -703,9 +685,11 @@ private:
 
     static void CreateCMSOutputProfile();
 
+    static void GetCMSOutputProfileData(void *&mem, size_t &size);
+
     friend void RecordingPrefChanged(const char *aPrefName, void *aClosure);
 
-    virtual qcms_profile* GetPlatformCMSOutputProfile();
+    virtual void GetPlatformCMSOutputProfile(void *&mem, size_t &size);
 
     virtual bool SupportsOffMainThreadCompositing() { return true; }
 
@@ -714,7 +698,6 @@ private:
     nsTArray<uint32_t> mCJKPrefLangs;
     nsCOMPtr<nsIObserver> mSRGBOverrideObserver;
     nsCOMPtr<nsIObserver> mFontPrefsObserver;
-    nsCOMPtr<nsIObserver> mOrientationSyncPrefsObserver;
     nsCOMPtr<nsIObserver> mMemoryPressureObserver;
 
     // The preferred draw target backend to use for canvas
@@ -727,16 +710,11 @@ private:
     uint32_t mContentBackendBitmask;
 
     mozilla::widget::GfxInfoCollector<gfxPlatform> mAzureCanvasBackendCollector;
-    bool mWorkAroundDriverBugs;
 
     mozilla::RefPtr<mozilla::gfx::DrawEventRecorder> mRecorder;
-    bool mWidgetUpdateFlashing;
-    uint32_t mOrientationSyncMillis;
     bool mLayersPreferMemoryOverShmem;
     bool mLayersUseDeprecated;
-    bool mDrawLayerBorders;
-    bool mDrawTileBorders;
-    bool mDrawBigImageBorders;
+    mozilla::RefPtr<mozilla::gl::SkiaGLGlue> mSkiaGlue;
 };
 
 #endif /* GFX_PLATFORM_H */

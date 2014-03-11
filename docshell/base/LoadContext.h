@@ -48,9 +48,27 @@ public:
     , mAppId(aAppId)
     , mIsContent(aToCopy.mIsContent)
     , mUsePrivateBrowsing(aToCopy.mUsePrivateBrowsing)
+    , mUseRemoteTabs(aToCopy.mUseRemoteTabs)
     , mIsInBrowserElement(aInBrowser)
 #ifdef DEBUG
     , mIsNotNull(aToCopy.mIsNotNull)
+#endif
+  {}
+
+  LoadContext(dom::Element* aTopFrameElement,
+              uint32_t aAppId,
+              bool aIsContent,
+              bool aUsePrivateBrowsing,
+              bool aUseRemoteTabs,
+              bool aIsInBrowserElement)
+    : mTopFrameElement(do_GetWeakReference(aTopFrameElement))
+    , mAppId(aAppId)
+    , mIsContent(aIsContent)
+    , mUsePrivateBrowsing(aUsePrivateBrowsing)
+    , mUseRemoteTabs(aUseRemoteTabs)
+    , mIsInBrowserElement(aIsInBrowserElement)
+#ifdef DEBUG
+    , mIsNotNull(true)
 #endif
   {}
 
@@ -60,6 +78,7 @@ public:
     , mAppId(aAppId)
     , mIsContent(false)
     , mUsePrivateBrowsing(false)
+    , mUseRemoteTabs(false)
     , mIsInBrowserElement(false)
 #ifdef DEBUG
     , mIsNotNull(true)
@@ -71,6 +90,7 @@ private:
   uint32_t      mAppId;
   bool          mIsContent;
   bool          mUsePrivateBrowsing;
+  bool          mUseRemoteTabs;
   bool          mIsInBrowserElement;
 #ifdef DEBUG
   bool          mIsNotNull;

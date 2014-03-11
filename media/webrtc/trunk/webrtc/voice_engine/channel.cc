@@ -3799,8 +3799,11 @@ Channel::GetRemoteRTCPData(
     unsigned int& NTPLow,
     unsigned int& timestamp,
     unsigned int& playoutTimestamp,
+    unsigned int& sendPacketCount,
+    unsigned int& sendOctetCount,
     unsigned int* jitter,
-    unsigned short* fractionLost)
+    unsigned short* fractionLost,
+    unsigned int* cumulativeLost)
 {
     // --- Information from sender info in received Sender Reports
 
@@ -3814,11 +3817,11 @@ Channel::GetRemoteRTCPData(
         return -1;
     }
 
-    // We only utilize 12 out of 20 bytes in the sender info (ignores packet
-    // and octet count)
     NTPHigh = senderInfo.NTPseconds;
     NTPLow = senderInfo.NTPfraction;
     timestamp = senderInfo.RTPtimeStamp;
+    sendPacketCount = senderInfo.sendPacketCount;
+    sendOctetCount = senderInfo.sendOctetCount;
 
     WEBRTC_TRACE(kTraceStateInfo, kTraceVoice,
                  VoEId(_instanceId, _channelId),
@@ -3837,7 +3840,7 @@ Channel::GetRemoteRTCPData(
                  "GetRemoteRTCPData() => playoutTimestamp=%lu",
                  playout_timestamp_rtcp_);
 
-    if (NULL != jitter || NULL != fractionLost)
+    if (NULL != jitter || NULL != fractionLost || NULL != cumulativeLost)
     {
         // Get all RTCP receiver report blocks that have been received on this
         // channel. If we receive RTP packets from a remote source we know the
@@ -3881,6 +3884,14 @@ Channel::GetRemoteRTCPData(
                        VoEId(_instanceId, _channelId),
                        "GetRemoteRTCPData() => fractionLost = %lu",
                        *fractionLost);
+        }
+
+        if (cumulativeLost) {
+          *cumulativeLost = it->cumulativeLost;
+          WEBRTC_TRACE(kTraceStateInfo, kTraceVoice,
+                       VoEId(_instanceId, _channelId),
+                       "GetRemoteRTCPData() => cumulativeLost = %lu",
+                       *cumulativeLost);
         }
     }
     return 0;
@@ -3943,7 +3954,8 @@ int
 Channel::GetRTPStatistics(
         unsigned int& averageJitterMs,
         unsigned int& maxJitterMs,
-        unsigned int& discardedPackets)
+        unsigned int& discardedPackets,
+        unsigned int& cumulativeLost)
 {
     // The jitter statistics is updated for each received RTP packet and is
     // based on received packets.
@@ -3964,6 +3976,7 @@ Channel::GetRTPStatistics(
         // Scale RTP statistics given the current playout frequency
         maxJitterMs = statistics.max_jitter / (playoutFrequency / 1000);
         averageJitterMs = statistics.jitter / (playoutFrequency / 1000);
+        cumulativeLost = statistics.cumulative_lost;
     }
 
     discardedPackets = _numberOfDiscardedPackets;

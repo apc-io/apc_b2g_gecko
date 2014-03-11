@@ -60,7 +60,8 @@ public:
   size_t GetBufferSize();
 
   static uint8_t BytesPerPixel(gfxImageFormat aImageFormat);
-  already_AddRefed<gfxASurface> GetAsSurface();
+  already_AddRefed<gfxASurface> DeprecatedGetAsSurface();
+  virtual TemporaryRef<gfx::SourceSurface> GetAsSourceSurface() MOZ_OVERRIDE;
 
   /**
    * Setup the Surface descriptor to contain this image's shmem, while keeping
@@ -85,7 +86,7 @@ public:
 
   bool AllocateBuffer(nsIntSize aSize, gfxImageFormat aImageFormat);
 
-  TextureClient* GetTextureClient() MOZ_OVERRIDE { return nullptr; }
+  TextureClient* GetTextureClient(CompositableClient* aClient) MOZ_OVERRIDE { return nullptr; }
 
 protected:
   gfx::IntSize mSize;
@@ -109,7 +110,7 @@ public:
 
   virtual ISharedImage* AsSharedImage() MOZ_OVERRIDE { return this; }
 
-  virtual TextureClient* GetTextureClient() MOZ_OVERRIDE;
+  virtual TextureClient* GetTextureClient(CompositableClient* aClient) MOZ_OVERRIDE;
 
   virtual uint8_t* GetBuffer() MOZ_OVERRIDE;
 
@@ -117,7 +118,9 @@ public:
 
   size_t GetBufferSize();
 
-  already_AddRefed<gfxASurface> GetAsSurface();
+  already_AddRefed<gfxASurface> DeprecatedGetAsSurface();
+
+  TemporaryRef<gfx::SourceSurface> GetAsSourceSurface();
 
   bool Allocate(gfx::IntSize aSize, gfx::SurfaceFormat aFormat);
 private:

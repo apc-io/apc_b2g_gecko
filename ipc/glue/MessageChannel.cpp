@@ -8,8 +8,11 @@
 #include "mozilla/ipc/MessageChannel.h"
 #include "mozilla/ipc/ProtocolUtils.h"
 
+#include "mozilla/Assertions.h"
+#include "mozilla/DebugOnly.h"
+#include "mozilla/Move.h"
 #include "nsDebug.h"
-#include "nsTraceRefcnt.h"
+#include "nsISupportsImpl.h"
 
 // Undo the damage done by mozzconf.h
 #undef compress
@@ -41,6 +44,148 @@ const int32_t MessageChannel::kNoTimeout = INT32_MIN;
 // static
 bool MessageChannel::sIsPumpingMessages = false;
 
+enum Direction
+{
+    IN_MESSAGE,
+    OUT_MESSAGE
+};
+
+
+class MessageChannel::InterruptFrame
+{
+private:
+    enum Semantics
+    {
+        INTR_SEMS,
+        SYNC_SEMS,
+        ASYNC_SEMS
+    };
+
+public:
+    InterruptFrame(Direction direction, const Message* msg)
+      : mMessageName(strdup(msg->name())),
+        mMessageRoutingId(msg->routing_id()),
+        mMesageSemantics(msg->is_interrupt() ? INTR_SEMS :
+                          msg->is_sync() ? SYNC_SEMS :
+                          ASYNC_SEMS),
+        mDirection(direction),
+        mMoved(false)
+    {
+        MOZ_ASSERT(mMessageName);
+    }
+
+    InterruptFrame(InterruptFrame&& aOther)
+    {
+        MOZ_ASSERT(aOther.mMessageName);
+        mMessageName = aOther.mMessageName;
+        aOther.mMessageName = nullptr;
+        aOther.mMoved = true;
+
+        mMessageRoutingId = aOther.mMessageRoutingId;
+        mMesageSemantics = aOther.mMesageSemantics;
+        mDirection = aOther.mDirection;
+    }
+
+    ~InterruptFrame()
+    {
+        MOZ_ASSERT_IF(!mMessageName, mMoved);
+
+        if (mMessageName)
+            free(const_cast<char*>(mMessageName));
+    }
+
+    InterruptFrame& operator=(InterruptFrame&& aOther)
+    {
+        MOZ_ASSERT(&aOther != this);
+        this->~InterruptFrame();
+        new (this) InterruptFrame(mozilla::Move(aOther));
+        return *this;
+    }
+
+    bool IsInterruptIncall() const
+    {
+        return INTR_SEMS == mMesageSemantics && IN_MESSAGE == mDirection;
+    }
+
+    bool IsInterruptOutcall() const
+    {
+        return INTR_SEMS == mMesageSemantics && OUT_MESSAGE == mDirection;
+    }
+
+    void Describe(int32_t* id, const char** dir, const char** sems,
+                  const char** name) const
+    {
+        *id = mMessageRoutingId;
+        *dir = (IN_MESSAGE == mDirection) ? "in" : "out";
+        *sems = (INTR_SEMS == mMesageSemantics) ? "intr" :
+                (SYNC_SEMS == mMesageSemantics) ? "sync" :
+                "async";
+        *name = mMessageName;
+    }
+
+private:
+    const char* mMessageName;
+    int32_t mMessageRoutingId;
+    Semantics mMesageSemantics;
+    Direction mDirection;
+    DebugOnly<bool> mMoved;
+
+    // Disable harmful methods.
+    InterruptFrame(const InterruptFrame& aOther) MOZ_DELETE;
+    InterruptFrame& operator=(const InterruptFrame&) MOZ_DELETE;
+};
+
+class MOZ_STACK_CLASS MessageChannel::CxxStackFrame
+{
+public:
+    CxxStackFrame(MessageChannel& that, Direction direction, const Message* msg)
+      : mThat(that)
+    {
+        mThat.AssertWorkerThread();
+
+        if (mThat.mCxxStackFrames.empty())
+            mThat.EnteredCxxStack();
+
+        mThat.mCxxStackFrames.append(InterruptFrame(direction, msg));
+
+        const InterruptFrame& frame = mThat.mCxxStackFrames.back();
+
+        if (frame.IsInterruptIncall())
+            mThat.EnteredCall();
+
+        mThat.mSawInterruptOutMsg |= frame.IsInterruptOutcall();
+    }
+
+    ~CxxStackFrame() {
+        mThat.AssertWorkerThread();
+
+        MOZ_ASSERT(!mThat.mCxxStackFrames.empty());
+
+        bool exitingCall = mThat.mCxxStackFrames.back().IsInterruptIncall();
+        mThat.mCxxStackFrames.shrinkBy(1);
+
+        bool exitingStack = mThat.mCxxStackFrames.empty();
+
+        // mListener could have gone away if Close() was called while
+        // MessageChannel code was still on the stack
+        if (!mThat.mListener)
+            return;
+
+        if (exitingCall)
+            mThat.ExitedCall();
+
+        if (exitingStack)
+            mThat.ExitedCxxStack();
+    }
+private:
+    MessageChannel& mThat;
+
+    // Disable harmful methods.
+    CxxStackFrame() MOZ_DELETE;
+    CxxStackFrame(const CxxStackFrame&) MOZ_DELETE;
+    CxxStackFrame& operator=(const CxxStackFrame&) MOZ_DELETE;
+};
+
 MessageChannel::MessageChannel(MessageListener *aListener)
   : mListener(aListener->asWeakPtr()),
     mChannelState(ChannelClosed),
@@ -59,7 +204,8 @@ MessageChannel::MessageChannel(MessageListener *aListener)
     mDispatchingSyncMessage(false),
     mDispatchingUrgentMessageCount(0),
     mRemoteStackDepthGuess(false),
-    mSawInterruptOutMsg(false)
+    mSawInterruptOutMsg(false),
+    mAbortOnError(false)
 {
     MOZ_COUNT_CTOR(ipc::MessageChannel);
 
@@ -72,7 +218,7 @@ MessageChannel::MessageChannel(MessageListener *aListener)
                                                  &MessageChannel::OnMaybeDequeueOne));
 
 #ifdef OS_WIN
-    mEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+    mEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     NS_ASSERTION(mEvent, "CreateEvent failed! Nothing is going to work!");
 #endif
 }
@@ -105,6 +251,13 @@ MessageChannel::Connected() const
     // The transport layer allows us to send messages before
     // receiving the "connected" ack from the remote side.
     return (ChannelOpening == mChannelState || ChannelConnected == mChannelState);
+}
+
+bool
+MessageChannel::CanSend() const
+{
+    MonitorAutoLock lock(*mMonitor);
+    return Connected();
 }
 
 void
@@ -245,8 +398,7 @@ MessageChannel::Echo(Message* aMsg)
 bool
 MessageChannel::Send(Message* aMsg)
 {
-    Message copy = *aMsg;
-    CxxStackFrame frame(*this, OUT_MESSAGE, &copy);
+    CxxStackFrame frame(*this, OUT_MESSAGE, aMsg);
 
     nsAutoPtr<Message> msg(aMsg);
     AssertWorkerThread();
@@ -277,8 +429,10 @@ MessageChannel::MaybeInterceptSpecialIOMessage(const Message& aMsg)
         // :TODO: Sort out Close() on this side racing with Close() on the
         // other side
         mChannelState = ChannelClosing;
-        printf("NOTE: %s process received `Goodbye', closing down\n",
-               (mSide == ChildSide) ? "child" : "parent");
+        if (LoggingEnabled()) {
+            printf("NOTE: %s process received `Goodbye', closing down\n",
+                   (mSide == ChildSide) ? "child" : "parent");
+        }
         return true;
     }
     return false;
@@ -410,8 +564,7 @@ MessageChannel::Send(Message* aMsg, Message* aReply)
     SyncStackFrame frame(this, false);
 #endif
 
-    Message copy = *aMsg;
-    CxxStackFrame f(*this, OUT_MESSAGE, &copy);
+    CxxStackFrame f(*this, OUT_MESSAGE, aMsg);
 
     MonitorAutoLock lock(*mMonitor);
 
@@ -439,8 +592,7 @@ MessageChannel::UrgentCall(Message* aMsg, Message* aReply)
     SyncStackFrame frame(this, false);
 #endif
 
-    Message copy = *aMsg;
-    CxxStackFrame f(*this, OUT_MESSAGE, &copy);
+    CxxStackFrame f(*this, OUT_MESSAGE, aMsg);
 
     MonitorAutoLock lock(*mMonitor);
 
@@ -469,8 +621,7 @@ MessageChannel::RPCCall(Message* aMsg, Message* aReply)
     SyncStackFrame frame(this, false);
 #endif
 
-    Message copy = *aMsg;
-    CxxStackFrame f(*this, OUT_MESSAGE, &copy);
+    CxxStackFrame f(*this, OUT_MESSAGE, aMsg);
 
     MonitorAutoLock lock(*mMonitor);
 
@@ -569,8 +720,7 @@ MessageChannel::InterruptCall(Message* aMsg, Message* aReply)
 
     // This must come before MonitorAutoLock, as its destructor acquires the
     // monitor lock.
-    Message copy = *aMsg;
-    CxxStackFrame cxxframe(*this, OUT_MESSAGE, &copy);
+    CxxStackFrame cxxframe(*this, OUT_MESSAGE, aMsg);
 
     MonitorAutoLock lock(*mMonitor);
     if (!Connected()) {
@@ -1285,6 +1435,9 @@ MessageChannel::ReportMessageRouteError(const char* channelName) const
 void
 MessageChannel::ReportConnectionError(const char* aChannelName) const
 {
+    AssertWorkerThread();
+    mMonitor->AssertCurrentThreadOwns();
+
     const char* errorMsg = nullptr;
     switch (mChannelState) {
       case ChannelClosed:
@@ -1308,6 +1461,8 @@ MessageChannel::ReportConnectionError(const char* aChannelName) const
     }
 
     PrintErrorMessage(mSide, aChannelName, errorMsg);
+
+    MonitorAutoUnlock unlock(*mMonitor);
     mListener->OnProcessingError(MsgDropped);
 }
 
@@ -1363,6 +1518,9 @@ MessageChannel::OnChannelErrorFromLink()
         NotifyWorkerThread();
 
     if (ChannelClosing != mChannelState) {
+        if (mAbortOnError) {
+            NS_RUNTIMEABORT("Aborting on channel error.");
+        }
         mChannelState = ChannelError;
         mMonitor->Notify();
     }
@@ -1493,13 +1651,19 @@ MessageChannel::Close()
             return;
         }
 
+        if (ChannelOpening == mChannelState) {
+            // Mimic CloseWithError().
+            SynchronouslyClose();
+            mChannelState = ChannelError;
+            PostErrorNotifyTask();
+            return;
+        }
+
         if (ChannelConnected != mChannelState) {
             // XXX be strict about this until there's a compelling reason
             // to relax
             NS_RUNTIMEABORT("Close() called on closed channel!");
         }
-
-        AssertWorkerThread();
 
         // notify the other side that we're about to close our socket
         mLink->SendMessage(new GoodbyeMessage());
@@ -1567,7 +1731,7 @@ MessageChannel::DumpInterruptStack(const char* const pfx) const
     printf_stderr("%sMessageChannel 'backtrace':\n", pfx);
 
     // print a python-style backtrace, first frame to last
-    for (uint32_t i = 0; i < mCxxStackFrames.size(); ++i) {
+    for (uint32_t i = 0; i < mCxxStackFrames.length(); ++i) {
         int32_t id;
         const char* dir, *sems, *name;
         mCxxStackFrames[i].Describe(&id, &dir, &sems, &name);
@@ -1579,4 +1743,3 @@ MessageChannel::DumpInterruptStack(const char* const pfx) const
 
 } // ipc
 } // mozilla
-

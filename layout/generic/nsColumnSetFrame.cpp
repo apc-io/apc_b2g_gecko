@@ -21,7 +21,7 @@ using namespace mozilla::layout;
  * XXX should we support CSS columns applied to table elements?
  */
 nsIFrame*
-NS_NewColumnSetFrame(nsIPresShell* aPresShell, nsStyleContext* aContext, uint32_t aStateFlags)
+NS_NewColumnSetFrame(nsIPresShell* aPresShell, nsStyleContext* aContext, nsFrameState aStateFlags)
 {
   nsColumnSetFrame* it = new (aPresShell) nsColumnSetFrame(aContext);
   it->AddStateBits(aStateFlags | NS_BLOCK_MARGIN_ROOT);
@@ -120,7 +120,7 @@ nsColumnSetFrame::PaintColumnRule(nsRenderingContext* aCtx,
   }
 }
 
-NS_IMETHODIMP
+nsresult
 nsColumnSetFrame::SetInitialChildList(ChildListID     aListID,
                                       nsFrameList&    aChildList)
 {
@@ -139,26 +139,26 @@ nsColumnSetFrame::SetInitialChildList(ChildListID     aListID,
 static nscoord
 GetAvailableContentWidth(const nsHTMLReflowState& aReflowState)
 {
-  if (aReflowState.availableWidth == NS_INTRINSICSIZE) {
+  if (aReflowState.AvailableWidth() == NS_INTRINSICSIZE) {
     return NS_INTRINSICSIZE;
   }
   nscoord borderPaddingWidth =
-    aReflowState.mComputedBorderPadding.left +
-    aReflowState.mComputedBorderPadding.right;
-  return std::max(0, aReflowState.availableWidth - borderPaddingWidth);
+    aReflowState.ComputedPhysicalBorderPadding().left +
+    aReflowState.ComputedPhysicalBorderPadding().right;
+  return std::max(0, aReflowState.AvailableWidth() - borderPaddingWidth);
 }
 
 nscoord
 nsColumnSetFrame::GetAvailableContentHeight(const nsHTMLReflowState& aReflowState)
 {
-  if (aReflowState.availableHeight == NS_INTRINSICSIZE) {
+  if (aReflowState.AvailableHeight() == NS_INTRINSICSIZE) {
     return NS_INTRINSICSIZE;
   }
 
-  nsMargin bp = aReflowState.mComputedBorderPadding;
+  nsMargin bp = aReflowState.ComputedPhysicalBorderPadding();
   ApplySkipSides(bp, &aReflowState);
-  bp.bottom = aReflowState.mComputedBorderPadding.bottom;
-  return std::max(0, aReflowState.availableHeight - bp.TopBottom());
+  bp.bottom = aReflowState.ComputedPhysicalBorderPadding().bottom;
+  return std::max(0, aReflowState.AvailableHeight() - bp.TopBottom());
 }
 
 static nscoord
@@ -204,8 +204,8 @@ nsColumnSetFrame::ChooseColumnStrategy(const nsHTMLReflowState& aReflowState,
 
   if (aReflowState.ComputedHeight() != NS_INTRINSICSIZE) {
     colHeight = aReflowState.ComputedHeight();
-  } else if (aReflowState.mComputedMaxHeight != NS_INTRINSICSIZE) {
-    colHeight = std::min(colHeight, aReflowState.mComputedMaxHeight);
+  } else if (aReflowState.ComputedMaxHeight() != NS_INTRINSICSIZE) {
+    colHeight = std::min(colHeight, aReflowState.ComputedMaxHeight());
   }
 
   nscoord colGap = GetColumnGap(this, colStyle);
@@ -455,7 +455,7 @@ nsColumnSetFrame::ReflowChildren(nsHTMLReflowMetrics&     aDesiredSize,
   }
 
   // get our border and padding
-  nsMargin borderPadding = aReflowState.mComputedBorderPadding;
+  nsMargin borderPadding = aReflowState.ComputedPhysicalBorderPadding();
   ApplySkipSides(borderPadding, &aReflowState);
   
   nsRect contentRect(0, 0, 0, 0);
@@ -468,7 +468,7 @@ nsColumnSetFrame::ReflowChildren(nsHTMLReflowMetrics&     aDesiredSize,
   // slop. Otherwise we'll waste time moving the columns by some tiny
   // amount unnecessarily.
   if (RTL) {
-    nscoord availWidth = aReflowState.availableWidth;
+    nscoord availWidth = aReflowState.AvailableWidth();
     if (aReflowState.ComputedWidth() != NS_INTRINSICSIZE) {
       availWidth = aReflowState.ComputedWidth();
     }
@@ -563,7 +563,8 @@ nsColumnSetFrame::ReflowChildren(nsHTMLReflowMetrics&     aDesiredSize,
         kidReflowState.mFlags.mNextInFlowUntouched = true;
       }
     
-      nsHTMLReflowMetrics kidDesiredSize(aDesiredSize.mFlags);
+      nsHTMLReflowMetrics kidDesiredSize(aReflowState.GetWritingMode(),
+                                         aDesiredSize.mFlags);
 
       // XXX it would be cool to consult the float manager for the
       // previous block to figure out the region of floats from the
@@ -574,15 +575,15 @@ nsColumnSetFrame::ReflowChildren(nsHTMLReflowMetrics&     aDesiredSize,
 
       // Reflow the frame
       ReflowChild(child, PresContext(), kidDesiredSize, kidReflowState,
-                  childOrigin.x + kidReflowState.mComputedMargin.left,
-                  childOrigin.y + kidReflowState.mComputedMargin.top,
+                  childOrigin.x + kidReflowState.ComputedPhysicalMargin().left,
+                  childOrigin.y + kidReflowState.ComputedPhysicalMargin().top,
                   0, aStatus);
 
       reflowNext = (aStatus & NS_FRAME_REFLOW_NEXTINFLOW) != 0;
     
 #ifdef DEBUG_roc
       printf("*** Reflowed child #%d %p: status = %d, desiredSize=%d,%d CarriedOutBottomMargin=%d\n",
-             columnCount, (void*)child, aStatus, kidDesiredSize.width, kidDesiredSize.height,
+             columnCount, (void*)child, aStatus, kidDesiredSize.Width(), kidDesiredSize.Height(),
              kidDesiredSize.mCarriedOutBottomMargin.get());
 #endif
 
@@ -590,8 +591,8 @@ nsColumnSetFrame::ReflowChildren(nsHTMLReflowMetrics&     aDesiredSize,
 
       *aBottomMarginCarriedOut = kidDesiredSize.mCarriedOutBottomMargin;
       
-      FinishReflowChild(child, PresContext(), &kidReflowState, 
-                        kidDesiredSize, childOrigin.x, childOrigin.y, 0);
+      FinishReflowChild(child, PresContext(), kidDesiredSize,
+                        &kidReflowState, childOrigin.x, childOrigin.y, 0);
 
       childContentBottom = nsLayoutUtils::CalculateContentBottom(child);
       if (childContentBottom > aConfig.mColMaxHeight) {
@@ -628,7 +629,7 @@ nsColumnSetFrame::ReflowChildren(nsHTMLReflowMetrics&     aDesiredSize,
                      "We have to create a continuation, but the block doesn't want us to reflow it?");
 
         // We need to create a continuing column
-        nsresult rv = CreateNextInFlow(PresContext(), child, kidNextInFlow);
+        nsresult rv = CreateNextInFlow(child, kidNextInFlow);
         
         if (NS_FAILED(rv)) {
           NS_NOTREACHED("Couldn't create continuation");
@@ -652,7 +653,7 @@ nsColumnSetFrame::ReflowChildren(nsHTMLReflowMetrics&     aDesiredSize,
         kidNextInFlow->RemoveStateBits(NS_FRAME_IS_OVERFLOW_CONTAINER);
       }
 
-      if ((contentBottom > aReflowState.mComputedMaxHeight ||
+      if ((contentBottom > aReflowState.ComputedMaxHeight() ||
            contentBottom > aReflowState.ComputedHeight()) &&
            aConfig.mBalanceColCount < INT32_MAX) {
         // We overflowed vertically, but have not exceeded the number of
@@ -669,7 +670,7 @@ nsColumnSetFrame::ReflowChildren(nsHTMLReflowMetrics&     aDesiredSize,
         // next-in-flow will eventually pick them up.
         const nsFrameList& continuationColumns = mFrames.RemoveFramesAfter(child);
         if (continuationColumns.NotEmpty()) {
-          SetOverflowFrames(PresContext(), continuationColumns);
+          SetOverflowFrames(continuationColumns);
         }
         child = nullptr;
         break;
@@ -728,7 +729,7 @@ nsColumnSetFrame::ReflowChildren(nsHTMLReflowMetrics&     aDesiredSize,
 
   // Apply computed and min/max values
   if (aConfig.mComputedHeight != NS_INTRINSICSIZE) {
-    if (aReflowState.availableHeight != NS_INTRINSICSIZE) {
+    if (aReflowState.AvailableHeight() != NS_INTRINSICSIZE) {
       contentSize.height = std::min(contentSize.height,
                                     aConfig.mComputedHeight);
     } else {
@@ -749,9 +750,9 @@ nsColumnSetFrame::ReflowChildren(nsHTMLReflowMetrics&     aDesiredSize,
     contentSize.width = aReflowState.ApplyMinMaxWidth(contentSize.width);
   }
 
-  aDesiredSize.height = contentSize.height +
+  aDesiredSize.Height() = contentSize.height +
                         borderPadding.TopBottom();
-  aDesiredSize.width = contentSize.width +
+  aDesiredSize.Width() = contentSize.width +
                        borderPadding.LeftRight();
   aDesiredSize.mOverflowAreas = overflowRects;
   aDesiredSize.UnionOverflowAreasWithDesiredBounds();
@@ -774,8 +775,7 @@ nsColumnSetFrame::DrainOverflowColumns()
   if (prev) {
     AutoFrameListPtr overflows(presContext, prev->StealOverflowFrames());
     if (overflows) {
-      nsContainerFrame::ReparentFrameViewList(presContext, *overflows,
-                                              prev, this);
+      nsContainerFrame::ReparentFrameViewList(*overflows, prev, this);
 
       mFrames.InsertFrames(this, nullptr, *overflows);
     }
@@ -804,9 +804,9 @@ nsColumnSetFrame::FindBestBalanceHeight(const nsHTMLReflowState& aReflowState,
 {
   bool feasible = aRunWasFeasible;
 
-  nsMargin bp = aReflowState.mComputedBorderPadding;
+  nsMargin bp = aReflowState.ComputedPhysicalBorderPadding();
   ApplySkipSides(bp);
-  bp.bottom = aReflowState.mComputedBorderPadding.bottom;
+  bp.bottom = aReflowState.ComputedPhysicalBorderPadding().bottom;
 
   nscoord availableContentHeight =
     GetAvailableContentHeight(aReflowState);
@@ -949,7 +949,7 @@ nsColumnSetFrame::FindBestBalanceHeight(const nsHTMLReflowState& aReflowState,
   aRunWasFeasible = feasible;
 }
 
-NS_IMETHODIMP 
+nsresult 
 nsColumnSetFrame::Reflow(nsPresContext*           aPresContext,
                          nsHTMLReflowMetrics&     aDesiredSize,
                          const nsHTMLReflowState& aReflowState,
@@ -1004,7 +1004,7 @@ nsColumnSetFrame::Reflow(nsPresContext*           aPresContext,
   }
 
   if (aPresContext->HasPendingInterrupt() &&
-      aReflowState.availableHeight == NS_UNCONSTRAINEDSIZE) {
+      aReflowState.AvailableHeight() == NS_UNCONSTRAINEDSIZE) {
     // In this situation, we might be lying about our reflow status, because
     // our last kid (the one that got interrupted) was incomplete.  Fix that.
     aStatus = NS_FRAME_COMPLETE;
@@ -1017,7 +1017,7 @@ nsColumnSetFrame::Reflow(nsPresContext*           aPresContext,
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowState, aDesiredSize);
 
   NS_ASSERTION(NS_FRAME_IS_FULLY_COMPLETE(aStatus) ||
-               aReflowState.availableHeight != NS_UNCONSTRAINEDSIZE,
+               aReflowState.AvailableHeight() != NS_UNCONSTRAINEDSIZE,
                "Column set should be complete if the available height is unconstrained");
 
   return NS_OK;
@@ -1041,7 +1041,7 @@ nsColumnSetFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   }
 }
 
-NS_IMETHODIMP
+nsresult
 nsColumnSetFrame::AppendFrames(ChildListID     aListID,
                                nsFrameList&    aFrameList)
 {
@@ -1053,7 +1053,7 @@ nsColumnSetFrame::AppendFrames(ChildListID     aListID,
   return NS_ERROR_INVALID_ARG;
 }
 
-NS_IMETHODIMP
+nsresult
 nsColumnSetFrame::InsertFrames(ChildListID     aListID,
                                nsIFrame*       aPrevFrame,
                                nsFrameList&    aFrameList)
@@ -1066,7 +1066,7 @@ nsColumnSetFrame::InsertFrames(ChildListID     aListID,
   return NS_ERROR_INVALID_ARG;
 }
 
-NS_IMETHODIMP
+nsresult
 nsColumnSetFrame::RemoveFrame(ChildListID     aListID,
                               nsIFrame*       aOldFrame)
 {

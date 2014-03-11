@@ -117,9 +117,6 @@ EndVerifyPostBarriers(JSRuntime *rt);
 void
 FinishVerifier(JSRuntime *rt);
 
-void
-CrashAtUnhandlableOOM(const char *reason);
-
 class AutoStopVerifyingBarriers
 {
     JSRuntime *runtime;
@@ -129,7 +126,7 @@ class AutoStopVerifyingBarriers
 
   public:
     AutoStopVerifyingBarriers(JSRuntime *rt, bool isShutdown
-                       MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+                              MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
       : runtime(rt)
     {
         restartPreVerifier = !isShutdown && rt->gcVerifyPreData;

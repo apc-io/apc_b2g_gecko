@@ -171,8 +171,14 @@ static const JSClass pm_class = {
 static bool
 pm_construct(JSContext* cx, unsigned argc, jsval* vp)
 {
+    CallArgs args = CallArgsFromVp(argc, vp);
+
     uint32_t mask;
-    if (!JS_ConvertArguments(cx, argc, JS_ARGV(cx, vp), "u", &mask))
+    if (!args.hasDefined(0)) {
+        js_ReportMissingArg(cx, args.calleev(), 0);
+        return false;
+    }
+    if (!JS::ToUint32(cx, args[0], &mask))
         return false;
 
     JS::RootedObject obj(cx, JS_NewObjectForConstructor(cx, &pm_class, vp));
@@ -189,7 +195,7 @@ pm_construct(JSContext* cx, unsigned argc, jsval* vp)
     }
 
     JS_SetPrivate(obj, p);
-    *vp = OBJECT_TO_JSVAL(obj);
+    args.rval().setObject(*obj);
     return true;
 }
 
@@ -224,10 +230,11 @@ GetPM(JSContext* cx, JS::HandleValue value, const char* fname)
 namespace JS {
 
 JSObject*
-RegisterPerfMeasurement(JSContext *cx, JSObject *global)
+RegisterPerfMeasurement(JSContext *cx, HandleObject globalArg)
 {
+    RootedObject global(cx, globalArg);
     RootedObject prototype(cx);
-    prototype = JS_InitClass(cx, global, nullptr /* parent */,
+    prototype = JS_InitClass(cx, global, js::NullPtr() /* parent */,
                              &pm_class, pm_construct, 1,
                              pm_props, pm_fns, 0, 0);
     if (!prototype)

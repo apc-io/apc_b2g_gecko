@@ -41,13 +41,13 @@ protected:
 
   nsresult Init(int aChannels, int aSamplingRate) MOZ_OVERRIDE;
 
-private:
   /**
    * Get the samplerate of the data to be fed to the Opus encoder. This might be
-   * different from the intput samplerate if resampling occurs.
+   * different from the input samplerate if resampling occurs.
    */
   int GetOutputSampleRate();
 
+private:
   /**
    * The Opus encoder from libopus.
    */
@@ -74,6 +74,12 @@ private:
    * resampled.
    */
   SpeexResamplerState* mResampler;
+
+  /**
+   * Store the resampled frames that don't fit into an Opus packet duration.
+   * They will be prepended to the resampled frames next encoding cycle.
+   */
+  nsTArray<AudioDataValue> mResampledLeftover;
 };
 
 }

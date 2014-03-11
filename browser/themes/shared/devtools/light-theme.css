@@ -7,8 +7,13 @@
  * https://bugzilla.mozilla.org/show_bug.cgi?id=715472#c17
  */
 .theme-body {
-  background: white;
-  color: black;
+  background: #fcfcfc; /* Background - Editor */
+  color: #18191a;
+}
+
+.theme-sidebar {
+  background: #f7f7f7; /* Background - Sidebars */
+  color: #18191a;
 }
 
 ::-moz-selection {
@@ -16,44 +21,13 @@
   color: #f5f7fa;
 }
 
-.theme-twisty {
-  cursor: pointer;
-  width: 14px;
-  height: 14px;
-  background-repeat: no-repeat;
-  background-image: url("chrome://browser/skin/devtools/controls.png");
-  background-position: 0 -14px;
-}
-
-.theme-twisty:-moz-focusring {
-  outline-style: none;
-}
-
-.theme-twisty[open] {
-  background-position: -14px -14px;
-}
-
-.theme-checkbox {
-  display: inline-block;
-  border: 0;
-  width: 14px;
-  height: 14px;
-  padding: 0;
-  outline: none;
-  background-image: url("chrome://browser/skin/devtools/controls.png");
-  background-position: 0 0;
-}
-
-.theme-checkbox[checked] {
-  background-position: -14px 0;
+.theme-bg-darker {
+  background: #EFEFEF;
 }
 
 .theme-selected {
-  background-color: #CCC;
-}
-
-.theme-bg-darker {
-  background: #EFEFEF;
+  background-color: #4c9ed9;
+  color: #f5f7fa; /* Light foreground text */
 }
 
 .theme-bg-contrast,
@@ -142,8 +116,13 @@
 .cm-s-mozilla .cm-quote,
 .cm-s-mozilla .cm-error,
 .variable-or-property .token-boolean,
+.variable-or-property .token-domnode,
 .variable-or-property[exception] > .title > .name { /* Red */
   color: #bf5656;
+}
+
+.variable-or-property .token-domnode {
+  font-weight: bold;
 }
 
 .theme-fg-contrast { /* To be used for text on theme-bg-contrast */
@@ -151,22 +130,17 @@
 }
 
 .theme-toolbar,
-.devtools-toolbar { /* General toolbar styling */
-  color: hsl(210,30%,85%);
-  background-color: #343c45;
-  border-color: #060a0d;
+.devtools-toolbar,
+.devtools-sidebar-tabs > tabs { /* General toolbar styling */
+  color: #585959;
+  background-color: #f0f1f2;
+  border-color: #aaa;
 }
 
 .ruleview-colorswatch,
 .computedview-colorswatch,
 .markupview-colorswatch {
   box-shadow: 0 0 0 1px #EFEFEF;
-}
-
-.variables-view-scope:focus > .title,
-.variable-or-property:focus > .title {
-  background:  hsl(208,56%,40%); /* fg-color2 */
-  color: white;
 }
 
 /* CodeMirror specific styles.
@@ -248,6 +222,56 @@ div.CodeMirror span.eval-text {
   min-height: 1.4em;
 }
 
+/* Twisty and checkbox controls */
+
+.theme-twisty, .theme-checkbox {
+  width: 14px;
+  height: 14px;
+  background-repeat: no-repeat;
+  background-image: url("chrome://browser/skin/devtools/controls.png");
+  background-size: 56px 28px;
+}
+
+.theme-twisty {
+  cursor: pointer;
+  background-position: 0 -14px;
+}
+
+.theme-twisty:-moz-focusring {
+  outline-style: none;
+}
+
+.theme-twisty[open] {
+  background-position: -14px -14px;
+}
+
+/* Use white twisty when next to a selected item in markup view */
+.theme-selected ~ .theme-twisty {
+  background-position: -28px -14px;
+}
+
+.theme-selected ~ .theme-twisty[open] {
+  background-position: -42px -14px;
+}
+
+.theme-checkbox {
+  display: inline-block;
+  border: 0;
+  padding: 0;
+  outline: none;
+  background-position: 0 0;
+}
+
+.theme-checkbox[checked] {
+  background-position: -14px 0;
+}
+
+@media (min-resolution: 2dppx) {
+  .theme-twisty, .theme-checkbox {
+    background-image: url("chrome://browser/skin/devtools/controls@2x.png");
+  }
+}
+
 /* XUL panel styling (see browser/devtools/shared/widgets/Tooltip.js) */
 
 .theme-tooltip-panel .panel-arrowcontent {
@@ -297,8 +321,21 @@ div.CodeMirror span.eval-text {
   border-bottom: 1px solid #d9e1e8;
 }
 
+.theme-tooltip-panel .devtools-tooltip-font-previewer-text {
+  color: black;
+}
+
 .theme-tooltip-panel .devtools-tooltip-simple-text:last-child {
   border-bottom: 0;
+}
+
+.devtools-horizontal-splitter {
+  border-bottom: 1px solid #aaa;
+}
+
+.devtools-side-splitter {
+  -moz-border-end: 1px solid #aaa;
+  border-color: #aaa; /* Needed for responsive container at low width. */
 }
 
 %include toolbars.inc.css

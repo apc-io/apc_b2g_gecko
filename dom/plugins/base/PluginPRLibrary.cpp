@@ -38,8 +38,6 @@ PluginPRLibrary::NP_Initialize(NPNetscapeFuncs* bFuncs,
 			       NPPluginFuncs* pFuncs, NPError* error)
 {
   JNIEnv* env = GetJNIForThread();
-  if (!env)
-    return NS_ERROR_FAILURE;
 
   mozilla::AutoLocalJNIFrame jniFrame(env);
 
@@ -166,7 +164,7 @@ PluginPRLibrary::NP_GetValue(void *future, NPPVariable aVariable,
 #endif
 }
 
-#if defined(XP_WIN) || defined(XP_MACOSX) || defined(XP_OS2)
+#if defined(XP_WIN) || defined(XP_MACOSX)
 nsresult
 PluginPRLibrary::NP_GetEntryPoints(NPPluginFuncs* pFuncs, NPError* error)
 {

@@ -17,20 +17,6 @@
 class nsTextPaintStyle;
 class PropertyProvider;
 
-// This state bit is set on frames that have some non-collapsed characters after
-// reflow
-#define TEXT_HAS_NONCOLLAPSED_CHARACTERS NS_FRAME_STATE_BIT(31)
-
-// This state bit is set on children of token MathML elements
-#define TEXT_IS_IN_TOKEN_MATHML          NS_FRAME_STATE_BIT(32)
-
-// This state bit is set on token MathML elements if the token represents an
-// <mi> tag whose inner HTML consists of a single non-whitespace character
-// to allow special rendering behaviour.
-#define TEXT_IS_IN_SINGLE_CHAR_MI        NS_FRAME_STATE_BIT(59)
-
-#define TEXT_HAS_FONT_INFLATION          NS_FRAME_STATE_BIT(61)
-
 typedef nsFrame nsTextFrameBase;
 
 class nsDisplayTextGeometry;
@@ -71,10 +57,10 @@ public:
 
   virtual void DestroyFrom(nsIFrame* aDestructRoot) MOZ_OVERRIDE;
   
-  NS_IMETHOD GetCursor(const nsPoint& aPoint,
-                       nsIFrame::Cursor& aCursor) MOZ_OVERRIDE;
+  virtual nsresult GetCursor(const nsPoint& aPoint,
+                             nsIFrame::Cursor& aCursor) MOZ_OVERRIDE;
   
-  NS_IMETHOD CharacterDataChanged(CharacterDataChangeInfo* aInfo) MOZ_OVERRIDE;
+  virtual nsresult CharacterDataChanged(CharacterDataChangeInfo* aInfo) MOZ_OVERRIDE;
                                   
   virtual void DidSetStyleContext(nsStyleContext* aOldStyleContext) MOZ_OVERRIDE;
   
@@ -129,10 +115,14 @@ public:
   virtual void InvalidateFrame(uint32_t aDisplayItemKey = 0) MOZ_OVERRIDE;
   virtual void InvalidateFrameWithRect(const nsRect& aRect, uint32_t aDisplayItemKey = 0) MOZ_OVERRIDE;
 
+#ifdef DEBUG_FRAME_DUMP
+  void List(FILE* out = stderr, const char* aPrefix = "", uint32_t aFlags = 0) const MOZ_OVERRIDE;
+  virtual nsresult GetFrameName(nsAString& aResult) const MOZ_OVERRIDE;
+  void ToCString(nsCString& aBuf, int32_t* aTotalContentLength) const;
+#endif
+
 #ifdef DEBUG
-  void List(FILE* out, int32_t aIndent, uint32_t aFlags = 0) const MOZ_OVERRIDE;
-  NS_IMETHOD GetFrameName(nsAString& aResult) const MOZ_OVERRIDE;
-  NS_IMETHOD_(nsFrameState) GetDebugStateBits() const MOZ_OVERRIDE;
+  virtual nsFrameState GetDebugStateBits() const MOZ_OVERRIDE;
 #endif
   
   virtual ContentOffsets CalcContentOffsetsFromFramePoint(nsPoint aPoint) MOZ_OVERRIDE;
@@ -156,7 +146,7 @@ public:
   virtual bool PeekOffsetWord(bool aForward, bool aWordSelectEatSpace, bool aIsKeyboardSelect,
                                 int32_t* aOffset, PeekWordState* aState) MOZ_OVERRIDE;
 
-  NS_IMETHOD CheckVisibility(nsPresContext* aContext, int32_t aStartIndex, int32_t aEndIndex, bool aRecurse, bool *aFinished, bool *_retval) MOZ_OVERRIDE;
+  virtual nsresult CheckVisibility(nsPresContext* aContext, int32_t aStartIndex, int32_t aEndIndex, bool aRecurse, bool *aFinished, bool *_retval) MOZ_OVERRIDE;
   
   // Flags for aSetLengthFlags
   enum { ALLOW_FRAME_CREATION_AND_DESTRUCTION = 0x01 };
@@ -165,17 +155,17 @@ public:
   void SetLength(int32_t aLength, nsLineLayout* aLineLayout,
                  uint32_t aSetLengthFlags = 0);
   
-  NS_IMETHOD GetOffsets(int32_t &start, int32_t &end)const MOZ_OVERRIDE;
+  virtual nsresult GetOffsets(int32_t &start, int32_t &end)const MOZ_OVERRIDE;
   
   virtual void AdjustOffsetsForBidi(int32_t start, int32_t end) MOZ_OVERRIDE;
   
-  NS_IMETHOD GetPointFromOffset(int32_t                 inOffset,
-                                nsPoint*                outPoint) MOZ_OVERRIDE;
+  virtual nsresult GetPointFromOffset(int32_t  inOffset,
+                                      nsPoint* outPoint) MOZ_OVERRIDE;
   
-  NS_IMETHOD  GetChildFrameContainingOffset(int32_t     inContentOffset,
-                                            bool                    inHint,
-                                            int32_t*                outFrameContentOffset,
-                                            nsIFrame*               *outChildFrame) MOZ_OVERRIDE;
+  virtual nsresult GetChildFrameContainingOffset(int32_t inContentOffset,
+                                                 bool    inHint,
+                                                 int32_t* outFrameContentOffset,
+                                                 nsIFrame** outChildFrame) MOZ_OVERRIDE;
   
   virtual bool IsVisibleInSelection(nsISelection* aSelection) MOZ_OVERRIDE;
   
@@ -183,11 +173,7 @@ public:
   virtual bool IsSelfEmpty() MOZ_OVERRIDE { return IsEmpty(); }
   virtual nscoord GetBaseline() const MOZ_OVERRIDE;
   
-  /**
-   * @return true if this text frame ends with a newline character.  It
-   * should return false if this is not a text frame.
-   */
-  virtual bool HasTerminalNewline() const MOZ_OVERRIDE;
+  virtual bool HasSignificantTerminalNewline() const MOZ_OVERRIDE;
 
   /**
    * Returns true if this text frame is logically adjacent to the end of the
@@ -229,10 +215,10 @@ public:
   virtual nsresult GetPrefWidthTightBounds(nsRenderingContext* aContext,
                                            nscoord* aX,
                                            nscoord* aXMost) MOZ_OVERRIDE;
-  NS_IMETHOD Reflow(nsPresContext* aPresContext,
-                    nsHTMLReflowMetrics& aMetrics,
-                    const nsHTMLReflowState& aReflowState,
-                    nsReflowStatus& aStatus) MOZ_OVERRIDE;
+  virtual nsresult Reflow(nsPresContext* aPresContext,
+                          nsHTMLReflowMetrics& aMetrics,
+                          const nsHTMLReflowState& aReflowState,
+                          nsReflowStatus& aStatus) MOZ_OVERRIDE;
   virtual bool CanContinueTextRun() const MOZ_OVERRIDE;
   // Method that is called for a text frame that is logically
   // adjacent to the end of the line (i.e. followed only by empty text frames,
@@ -434,10 +420,6 @@ public:
   virtual nscolor GetCaretColorAt(int32_t aOffset) MOZ_OVERRIDE;
 
   int16_t GetSelectionStatus(int16_t* aSelectionFlags);
-
-#ifdef DEBUG
-  void ToCString(nsCString& aBuf, int32_t* aTotalContentLength) const;
-#endif
 
   int32_t GetContentOffset() const { return mContentOffset; }
   int32_t GetContentLength() const

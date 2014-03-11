@@ -56,11 +56,7 @@ else
 REPORT_BUILD = $(info $(notdir $@))
 endif
 
-ifeq ($(OS_ARCH),OS2)
-EXEC			=
-else
 EXEC			= exec
-endif
 
 # Don't copy xulrunner files at install time, when using system xulrunner
 ifdef SYSTEM_LIBXUL
@@ -124,7 +120,7 @@ libs:: $(CPP_UNIT_TEST_BINS) $(call mkdir_deps,$(DIST)/cppunittests)
 	$(NSINSTALL) $(CPP_UNIT_TEST_BINS) $(DIST)/cppunittests
 endif
 
-check::
+run-cppunittests::
 	@$(PYTHON) $(topsrcdir)/testing/runcppunittests.py --xre-path=$(DIST)/bin --symbols-path=$(DIST)/crashreporter-symbols $(subst .cpp,$(BIN_SUFFIX),$(CPP_UNIT_TESTS))
 
 cppunittests-remote: DM_TRANS?=adb
@@ -194,7 +190,7 @@ ifdef LIB_IS_C_ONLY
 MKSHLIB			= $(MKCSHLIB)
 endif
 
-ifneq (,$(filter OS2 WINNT,$(OS_ARCH)))
+ifneq (,$(filter WINNT,$(OS_ARCH)))
 IMPORT_LIBRARY		:= $(LIB_PREFIX)$(SHARED_LIBRARY_NAME).$(IMPORT_LIB_SUFFIX)
 endif
 
@@ -202,10 +198,6 @@ ifdef MAKE_FRAMEWORK
 SHARED_LIBRARY		:= $(SHARED_LIBRARY_NAME)
 else
 SHARED_LIBRARY		:= $(DLL_PREFIX)$(SHARED_LIBRARY_NAME)$(DLL_SUFFIX)
-endif
-
-ifeq ($(OS_ARCH),OS2)
-DEF_FILE		:= $(SHARED_LIBRARY:.dll=.def)
 endif
 
 EMBED_MANIFEST_AT=2
@@ -529,6 +521,12 @@ ifeq ($(OS_ARCH),GNU)
 OS_CPPFLAGS += -DPATH_MAX=1024 -DMAXPATHLEN=1024
 endif
 
+ifeq ($(OS_ARCH),WINNT)
+ifdef USE_DELAYIMP
+OS_LIBS += $(call EXPAND_LIBNAME,delayimp)
+endif
+endif
+
 #
 # MINGW32
 #
@@ -591,7 +589,6 @@ endif
 # of the tiers and because of libxul. Suppress the default rules in favor
 # of something else. Makefiles which use this var *must* provide a sensible
 # default rule before including rules.mk
-ifndef SUPPRESS_DEFAULT_RULES
 default all::
 	$(MAKE) export
 ifdef MOZ_PSEUDO_DERECURSE
@@ -601,7 +598,6 @@ endif
 endif
 	$(MAKE) libs
 	$(MAKE) tools
-endif # SUPPRESS_DEFAULT_RULES
 
 ifeq ($(findstring s,$(filter-out --%, $(MAKEFLAGS))),)
 ECHO := echo
@@ -724,9 +720,6 @@ distclean::
 	$(wildcard *.$(OBJ_SUFFIX)) $(wildcard *.ho) $(wildcard host_*.o*) \
 	$(wildcard *.$(LIB_SUFFIX)) $(wildcard *$(DLL_SUFFIX)) \
 	$(wildcard *.$(IMPORT_LIB_SUFFIX))
-ifeq ($(OS_ARCH),OS2)
-	-$(RM) $(PROGRAM:.exe=.map)
-endif
 
 alltags:
 	$(RM) TAGS
@@ -762,7 +755,7 @@ ifdef MOZ_PROFILE_GENERATE
 endif
 else # !WINNT || GNU_CC
 	$(EXPAND_CCC) -o $@ $(CXXFLAGS) $(PROGOBJS) $(RESFILE) $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(WRAP_LDFLAGS) $(LIBS_DIR) $(LIBS) $(MOZ_GLUE_PROGRAM_LDFLAGS) $(OS_LIBS) $(EXTRA_LIBS) $(BIN_FLAGS) $(EXE_DEF_FILE) $(STLPORT_LIBS)
-	@$(call CHECK_STDCXX,$@)
+	$(call CHECK_BINARY,$@)
 endif # WINNT && !GNU_CC
 
 ifdef ENABLE_STRIP
@@ -818,7 +811,7 @@ ifdef MSMANIFEST_TOOL
 endif	# MSVC with manifest tool
 else
 	$(EXPAND_CCC) $(CXXFLAGS) -o $@ $< $(WIN32_EXE_LDFLAGS) $(LDFLAGS) $(WRAP_LDFLAGS) $(LIBS_DIR) $(LIBS) $(MOZ_GLUE_PROGRAM_LDFLAGS) $(OS_LIBS) $(EXTRA_LIBS) $(BIN_FLAGS) $(STLPORT_LIBS)
-	@$(call CHECK_STDCXX,$@)
+	$(call CHECK_BINARY,$@)
 endif # WINNT && !GNU_CC
 
 ifdef ENABLE_STRIP
@@ -867,23 +860,6 @@ ifeq ($(OS_ARCH),WINNT)
 $(IMPORT_LIBRARY): $(SHARED_LIBRARY) ;
 endif
 
-ifeq ($(OS_ARCH),OS2)
-$(DEF_FILE): $(OBJS) $(SHARED_LIBRARY_LIBS)
-	$(RM) $@
-	echo LIBRARY $(SHARED_LIBRARY_NAME) INITINSTANCE TERMINSTANCE > $@
-	echo PROTMODE >> $@
-	echo CODE    LOADONCALL MOVEABLE DISCARDABLE >> $@
-	echo DATA    PRELOAD MOVEABLE MULTIPLE NONSHARED >> $@
-	echo EXPORTS >> $@
-
-	$(ADD_TO_DEF_FILE)
-
-$(IMPORT_LIBRARY): $(SHARED_LIBRARY)
-	$(REPORT_BUILD)
-	$(RM) $@
-	$(IMPLIB) $@ $^
-endif # OS/2
-
 $(HOST_LIBRARY): $(HOST_OBJS) Makefile
 	$(REPORT_BUILD)
 	$(RM) $@
@@ -920,7 +896,7 @@ endif
 else # ! DTRACE_LIB_DEPENDENT
 	$(EXPAND_MKSHLIB) $(SHLIB_LDSTARTFILE) $(OBJS) $(SUB_SHLOBJS) $(RESFILE) $(LDFLAGS) $(WRAP_LDFLAGS) $(SHARED_LIBRARY_LIBS) $(EXTRA_DSO_LDOPTS) $(MOZ_GLUE_LDFLAGS) $(OS_LIBS) $(EXTRA_LIBS) $(DEF_FILE) $(SHLIB_LDENDFILE) $(if $(LIB_IS_C_ONLY),,$(STLPORT_LIBS))
 endif # DTRACE_LIB_DEPENDENT
-	@$(call CHECK_STDCXX,$@)
+	$(call CHECK_BINARY,$@)
 
 ifeq (_WINNT,$(GNU_CC)_$(OS_ARCH))
 ifdef MSMANIFEST_TOOL
@@ -996,7 +972,7 @@ $(HOST_CMMOBJS):
 $(COBJS):
 	$(REPORT_BUILD)
 	@$(MAKE_DEPS_AUTO_CC)
-	$(ELOG) $(CC) $(OUTOPTION)$@ -c $(COMPILE_CFLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
+	$(ELOG) $(CC) $(OUTOPTION)$@ -c $(COMPILE_CFLAGS) $($(notdir $<)_FLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
 
 # DEFINES and ACDEFINES are needed here to enable conditional compilation of Q_OBJECTs:
 # 'moc' only knows about #defines it gets on the command line (-D...), not in
@@ -1018,67 +994,63 @@ ifdef ASFILES
 # a '-c' flag.
 $(ASOBJS):
 	$(REPORT_BUILD)
-	$(AS) $(ASOUTOPTION)$@ $(ASFLAGS) $(AS_DASH_C_FLAG) $(_VPATH_SRCS)
+	$(AS) $(ASOUTOPTION)$@ $(ASFLAGS) $($(notdir $<)_FLAGS) $(AS_DASH_C_FLAG) $(_VPATH_SRCS)
 endif
 
 $(SOBJS):
 	$(REPORT_BUILD)
-	$(AS) -o $@ $(ASFLAGS) $(LOCAL_INCLUDES) $(TARGET_LOCAL_INCLUDES) -c $<
+	$(AS) -o $@ $(ASFLAGS) $($(notdir $<)_FLAGS) $(LOCAL_INCLUDES) $(TARGET_LOCAL_INCLUDES) -c $<
 
 $(CPPOBJS):
 	$(REPORT_BUILD)
 	@$(MAKE_DEPS_AUTO_CXX)
-	$(ELOG) $(CCC) $(OUTOPTION)$@ -c $(COMPILE_CXXFLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
+	$(ELOG) $(CCC) $(OUTOPTION)$@ -c $(COMPILE_CXXFLAGS) $($(notdir $<)_FLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
 
 $(CMMOBJS):
 	$(REPORT_BUILD)
 	@$(MAKE_DEPS_AUTO_CXX)
-	$(ELOG) $(CCC) -o $@ -c $(COMPILE_CXXFLAGS) $(COMPILE_CMMFLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
+	$(ELOG) $(CCC) -o $@ -c $(COMPILE_CXXFLAGS) $(COMPILE_CMMFLAGS) $($(notdir $<)_FLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
 
 $(CMOBJS):
 	$(REPORT_BUILD)
 	@$(MAKE_DEPS_AUTO_CC)
-	$(ELOG) $(CC) -o $@ -c $(COMPILE_CFLAGS) $(COMPILE_CMFLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
+	$(ELOG) $(CC) -o $@ -c $(COMPILE_CFLAGS) $(COMPILE_CMFLAGS) $($(notdir $<)_FLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
 
 $(filter %.s,$(CPPSRCS:%.cpp=%.s)): %.s: %.cpp $(call mkdir_deps,$(MDDEPDIR))
 	$(REPORT_BUILD)
-	$(CCC) -S $(COMPILE_CXXFLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
+	$(CCC) -S $(COMPILE_CXXFLAGS) $($(notdir $<)_FLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
 
 $(filter %.s,$(CPPSRCS:%.cc=%.s)): %.s: %.cc $(call mkdir_deps,$(MDDEPDIR))
 	$(REPORT_BUILD)
-	$(CCC) -S $(COMPILE_CXXFLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
+	$(CCC) -S $(COMPILE_CXXFLAGS) $($(notdir $<)_FLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
 
 $(filter %.s,$(CSRCS:%.c=%.s)): %.s: %.c $(call mkdir_deps,$(MDDEPDIR))
 	$(REPORT_BUILD)
-	$(CC) -S $(COMPILE_CFLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
+	$(CC) -S $(COMPILE_CFLAGS) $($(notdir $<)_FLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
 
 $(filter %.i,$(CPPSRCS:%.cpp=%.i)): %.i: %.cpp $(call mkdir_deps,$(MDDEPDIR))
 	$(REPORT_BUILD)
-	$(CCC) -C $(PREPROCESS_OPTION)$@ $(COMPILE_CXXFLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
+	$(CCC) -C $(PREPROCESS_OPTION)$@ $(COMPILE_CXXFLAGS) $($(notdir $<)_FLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
 
 $(filter %.i,$(CPPSRCS:%.cc=%.i)): %.i: %.cc $(call mkdir_deps,$(MDDEPDIR))
 	$(REPORT_BUILD)
-	$(CCC) -C $(PREPROCESS_OPTION)$@ $(COMPILE_CXXFLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
+	$(CCC) -C $(PREPROCESS_OPTION)$@ $(COMPILE_CXXFLAGS) $($(notdir $<)_FLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
 
 $(filter %.i,$(CSRCS:%.c=%.i)): %.i: %.c $(call mkdir_deps,$(MDDEPDIR))
 	$(REPORT_BUILD)
-	$(CC) -C $(PREPROCESS_OPTION)$@ $(COMPILE_CFLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
+	$(CC) -C $(PREPROCESS_OPTION)$@ $(COMPILE_CFLAGS) $($(notdir $<)_FLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
 
 $(filter %.i,$(CMMSRCS:%.mm=%.i)): %.i: %.mm $(call mkdir_deps,$(MDDEPDIR))
 	$(REPORT_BUILD)
-	$(CCC) -C $(PREPROCESS_OPTION)$@ $(COMPILE_CXXFLAGS) $(COMPILE_CMMFLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
+	$(CCC) -C $(PREPROCESS_OPTION)$@ $(COMPILE_CXXFLAGS) $(COMPILE_CMMFLAGS) $($(notdir $<)_FLAGS) $(TARGET_LOCAL_INCLUDES) $(_VPATH_SRCS)
 
 $(RESFILE): %.res: %.rc
 	$(REPORT_BUILD)
 	@echo Creating Resource file: $@
-ifeq ($(OS_ARCH),OS2)
-	$(RC) $(RCFLAGS:-D%=-d %) -i $(subst /,\,$(srcdir)) -r $< $@
-else
 ifdef GNU_CC
 	$(RC) $(RCFLAGS) $(filter-out -U%,$(DEFINES)) $(INCLUDES:-I%=--include-dir %) $(OUTOPTION)$@ $(_VPATH_SRCS)
 else
 	$(RC) $(RCFLAGS) -r $(DEFINES) $(INCLUDES) $(OUTOPTION)$@ $(_VPATH_SRCS)
-endif
 endif
 
 # Cancel GNU make built-in implicit rules
@@ -1086,7 +1058,7 @@ ifndef .PYMAKE
 MAKEFLAGS += -r
 endif
 
-ifneq (,$(filter OS2 WINNT,$(OS_ARCH)))
+ifneq (,$(filter WINNT,$(OS_ARCH)))
 SEP := ;
 else
 SEP := :
@@ -1456,12 +1428,12 @@ endif
 # file would be $(DIST)/include/bar/baz/qux.h instead of $(DIST)/include/qux.h
 
 # If we're using binary nsinstall and it's not built yet, fallback to python nsinstall.
-ifneq (,$(filter $(CONFIG_TOOLS)/nsinstall$(HOST_BIN_SUFFIX),$(install_cmd)))
-ifeq (,$(wildcard $(CONFIG_TOOLS)/nsinstall$(HOST_BIN_SUFFIX)))
-nsinstall_is_usable = $(if $(wildcard $(CONFIG_TOOLS)/nsinstall$(HOST_BIN_SUFFIX)),yes)
+ifneq (,$(filter $(DIST)/bin/nsinstall$(HOST_BIN_SUFFIX),$(install_cmd)))
+ifeq (,$(wildcard $(DIST)/bin/nsinstall$(HOST_BIN_SUFFIX)))
+nsinstall_is_usable = $(if $(wildcard $(DIST)/bin/nsinstall$(HOST_BIN_SUFFIX)),yes)
 
 define install_cmd_override
-$(1): install_cmd = $$(if $$(nsinstall_is_usable),$$(INSTALL),$$(NSINSTALL_PY)) $$(1)
+$(1): install_cmd = $$(if $$(nsinstall_is_usable),$$(INSTALL),$$(NSINSTALL_PY) -t) $$(1)
 endef
 endif
 endif

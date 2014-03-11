@@ -292,7 +292,7 @@ protected:
    *                              this is a result of ::LMGetKbdType().
    */
   void InitKeyPressEvent(NSEvent *aNativeKeyEvent,
-                         PRUnichar aInsertChar,
+                         char16_t aInsertChar,
                          WidgetKeyboardEvent& aKeyEvent,
                          UInt32 aKbType);
 
@@ -635,7 +635,7 @@ protected:
    *                              if aChar is a non-printable ASCII character,
    *                              FALSE.
    */
-  static bool IsPrintableChar(PRUnichar aChar);
+  static bool IsPrintableChar(char16_t aChar);
 
   /**
    * IsNormalCharInputtingEvent() checks whether aKeyEvent causes text input.
@@ -1067,21 +1067,18 @@ private:
   uint32_t GetRangeCount(NSAttributedString *aString);
 
   /**
-   * SetTextRangeList() appends text ranges to aTextRangeList.
+   * CreateTextRangeArray() returns text ranges for clauses and/or caret.
    *
-   * @param aTextRangeList        When SetTextRangeList() returns, this will
-   *                              be set to the NSUnderlineStyleAttributeName
-   *                              ranges in aAttrString.  Note that if you pass
-   *                              in a large enough auto-range instance for most
-   *                              cases (e.g., nsAutoTArray<TextRange, 4>),
-   *                              it prevents memory fragmentation.
    * @param aAttrString           An NSAttributedString instance which indicates
    *                              current composition string.
    * @param aSelectedRange        Current selected range (or caret position).
+   * @return                      The result is set to the
+   *                              NSUnderlineStyleAttributeName ranges in
+   *                              aAttrString.
    */
-  void SetTextRangeList(nsTArray<TextRange>& aTextRangeList,
-                        NSAttributedString *aAttrString,
-                        NSRange& aSelectedRange);
+  already_AddRefed<mozilla::TextRangeArray>
+    CreateTextRangeArray(NSAttributedString *aAttrString,
+                         NSRange& aSelectedRange);
 
   /**
    * InitCompositionEvent() initializes aCompositionEvent.

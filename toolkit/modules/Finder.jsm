@@ -9,7 +9,18 @@ const Cc = Components.classes;
 const Cu = Components.utils;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-const Services = Cu.import("resource://gre/modules/Services.jsm").Services;
+Cu.import("resource://gre/modules/Geometry.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
+
+XPCOMUtils.defineLazyServiceGetter(this, "TextToSubURIService",
+                                         "@mozilla.org/intl/texttosuburi;1",
+                                         "nsITextToSubURI");
+XPCOMUtils.defineLazyServiceGetter(this, "Clipboard",
+                                         "@mozilla.org/widget/clipboard;1",
+                                         "nsIClipboard");
+XPCOMUtils.defineLazyServiceGetter(this, "ClipboardHelper",
+                                         "@mozilla.org/widget/clipboardhelper;1",
+                                         "nsIClipboardHelper");
 
 function Finder(docShell) {
   this._fastFind = Cc["@mozilla.org/typeaheadfind;1"].createInstance(Ci.nsITypeAheadFind);
@@ -35,8 +46,11 @@ Finder.prototype = {
     this._listeners = this._listeners.filter(l => l != aListener);
   },
 
-  _notify: function (aSearchString, aResult, aFindBackwards, aDrawOutline) {
-    this._searchString = aSearchString;
+  _notify: function (aSearchString, aResult, aFindBackwards, aDrawOutline, aStoreResult = true) {
+    if (aStoreResult) {
+      this._searchString = aSearchString;
+      this.clipboardSearchString = aSearchString
+    }
     this._outlineLink(aDrawOutline);
 
     let foundLink = this._fastFind.foundLink;
@@ -47,21 +61,64 @@ Finder.prototype = {
       if (ownerDoc)
         docCharset = ownerDoc.characterSet;
 
-      if (!this._textToSubURIService) {
-        this._textToSubURIService = Cc["@mozilla.org/intl/texttosuburi;1"]
-                                      .getService(Ci.nsITextToSubURI);
-      }
-
-      linkURL = this._textToSubURIService.unEscapeURIForUI(docCharset, foundLink.href);
+      linkURL = TextToSubURIService.unEscapeURIForUI(docCharset, foundLink.href);
     }
 
+    let data = {
+      result: aResult,
+      findBackwards: aFindBackwards,
+      linkURL: linkURL,
+      rect: this._getResultRect(),
+      searchString: this._searchString,
+      storeResult: aStoreResult
+    };
+
     for (let l of this._listeners) {
-      l.onFindResult(aResult, aFindBackwards, linkURL);
+      l.onFindResult(data);
     }
   },
 
   get searchString() {
+    if (!this._searchString && this._fastFind.searchString)
+      this._searchString = this._fastFind.searchString;
     return this._searchString;
+  },
+
+  get clipboardSearchString() {
+    let searchString = "";
+    if (!Clipboard.supportsFindClipboard())
+      return searchString;
+
+    try {
+      let trans = Cc["@mozilla.org/widget/transferable;1"]
+                    .createInstance(Ci.nsITransferable);
+      trans.init(this._getWindow()
+                     .QueryInterface(Ci.nsIInterfaceRequestor)
+                     .getInterface(Ci.nsIWebNavigation)
+                     .QueryInterface(Ci.nsILoadContext));
+      trans.addDataFlavor("text/unicode");
+
+      Clipboard.getData(trans, Ci.nsIClipboard.kFindClipboard);
+
+      let data = {};
+      let dataLen = {};
+      trans.getTransferData("text/unicode", data, dataLen);
+      if (data.value) {
+        data = data.value.QueryInterface(Ci.nsISupportsString);
+        searchString = data.toString();
+      }
+    } catch (ex) {}
+
+    return searchString;
+  },
+
+  set clipboardSearchString(aSearchString) {
+    if (!aSearchString || !Clipboard.supportsFindClipboard())
+      return;
+
+    ClipboardHelper.copyStringToClipboard(aSearchString,
+                                          Ci.nsIClipboard.kFindClipboard,
+                                          this._getWindow().document);
   },
 
   set caseSensitive(aSensitive) {
@@ -96,26 +153,42 @@ Finder.prototype = {
     this._notify(searchString, result, aFindBackwards, aDrawOutline);
   },
 
+  /**
+   * Forcibly set the search string of the find clipboard to the currently
+   * selected text in the window, on supported platforms (i.e. OSX).
+   */
+  setSearchStringToSelection: function() {
+    // Find the selected text.
+    let selection = this._getWindow().getSelection();
+    // Don't go for empty selections.
+    if (!selection.rangeCount)
+      return null;
+    let searchString = (selection.toString() || "").trim();
+    // Empty strings are rather useless to search for.
+    if (!searchString.length)
+      return null;
+
+    this.clipboardSearchString = searchString;
+    return searchString;
+  },
+
   highlight: function (aHighlight, aWord) {
     let found = this._highlight(aHighlight, aWord, null);
     if (aHighlight) {
       let result = found ? Ci.nsITypeAheadFind.FIND_FOUND
                          : Ci.nsITypeAheadFind.FIND_NOTFOUND;
-      this._notify(aWord, result, false, false);
+      this._notify(aWord, result, false, false, false);
     }
   },
 
   enableSelection: function() {
     this._fastFind.setSelectionModeAndRepaint(Ci.nsISelectionController.SELECTION_ON);
+    this._restoreOriginalOutline();
   },
 
   removeSelection: function() {
-    let fastFind = this._fastFind;
-
-    fastFind.collapseSelection();
+    this._fastFind.collapseSelection();
     this.enableSelection();
-
-    this._restoreOriginalOutline();
   },
 
   focusContent: function() {
@@ -184,6 +257,48 @@ Finder.prototype = {
 
   _getWindow: function () {
     return this._docShell.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindow);
+  },
+
+  /**
+   * Get the bounding selection rect in CSS px relative to the origin of the
+   * top-level content document.
+   */
+  _getResultRect: function () {
+    let topWin = this._getWindow();
+    let win = this._fastFind.currentWindow;
+    if (!win)
+      return null;
+
+    let selection = win.getSelection();
+    if (!selection.rangeCount || selection.isCollapsed) {
+      // The selection can be into an input or a textarea element.
+      let nodes = win.document.querySelectorAll("input, textarea");
+      for (let node of nodes) {
+        if (node instanceof Ci.nsIDOMNSEditableElement && node.editor) {
+          let sc = node.editor.selectionController;
+          selection = sc.getSelection(Ci.nsISelectionController.SELECTION_NORMAL);
+          if (selection.rangeCount && !selection.isCollapsed) {
+            break;
+          }
+        }
+      }
+    }
+
+    let utils = topWin.QueryInterface(Ci.nsIInterfaceRequestor)
+                      .getInterface(Ci.nsIDOMWindowUtils);
+
+    let scrollX = {}, scrollY = {};
+    utils.getScrollXY(false, scrollX, scrollY);
+
+    for (let frame = win; frame != topWin; frame = frame.parent) {
+      let rect = frame.frameElement.getBoundingClientRect();
+      let left = frame.getComputedStyle(frame.frameElement, "").borderLeftWidth;
+      let top = frame.getComputedStyle(frame.frameElement, "").borderTopWidth;
+      scrollX.value += rect.left + parseInt(left, 10);
+      scrollY.value += rect.top + parseInt(top, 10);
+    }
+    let rect = Rect.fromRect(selection.getRangeAt(0).getBoundingClientRect());
+    return rect.translate(scrollX.value, scrollY.value);
   },
 
   _outlineLink: function (aDrawOutline) {

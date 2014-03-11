@@ -26,7 +26,7 @@
 using namespace js;
 using namespace js::jit;
 
-using mozilla::DoublesAreIdentical;
+using mozilla::NumbersAreIdentical;
 using mozilla::IsFloat32Representable;
 using mozilla::Maybe;
 
@@ -43,7 +43,7 @@ CheckUsesAreFloat32Consumers(MInstruction *ins)
 {
     bool allConsumerUses = true;
     for (MUseDefIterator use(ins); allConsumerUses && use; use++)
-        allConsumerUses &= use.def()->canConsumeFloat32();
+        allConsumerUses &= use.def()->canConsumeFloat32(use.use());
     return allConsumerUses;
 }
 
@@ -539,6 +539,12 @@ MConstant::canProduceFloat32() const
     return true;
 }
 
+MCloneLiteral *
+MCloneLiteral::New(TempAllocator &alloc, MDefinition *obj)
+{
+    return new(alloc) MCloneLiteral(obj);
+}
+
 void
 MControlInstruction::printOpcode(FILE *fp) const
 {
@@ -565,7 +571,7 @@ void
 MLoadTypedArrayElement::printOpcode(FILE *fp) const
 {
     MDefinition::printOpcode(fp);
-    fprintf(fp, " %s", ScalarTypeRepresentation::typeName(arrayType()));
+    fprintf(fp, " %s", ScalarTypeDescr::typeName(arrayType()));
 }
 
 void
@@ -648,13 +654,125 @@ MParameter::congruentTo(MDefinition *ins) const
 
 MCall *
 MCall::New(TempAllocator &alloc, JSFunction *target, size_t maxArgc, size_t numActualArgs,
-           bool construct)
+           bool construct, bool isDOMCall)
 {
     JS_ASSERT(maxArgc >= numActualArgs);
-    MCall *ins = new(alloc) MCall(target, numActualArgs, construct);
+    MCall *ins;
+    if (isDOMCall) {
+        JS_ASSERT(!construct);
+        ins = new(alloc) MCallDOMNative(target, numActualArgs);
+    } else {
+        ins = new(alloc) MCall(target, numActualArgs, construct);
+    }
     if (!ins->init(alloc, maxArgc + NumNonArgumentOperands))
         return nullptr;
     return ins;
+}
+
+AliasSet
+MCallDOMNative::getAliasSet() const
+{
+    const JSJitInfo *jitInfo = getJitInfo();
+
+    JS_ASSERT(jitInfo->aliasSet() != JSJitInfo::AliasNone);
+    // If we don't know anything about the types of our arguments, we have to
+    // assume that type-coercions can have side-effects, so we need to alias
+    // everything.
+    if (jitInfo->aliasSet() != JSJitInfo::AliasDOMSets || !jitInfo->isTypedMethodJitInfo())
+        return AliasSet::Store(AliasSet::Any);
+
+    uint32_t argIndex = 0;
+    const JSTypedMethodJitInfo *methodInfo =
+        reinterpret_cast<const JSTypedMethodJitInfo*>(jitInfo);
+    for (const JSJitInfo::ArgType *argType = methodInfo->argTypes;
+         *argType != JSJitInfo::ArgTypeListEnd;
+         ++argType, ++argIndex)
+    {
+        if (argIndex >= numActualArgs()) {
+            // Passing through undefined can't have side-effects
+            continue;
+        }
+        // getArg(0) is "this", so skip it
+        MDefinition *arg = getArg(argIndex+1);
+        MIRType actualType = arg->type();
+        // The only way to reliably avoid side-effects given the informtion we
+        // have here is if we're passing in a known primitive value to an
+        // argument that expects a primitive value.  XXXbz maybe we need to
+        // communicate better information.  For example, a sequence argument
+        // will sort of unavoidably have side effects, while a typed array
+        // argument won't have any, but both are claimed to be
+        // JSJitInfo::Object.
+        if ((actualType == MIRType_Value || actualType == MIRType_Object) ||
+            (*argType & JSJitInfo::Object))
+         {
+             return AliasSet::Store(AliasSet::Any);
+         }
+    }
+
+    // We checked all the args, and they check out.  So we only
+    // alias DOM mutations.
+    return AliasSet::Load(AliasSet::DOMProperty);
+}
+
+void
+MCallDOMNative::computeMovable()
+{
+    // We are movable if the jitinfo says we can be and if we're also not
+    // effectful.  The jitinfo can't check for the latter, since it depends on
+    // the types of our arguments.
+    const JSJitInfo *jitInfo = getJitInfo();
+
+    JS_ASSERT_IF(jitInfo->isMovable,
+                 jitInfo->aliasSet() != JSJitInfo::AliasEverything);
+
+    if (jitInfo->isMovable && !isEffectful())
+        setMovable();
+}
+
+bool
+MCallDOMNative::congruentTo(MDefinition *ins) const
+{
+    if (!isMovable())
+        return false;
+
+    if (!ins->isCall())
+        return false;
+
+    MCall *call = ins->toCall();
+
+    if (!call->isCallDOMNative())
+        return false;
+
+    if (getSingleTarget() != call->getSingleTarget())
+        return false;
+
+    if (isConstructing() != call->isConstructing())
+        return false;
+
+    if (numActualArgs() != call->numActualArgs())
+        return false;
+
+    if (needsArgCheck() != call->needsArgCheck())
+        return false;
+
+    if (!congruentIfOperandsEqual(call))
+        return false;
+
+    // The other call had better be movable at this point!
+    JS_ASSERT(call->isMovable());
+
+    return true;
+}
+
+const JSJitInfo *
+MCallDOMNative::getJitInfo() const
+{
+    JS_ASSERT(getSingleTarget() && getSingleTarget()->isNative());
+
+    const JSJitInfo *jitInfo = getSingleTarget()->jitInfo();
+    JS_ASSERT(jitInfo);
+
+    return jitInfo;
 }
 
 MApplyArgs *
@@ -670,8 +788,6 @@ MStringLength::foldsTo(TempAllocator &alloc, bool useValueNumbers)
     if ((type() == MIRType_Int32) && (string()->isConstant())) {
         Value value = string()->toConstant()->value();
         JSAtom *atom = &value.toString()->asAtom();
-
-        AutoThreadSafeAccess ts(atom);
         return MConstant::New(alloc, Int32Value(atom->length()));
     }
 
@@ -690,6 +806,22 @@ MFloor::trySpecializeFloat32(TempAllocator &alloc)
 
     if (type() == MIRType_Double)
         setResultType(MIRType_Float32);
+
+    setPolicyType(MIRType_Float32);
+}
+
+void
+MRound::trySpecializeFloat32(TempAllocator &alloc)
+{
+    // No need to look at the output, as it's an integer (unique way to have
+    // this instruction in IonBuilder::inlineMathRound)
+    JS_ASSERT(type() == MIRType_Int32);
+
+    if (!input()->canProduceFloat32()) {
+        if (input()->type() == MIRType_Float32)
+            ConvertDefinitionToDouble<0>(alloc, input(), this);
+        return;
+    }
 
     setPolicyType(MIRType_Float32);
 }
@@ -1016,29 +1148,12 @@ MPhi::addInputSlow(MDefinition *ins, bool *ptypeChange)
     return true;
 }
 
-uint32_t
-MPrepareCall::argc() const
-{
-    JS_ASSERT(hasOneUse());
-    MCall *call = usesBegin()->consumer()->toDefinition()->toCall();
-    return call->numStackArgs();
-}
-
 void
-MPassArg::printOpcode(FILE *fp) const
-{
-    PrintOpcodeName(fp, op());
-    fprintf(fp, " %d ", argnum_);
-    getOperand(0)->printName(fp);
-}
-
-void
-MCall::addArg(size_t argnum, MPassArg *arg)
+MCall::addArg(size_t argnum, MDefinition *arg)
 {
     // The operand vector is initialized in reverse order by the IonBuilder.
     // It cannot be checked for consistency until all arguments are added.
-    arg->setArgnum(argnum);
-    setOperand(argnum + NumNonArgumentOperands, arg->toDefinition());
+    setOperand(argnum + NumNonArgumentOperands, arg);
 }
 
 void
@@ -1056,7 +1171,7 @@ IsConstant(MDefinition *def, double v)
     if (!def->isConstant())
         return false;
 
-    return DoublesAreIdentical(def->toConstant()->value().toNumber(), v);
+    return NumbersAreIdentical(def->toConstant()->value().toNumber(), v);
 }
 
 MDefinition *
@@ -1767,11 +1882,11 @@ MBinaryInstruction::tryUseUnsignedOperands()
         if (newlhs->type() != MIRType_Int32 || newrhs->type() != MIRType_Int32)
             return false;
         if (newlhs != getOperand(0)) {
-            getOperand(0)->setFoldedUnchecked();
+            getOperand(0)->setImplicitlyUsedUnchecked();
             replaceOperand(0, newlhs);
         }
         if (newrhs != getOperand(1)) {
-            getOperand(1)->setFoldedUnchecked();
+            getOperand(1)->setImplicitlyUsedUnchecked();
             replaceOperand(1, newrhs);
         }
         return true;
@@ -1824,11 +1939,11 @@ MCompare::infer(BaselineInspector *inspector, jsbytecode *pc)
     }
 
     // Any comparison is allowed except strict eq.
-    if (!strictEq && lhs == MIRType_Double && SafelyCoercesToDouble(getOperand(1))) {
+    if (!strictEq && IsFloatingPointType(lhs) && SafelyCoercesToDouble(getOperand(1))) {
         compareType_ = Compare_DoubleMaybeCoerceRHS;
         return;
     }
-    if (!strictEq && rhs == MIRType_Double && SafelyCoercesToDouble(getOperand(0))) {
+    if (!strictEq && IsFloatingPointType(rhs) && SafelyCoercesToDouble(getOperand(0))) {
         compareType_ = Compare_DoubleMaybeCoerceLHS;
         return;
     }
@@ -2110,10 +2225,6 @@ MResumePoint::inherit(MBasicBlock *block)
 {
     for (size_t i = 0; i < stackDepth(); i++) {
         MDefinition *def = block->getSlot(i);
-        // We have to unwrap MPassArg: it's removed when inlining calls
-        // and LStackArg does not define a value.
-        if (def->isPassArg())
-            def = def->toPassArg()->getArgument();
         setOperand(i, def);
     }
 }
@@ -2445,9 +2556,6 @@ MCompare::trySpecializeFloat32(TempAllocator &alloc)
     MDefinition *lhs = getOperand(0);
     MDefinition *rhs = getOperand(1);
 
-    if (compareType_ == Compare_Float32)
-        return;
-
     if (lhs->canProduceFloat32() && rhs->canProduceFloat32() && compareType_ == Compare_Double) {
         compareType_ = Compare_Float32;
     } else {
@@ -2513,7 +2621,6 @@ MBeta::printOpcode(FILE *fp) const
 bool
 MNewObject::shouldUseVM() const
 {
-    AutoThreadSafeAccess ts(templateObject());
     return templateObject()->hasSingletonType() ||
            templateObject()->hasDynamicSlots();
 }
@@ -2658,10 +2765,8 @@ InlinePropertyTable::buildTypeSetForFunction(JSFunction *func) const
     if (!types)
         return nullptr;
     for (size_t i = 0; i < numEntries(); i++) {
-        if (entries_[i]->func == func) {
-            if (!types->addType(types::Type::ObjectType(entries_[i]->typeObj), alloc))
-                return nullptr;
-        }
+        if (entries_[i]->func == func)
+            types->addType(types::Type::ObjectType(entries_[i]->typeObj), alloc);
     }
     return types;
 }
@@ -2682,6 +2787,15 @@ void *
 MStoreTypedArrayElementStatic::base() const
 {
     return typedArray_->viewData();
+}
+
+bool
+MGetElementCache::allowDoubleResult() const
+{
+    if (!resultTypeSet())
+        return true;
+
+    return resultTypeSet()->hasType(types::Type::DoubleType());
 }
 
 size_t
@@ -2817,13 +2931,14 @@ jit::ElementAccessIsDenseNative(MDefinition *obj, MDefinition *id)
     if (!types)
         return false;
 
+    // Typed arrays are native classes but do not have dense elements.
     const Class *clasp = types->getKnownClass();
-    return clasp && clasp->isNative();
+    return clasp && clasp->isNative() && !IsTypedArrayClass(clasp);
 }
 
 bool
 jit::ElementAccessIsTypedArray(MDefinition *obj, MDefinition *id,
-                               ScalarTypeRepresentation::Type *arrayType)
+                               ScalarTypeDescr::Type *arrayType)
 {
     if (obj->mightBeType(MIRType_String))
         return false;
@@ -2835,8 +2950,8 @@ jit::ElementAccessIsTypedArray(MDefinition *obj, MDefinition *id,
     if (!types)
         return false;
 
-    *arrayType = (ScalarTypeRepresentation::Type) types->getTypedArrayType();
-    return *arrayType != ScalarTypeRepresentation::TYPE_MAX;
+    *arrayType = (ScalarTypeDescr::Type) types->getTypedArrayType();
+    return *arrayType != ScalarTypeDescr::TYPE_MAX;
 }
 
 bool
@@ -3047,7 +3162,7 @@ jit::PropertyReadIsIdempotent(types::CompilerConstraintList *constraints,
 
             // Check if the property has been reconfigured or is a getter.
             types::HeapTypeSetKey property = object->property(NameToId(name));
-            if (property.configured(constraints))
+            if (property.nonData(constraints))
                 return false;
         }
     }
@@ -3055,7 +3170,7 @@ jit::PropertyReadIsIdempotent(types::CompilerConstraintList *constraints,
     return true;
 }
 
-bool
+void
 jit::AddObjectsForPropertyRead(MDefinition *obj, PropertyName *name,
                                types::TemporaryTypeSet *observed)
 {
@@ -3065,16 +3180,20 @@ jit::AddObjectsForPropertyRead(MDefinition *obj, PropertyName *name,
     LifoAlloc *alloc = GetIonContext()->temp->lifoAlloc();
 
     types::TemporaryTypeSet *types = obj->resultTypeSet();
-    if (!types || types->unknownObject())
-        return observed->addType(types::Type::AnyObjectType(), alloc);
+    if (!types || types->unknownObject()) {
+        observed->addType(types::Type::AnyObjectType(), alloc);
+        return;
+    }
 
     for (size_t i = 0; i < types->getObjectCount(); i++) {
         types::TypeObjectKey *object = types->getObject(i);
         if (!object)
             continue;
 
-        if (object->unknownProperties())
-            return observed->addType(types::Type::AnyObjectType(), alloc);
+        if (object->unknownProperties()) {
+            observed->addType(types::Type::AnyObjectType(), alloc);
+            return;
+        }
 
         jsid id = name ? NameToId(name) : JSID_VOID;
         types::HeapTypeSetKey property = object->property(id);
@@ -3082,17 +3201,17 @@ jit::AddObjectsForPropertyRead(MDefinition *obj, PropertyName *name,
         if (!types)
             continue;
 
-        if (types->unknownObject())
-            return observed->addType(types::Type::AnyObjectType(), alloc);
+        if (types->unknownObject()) {
+            observed->addType(types::Type::AnyObjectType(), alloc);
+            return;
+        }
 
         for (size_t i = 0; i < types->getObjectCount(); i++) {
             types::TypeObjectKey *object = types->getObject(i);
-            if (object && !observed->addType(types::Type::ObjectType(object), alloc))
-                return false;
+            if (object)
+                observed->addType(types::Type::ObjectType(object), alloc);
         }
     }
-
-    return true;
 }
 
 static bool

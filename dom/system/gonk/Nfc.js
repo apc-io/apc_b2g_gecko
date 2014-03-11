@@ -51,14 +51,16 @@ const NFC_IPC_MSG_NAMES = [
   "NFC:GetDetailsNDEF",
   "NFC:MakeReadOnlyNDEF",
   "NFC:Connect",
-  "NFC:Close"
+  "NFC:Close",
+  "NFC:SendFile"
 ];
 
 const NFC_IPC_PEER_MSG_NAMES = [
   "NFC:RegisterPeerTarget",
   "NFC:UnregisterPeerTarget",
   "NFC:CheckP2PRegistration",
-  "NFC:NotifyUserAcceptedP2P"
+  "NFC:NotifyUserAcceptedP2P",
+  "NFC:NotifySendFileStatus"
 ];
 
 XPCOMUtils.defineLazyServiceGetter(this, "ppmm",
@@ -242,6 +244,17 @@ XPCOMUtils.defineLazyGetter(this, "gMessageManager", function () {
       }
     },
 
+    removePeerTarget: function removePeerTarget(target) {
+      let targets = this.peerTargetsMap;
+      Object.keys(targets).forEach((appId) => {
+        let targetInfo = targets[appId];
+        if (targetInfo && targetInfo.target === target) {
+          // Remove the target from the list of registered targets
+          delete targets[appId];
+        }
+      });
+    },
+
     isRegisteredP2PTarget: function isRegisteredP2PTarget(appId, event) {
       let targetInfo = this.peerTargetsMap[appId];
       // Check if it is a registered target for the 'event'
@@ -280,6 +293,7 @@ XPCOMUtils.defineLazyGetter(this, "gMessageManager", function () {
         // already forgotten its permissions so we need to unregister the target
         // for every permission.
         this._unregisterMessageTarget(null, msg.target);
+        this.removePeerTarget(msg.target);
         return null;
       }
 
@@ -296,11 +310,13 @@ XPCOMUtils.defineLazyGetter(this, "gMessageManager", function () {
           return null;
         }
 
-        // Add extra permission check for two IPC Peer events:
-        // 'NFC:CheckP2PRegistration' , 'NFC:NotifyUserAcceptedP2P'
+        // Add extra permission check for below events:
+        // 'NFC:CheckP2PRegistration' , 'NFC:NotifyUserAcceptedP2P',
+        // 'NFC:NotifySendFileStatus'
         if ((msg.name == "NFC:CheckP2PRegistration") ||
-            (msg.name == "NFC:NotifyUserAcceptedP2P")) {
-          // ONLY privileged Content can send these two events
+            (msg.name == "NFC:NotifyUserAcceptedP2P") ||
+            (msg.name == "NFC:NotifySendFileStatus")) {
+          // ONLY privileged Content can send these events
           if (!msg.target.assertPermission("nfc-manager")) {
             debug("NFC message " + message.name +
                   " from a content process with no 'nfc-manager' privileges.");
@@ -343,6 +359,11 @@ XPCOMUtils.defineLazyGetter(this, "gMessageManager", function () {
           // Notify the 'NFC_PEER_EVENT_READY' since user has acknowledged
           this.notifyPeerEvent(msg.json.appId, NFC.NFC_PEER_EVENT_READY);
           break;
+        case "NFC:NotifySendFileStatus":
+          // Upon receiving the status of sendFile operation, send the response
+          // to appropriate content process.
+          this.sendNfcResponseMessage(msg.name + "Response", msg.json);
+          break;
       }
       return null;
     },
@@ -377,10 +398,10 @@ function Nfc() {
 
   Services.obs.addObserver(this, NFC.TOPIC_MOZSETTINGS_CHANGED, false);
   Services.obs.addObserver(this, NFC.TOPIC_XPCOM_SHUTDOWN, false);
+  Services.obs.addObserver(this, NFC.TOPIC_HARDWARE_STATE, false);
 
   gMessageManager.init(this);
   let lock = gSettingsService.createLock();
-  lock.get(NFC.SETTING_NFC_POWER_LEVEL, this);
   lock.get(NFC.SETTING_NFC_ENABLED, this);
   // Maps sessionId (that are generated from nfcd) with a unique guid : 'SessionToken'
   this.sessionTokenMap = {};
@@ -501,8 +522,6 @@ Nfc.prototype = {
   // nsINfcWorker
   worker: null,
 
-  powerLevel: NFC.NFC_POWER_LEVEL_DISABLED,
-
   sessionTokenMap: null,
 
   /**
@@ -532,6 +551,7 @@ Nfc.prototype = {
         break;
       case "NFC:WriteNDEF": // Fall through
       case "NFC:MakeReadOnlyNDEF":
+      case "NFC:SendFile":
         if (!message.target.assertPermission("nfc-write")) {
           debug("NFC message " + message.name +
                 " from a content process with no 'nfc-write' privileges.");
@@ -574,6 +594,17 @@ Nfc.prototype = {
       case "NFC:Close":
         this.sendToWorker("close", message.json);
         break;
+      case "NFC:SendFile":
+        // Chrome process is the arbitrator / mediator between
+        // system app (content process) that issued nfc 'sendFile' operation
+        // and system app that handles the system message :
+        // 'nfc-manager-send-file'. System app subsequently handover's
+        // the data to alternate carrier's (BT / WiFi) 'sendFile' interface.
+
+        // Notify system app to initiate BT send file operation
+        gSystemMessenger.broadcastMessage("nfc-manager-send-file",
+                                           message.json);
+        break;
       default:
         debug("UnSupported : Message Name " + message.name);
         return null;
@@ -589,15 +620,6 @@ Nfc.prototype = {
       case NFC.SETTING_NFC_ENABLED:
         debug("'nfc.enabled' is now " + aResult);
         this._enabled = aResult;
-        // General power setting
-        let powerLevel = this._enabled ? NFC.NFC_POWER_LEVEL_ENABLED :
-                                         NFC.NFC_POWER_LEVEL_DISABLED;
-        // Only if the value changes, set the power config and persist
-        if (powerLevel !== this.powerLevel) {
-          debug("New Power Level " + powerLevel);
-          this.setConfig({powerLevel: powerLevel});
-          this.powerLevel = powerLevel;
-        }
         break;
     }
   },
@@ -622,11 +644,28 @@ Nfc.prototype = {
           this.handle(setting.key, setting.value);
         }
         break;
+      case NFC.TOPIC_HARDWARE_STATE:
+        let state = JSON.parse(data);
+        if (state) {
+          let level = this.hardwareStateToPowerlevel(state.nfcHardwareState);
+          this.setConfig({ powerLevel: level });
+        }
+        break;
     }
   },
 
   setConfig: function setConfig(prop) {
     this.sendToWorker("config", prop);
+  },
+
+  hardwareStateToPowerlevel: function hardwareStateToPowerlevel(state) {
+    switch (state) {
+      case 0:   return NFC.NFC_POWER_LEVEL_DISABLED;
+      case 1:   return NFC.NFC_POWER_LEVEL_ENABLED;
+      case 2:   return NFC.NFC_POWER_LEVEL_ENABLED;
+      case 3:   return NFC.NFC_POWER_LEVEL_LOW;
+      default:  return NFC.NFC_POWER_LEVEL_UNKNOWN;
+    }
   }
 };
 

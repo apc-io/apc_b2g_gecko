@@ -99,6 +99,7 @@ if CONFIG['CPU_ARCH'] == 'arm' or CONFIG['OS_TEST'] == 'sa110':
             'xptcinvoke_arm.cpp',
             'xptcstubs_arm.cpp'
         ]
+        CXXFLAGS += ['-O2']
     elif CONFIG['OS_ARCH'] == 'NetBSD':
         SOURCES += [
             'xptcinvoke_arm_netbsd.cpp',
@@ -149,6 +150,13 @@ if CONFIG['OS_ARCH'] == 'NetBSD':
         ]
 
 if CONFIG['OS_ARCH'] == 'Linux':
+    if CONFIG['OS_TEST'] == 'aarch64':
+        SOURCES += [
+            'xptcinvoke_aarch64.cpp',
+            'xptcinvoke_asm_aarch64.s',
+            'xptcstubs_aarch64.cpp',
+            'xptcstubs_asm_aarch64.s',
+        ]
     if CONFIG['OS_TEST'] == 'm68k':
         SOURCES += [
             'xptcinvoke_linux_m68k.cpp',
@@ -206,12 +214,12 @@ if CONFIG['OS_TEST'] == 'powerpc':
             'xptcstubs_ppc_linux.cpp',
         ]
 
-if CONFIG['OS_TEST'] == 'powerpc64':
+if CONFIG['OS_TEST'] in ('powerpc64', 'powerpc64le'):
     if CONFIG['OS_ARCH'] in ('Linux', 'FreeBSD'):
           SOURCES += [
-              'xptcinvoke_asm_ppc64_linux.s',
+              'xptcinvoke_asm_ppc64_linux.S',
               'xptcinvoke_ppc64_linux.cpp',
-              'xptcstubs_asm_ppc64_linux.s',
+              'xptcstubs_asm_ppc64_linux.S',
               'xptcstubs_ppc64_linux.cpp',
           ]
 
@@ -226,9 +234,9 @@ if CONFIG['OS_TEST'] in ('macppc', 'bebox', 'ofppc', 'prep', 'amigappc'):
 
 if CONFIG['OS_ARCH'] == 'OpenBSD' and CONFIG['OS_TEST'] == 'powerpc':
     SOURCES += [
-        'xptcinvoke_asm_ppc_openbsd.s',
+        'xptcinvoke_asm_ppc_openbsd.S',
         'xptcinvoke_ppc_openbsd.cpp',
-        'xptcstubs_asm_ppc_openbsd.s',
+        'xptcstubs_asm_ppc_openbsd.S',
         'xptcstubs_ppc_openbsd.cpp',
     ]
 
@@ -256,7 +264,7 @@ if CONFIG['OS_ARCH'] == 'OpenBSD' and CONFIG['OS_TEST'] == 'sparc':
         'xptcstubs_sparc_openbsd.cpp',
     ]
 
-if CONFIG['OS_ARCH'] == 'OpenBSD' and CONFIG['OS_TEST'] == 'sparc64':
+if CONFIG['OS_ARCH'] in ('OpenBSD', 'FreeBSD') and CONFIG['OS_TEST'] == 'sparc64':
     SOURCES += [
         'xptcinvoke_asm_sparc64_openbsd.s',
         'xptcinvoke_sparc64_openbsd.cpp',
@@ -301,12 +309,29 @@ if CONFIG['OS_ARCH'] == 'Linux':
             'xptcinvoke_linux_s390.cpp',
             'xptcstubs_linux_s390.cpp',
         ]
+        CXXFLAGS += [
+            '-fno-strict-aliasing',
+            '-fno-inline',
+            '-fomit-frame-pointer',
+            '-mbackchain',
+        ]
     elif CONFIG['OS_TEST'] == 's390x':
         SOURCES += [
             'xptcinvoke_linux_s390x.cpp',
             'xptcstubs_linux_s390x.cpp',
         ]
+        CXXFLAGS += [
+            '-fno-strict-aliasing',
+            '-fno-inline',
+            '-fomit-frame-pointer',
+            '-mbackchain',
+        ]
 
 FINAL_LIBRARY = 'xpcom_core'
+
+LOCAL_INCLUDES += [
+    '../..',
+    '../../../../xptinfo/src',
+]
 
 NO_PGO = True

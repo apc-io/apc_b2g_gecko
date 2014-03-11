@@ -7,6 +7,8 @@
 
 <script type="text/javascript">
 
+SimpleTest.requestCompleteLog();
+
 function checkException(func, exc)
 {
   var exceptionThrew = false;
@@ -16,6 +18,9 @@ function checkException(func, exc)
   catch (ex) {
     exceptionThrew = true;
     is(ex.name, exc, "Expected "+exc+" exception");
+    if (ex.name != exc) {
+      info("The exception which was thrown is: " + ex);
+    }
   }
   ok(exceptionThrew, "Exception "+exc+" threw");
 }

@@ -42,6 +42,7 @@ namespace winrt {
 ComPtr<FrameworkView> sFrameworkView;
 ComPtr<MetroApp> sMetroApp;
 ComPtr<ICoreApplication> sCoreApp;
+bool MetroApp::sGeckoShuttingDown = false;
 
 ////////////////////////////////////////////////////
 // IFrameworkViewSource impl.
@@ -50,12 +51,17 @@ ComPtr<ICoreApplication> sCoreApp;
 HRESULT
 MetroApp::CreateView(ABI::Windows::ApplicationModel::Core::IFrameworkView **aViewProvider)
 {
-  // This entry point is called on the metro main thread, but the thread won't be
-  // recognized as such until after Initialize is called below. XPCOM has not gone
-  // through startup at this point.
+  // This entry point is called on the metro main thread, but the thread won't
+  // be recognized as such until after Run() is called below. XPCOM has not
+  // gone through startup at this point.
+
+  // Note that we create the view which creates our native window for us. The
+  // gecko widget gets created by gecko, and the two get hooked up later in
+  // MetroWidget::Create().
 
   LogFunction();
 
+  sFrameworkView = Make<FrameworkView>(this);
   sFrameworkView.Get()->AddRef();
   *aViewProvider = sFrameworkView.Get();
   return !sFrameworkView ? E_FAIL : S_OK;
@@ -84,9 +90,9 @@ MetroApp::Run()
     this, &MetroApp::OnResuming).Get(), &mResumeEvent);
   AssertHRESULT(hr);
 
-  WinUtils::Log("XPCOM startup initialization began");
+  WinUtils::Log("Calling XRE_metroStartup.");
   nsresult rv = XRE_metroStartup(true);
-  WinUtils::Log("XPCOM startup initialization complete");
+  WinUtils::Log("Exiting XRE_metroStartup.");
   if (NS_FAILED(rv)) {
     WinUtils::Log("XPCOM startup initialization failed, bailing. rv=%X", rv);
     CoreExit();
@@ -96,7 +102,7 @@ MetroApp::Run()
 // Free all xpcom related resources before calling the xre shutdown call.
 // Must be called on the metro main thread. Currently called from appshell.
 void
-MetroApp::ShutdownXPCOM()
+MetroApp::Shutdown()
 {
   LogThread();
 
@@ -106,8 +112,10 @@ MetroApp::ShutdownXPCOM()
   }
 
   if (sFrameworkView) {
-    sFrameworkView->ShutdownXPCOM();
+    sFrameworkView->Shutdown();
   }
+
+  MetroApp::sGeckoShuttingDown = true;
 
   // Shut down xpcom
   XRE_metroShutdown();
@@ -129,6 +137,31 @@ MetroApp::CoreExit()
   if (SUCCEEDED(hr)) {
     coreExit->Exit();
   }
+}
+
+void
+MetroApp::ActivateBaseView()
+{
+  if (sFrameworkView) {
+    sFrameworkView->ActivateView();
+  }
+}
+
+/*
+ * TBD: when we support multiple widgets, we'll need a way to sync up the view
+ * created in CreateView with the widget gecko creates. Currently we only have
+ * one view (sFrameworkView) and one main widget.
+ */
+void
+MetroApp::SetWidget(MetroWidget* aPtr)
+{
+  LogThread();
+
+  NS_ASSERTION(aPtr, "setting null base widget?");
+
+  // Both of these calls AddRef the ptr we pass in
+  aPtr->SetView(sFrameworkView.Get());
+  sFrameworkView->SetWidget(aPtr);
 }
 
 ////////////////////////////////////////////////////
@@ -155,20 +188,8 @@ MetroApp::OnAsyncTileCreated(ABI::Windows::Foundation::IAsyncOperation<bool>* aO
                              AsyncStatus aStatus)
 {
   WinUtils::Log("Async operation status: %d", aStatus);
+  MetroUtils::FireObserver("metro_on_async_tile_created");
   return S_OK;
-}
-
-// static
-void
-MetroApp::SetBaseWidget(MetroWidget* aPtr)
-{
-  LogThread();
-
-  NS_ASSERTION(aPtr, "setting null base widget?");
-
-  // Both of these calls AddRef the ptr we pass in
-  aPtr->SetView(sFrameworkView.Get());
-  sFrameworkView->SetWidget(aPtr);
 }
 
 // static
@@ -247,9 +268,7 @@ XRE_MetroCoreApplicationRun()
     return false;
   }
 
-  sFrameworkView = Make<FrameworkView>(sMetroApp.Get());
   hr = sCoreApp->Run(sMetroApp.Get());
-  sFrameworkView = nullptr;
 
   WinUtils::Log("Exiting CoreApplication::Run");
 

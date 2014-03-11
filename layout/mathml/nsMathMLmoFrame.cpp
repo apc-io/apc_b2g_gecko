@@ -30,9 +30,11 @@ nsMathMLmoFrame::~nsMathMLmoFrame()
 {
 }
 
-static const PRUnichar kInvisibleComma = PRUnichar(0x200B); // a.k.a. ZERO WIDTH SPACE
-static const PRUnichar kApplyFunction  = PRUnichar(0x2061);
-static const PRUnichar kInvisibleTimes = PRUnichar(0x2062);
+static const char16_t kInvisibleComma = char16_t(0x200B); // a.k.a. ZERO WIDTH SPACE
+static const char16_t kApplyFunction  = char16_t(0x2061);
+static const char16_t kInvisibleTimes = char16_t(0x2062);
+static const char16_t kInvisibleSeparator = char16_t(0x2063);
+static const char16_t kInvisiblePlus = char16_t(0x2064);
 
 eMathMLFrameType
 nsMathMLmoFrame::GetMathMLFrameType()
@@ -118,11 +120,13 @@ nsMathMLmoFrame::ProcessTextData()
   nsContentUtils::GetNodeTextContent(mContent, false, data);
   data.CompressWhitespace();
   int32_t length = data.Length();
-  PRUnichar ch = (length == 0) ? PRUnichar('\0') : data[0];
+  char16_t ch = (length == 0) ? char16_t('\0') : data[0];
 
   if ((length == 1) && 
       (ch == kInvisibleComma || 
        ch == kApplyFunction  || 
+       ch == kInvisibleSeparator ||
+       ch == kInvisiblePlus ||
        ch == kInvisibleTimes)) {
     mFlags |= NS_MATHML_OPERATOR_INVISIBLE;
   }
@@ -255,16 +259,14 @@ nsMathMLmoFrame::ProcessOperatorData()
       mEmbellishData.flags |= NS_MATHML_EMBELLISH_MOVABLELIMITS;
 
     // see if the accent attribute is there
-    GetAttribute(mContent, mPresentationData.mstyle, nsGkAtoms::accent_,
-                 value);
+    mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::accent_, value);
     if (value.EqualsLiteral("true"))
       mEmbellishData.flags |= NS_MATHML_EMBELLISH_ACCENT;
     else if (value.EqualsLiteral("false"))
       mEmbellishData.flags &= ~NS_MATHML_EMBELLISH_ACCENT;
 
     // see if the movablelimits attribute is there
-    GetAttribute(mContent, mPresentationData.mstyle,
-                 nsGkAtoms::movablelimits_, value);
+    mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::movablelimits_, value);
     if (value.EqualsLiteral("true"))
       mEmbellishData.flags |= NS_MATHML_EMBELLISH_MOVABLELIMITS;
     else if (value.EqualsLiteral("false"))
@@ -317,8 +319,7 @@ nsMathMLmoFrame::ProcessOperatorData()
 
     // find our form
     form = NS_MATHML_OPERATOR_FORM_INFIX;
-    GetAttribute(mContent, mPresentationData.mstyle, nsGkAtoms::form,
-                 value);
+    mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::form, value);
     if (!value.IsEmpty()) {
       if (value.EqualsLiteral("prefix"))
         form = NS_MATHML_OPERATOR_FORM_PREFIX;
@@ -395,8 +396,7 @@ nsMathMLmoFrame::ProcessOperatorData()
   // which is not necessarily the default one.
   //
   nscoord leadingSpace = mEmbellishData.leadingSpace;
-  GetAttribute(mContent, mPresentationData.mstyle, nsGkAtoms::lspace_,
-               value);
+  mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::lspace_, value);
   if (!value.IsEmpty()) {
     nsCSSValue cssValue;
     if (nsMathMLElement::ParseNumericValue(value, cssValue, 0,
@@ -422,8 +422,7 @@ nsMathMLmoFrame::ProcessOperatorData()
   // which is not necessarily the default one.
   //
   nscoord trailingSpace = mEmbellishData.trailingSpace;
-  GetAttribute(mContent, mPresentationData.mstyle, nsGkAtoms::rspace_,
-               value);
+  mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::rspace_, value);
   if (!value.IsEmpty()) {
     nsCSSValue cssValue;
     if (nsMathMLElement::ParseNumericValue(value, cssValue, 0,
@@ -459,34 +458,29 @@ nsMathMLmoFrame::ProcessOperatorData()
   // special: accent and movablelimits are handled above,
   // don't process them here
 
-  GetAttribute(mContent, mPresentationData.mstyle,
-               nsGkAtoms::stretchy_, value);
+  mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::stretchy_, value);
   if (value.EqualsLiteral("false")) {
     mFlags &= ~NS_MATHML_OPERATOR_STRETCHY;
   } else if (value.EqualsLiteral("true")) {
     mFlags |= NS_MATHML_OPERATOR_STRETCHY;
   }
   if (NS_MATHML_OPERATOR_IS_FENCE(mFlags)) {
-    GetAttribute(mContent, mPresentationData.mstyle,
-                 nsGkAtoms::fence_, value);
+    mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::fence_, value);
     if (value.EqualsLiteral("false"))
       mFlags &= ~NS_MATHML_OPERATOR_FENCE;
   }
-  GetAttribute(mContent, mPresentationData.mstyle,
-               nsGkAtoms::largeop_, value);
+  mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::largeop_, value);
   if (value.EqualsLiteral("false")) {
     mFlags &= ~NS_MATHML_OPERATOR_LARGEOP;
   } else if (value.EqualsLiteral("true")) {
     mFlags |= NS_MATHML_OPERATOR_LARGEOP;
   }
   if (NS_MATHML_OPERATOR_IS_SEPARATOR(mFlags)) {
-    GetAttribute(mContent, mPresentationData.mstyle,
-                 nsGkAtoms::separator_, value);
+    mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::separator_, value);
     if (value.EqualsLiteral("false"))
       mFlags &= ~NS_MATHML_OPERATOR_SEPARATOR;
   }
-  GetAttribute(mContent, mPresentationData.mstyle, nsGkAtoms::symmetric_,
-               value);
+  mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::symmetric_, value);
   if (value.EqualsLiteral("false"))
     mFlags &= ~NS_MATHML_OPERATOR_SYMMETRIC;
   else if (value.EqualsLiteral("true"))
@@ -506,8 +500,7 @@ nsMathMLmoFrame::ProcessOperatorData()
   // normal size.
   //
   mMinSize = 0;
-  GetAttribute(mContent, mPresentationData.mstyle, nsGkAtoms::minsize_,
-               value);
+  mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::minsize_, value);
   if (!value.IsEmpty()) {
     nsCSSValue cssValue;
     if (nsMathMLElement::ParseNumericValue(value, cssValue,
@@ -539,8 +532,7 @@ nsMathMLmoFrame::ProcessOperatorData()
   // normal size.
   //
   mMaxSize = NS_MATHML_OPERATOR_SIZE_INFINITY;
-  GetAttribute(mContent, mPresentationData.mstyle, nsGkAtoms::maxsize_,
-               value);
+  mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::maxsize_, value);
   if (!value.IsEmpty()) {
     nsCSSValue cssValue;
     if (nsMathMLElement::ParseNumericValue(value, cssValue,
@@ -562,7 +554,7 @@ nsMathMLmoFrame::ProcessOperatorData()
 
 static uint32_t
 GetStretchHint(nsOperatorFlags aFlags, nsPresentationData aPresentationData,
-               bool aIsVertical)
+               bool aIsVertical, const nsStyleFont* aStyleFont)
 {
   uint32_t stretchHint = NS_STRETCH_NONE;
   // See if it is okay to stretch,
@@ -573,7 +565,7 @@ GetStretchHint(nsOperatorFlags aFlags, nsPresentationData aPresentationData,
     // stretchy are true or false (see bug 69325).
     // . largeopOnly is taken if largeop=true and stretchy=false
     // . largeop is taken if largeop=true and stretchy=true
-    if (NS_MATHML_IS_DISPLAYSTYLE(aPresentationData.flags) &&
+    if (aStyleFont->mMathDisplay == NS_MATHML_DISPLAYSTYLE_BLOCK &&
         NS_MATHML_OPERATOR_IS_LARGEOP(aFlags)) {
       stretchHint = NS_STRETCH_LARGEOP; // (largeopOnly, not mask!)
       if (NS_MATHML_OPERATOR_IS_INTEGRAL(aFlags)) {
@@ -644,7 +636,7 @@ nsMathMLmoFrame::Stretch(nsRenderingContext& aRenderingContext,
   }
 
   uint32_t stretchHint =
-    GetStretchHint(mFlags, mPresentationData, isVertical);
+    GetStretchHint(mFlags, mPresentationData, isVertical, StyleFont());
 
   if (useMathMLChar) {
     nsBoundingMetrics initialSize = aDesiredStretchSize.mBoundingMetrics;
@@ -828,26 +820,26 @@ nsMathMLmoFrame::Stretch(nsRenderingContext& aRenderingContext,
   }
   if (isAccent && firstChild) {
     // see bug 188467 for what is going on here
-    nscoord dy = aDesiredStretchSize.ascent - (mBoundingMetrics.ascent + leading);
-    aDesiredStretchSize.ascent = mBoundingMetrics.ascent + leading;
-    aDesiredStretchSize.height = aDesiredStretchSize.ascent + mBoundingMetrics.descent;
+    nscoord dy = aDesiredStretchSize.TopAscent() - (mBoundingMetrics.ascent + leading);
+    aDesiredStretchSize.SetTopAscent(mBoundingMetrics.ascent + leading);
+    aDesiredStretchSize.Height() = aDesiredStretchSize.TopAscent() + mBoundingMetrics.descent;
 
     firstChild->SetPosition(firstChild->GetPosition() - nsPoint(0, dy));
   }
   else if (useMathMLChar) {
     nscoord ascent = fm->MaxAscent();
     nscoord descent = fm->MaxDescent();
-    aDesiredStretchSize.ascent = std::max(mBoundingMetrics.ascent + leading, ascent);
-    aDesiredStretchSize.height = aDesiredStretchSize.ascent +
+    aDesiredStretchSize.SetTopAscent(std::max(mBoundingMetrics.ascent + leading, ascent));
+    aDesiredStretchSize.Height() = aDesiredStretchSize.TopAscent() +
                                  std::max(mBoundingMetrics.descent + leading, descent);
   }
-  aDesiredStretchSize.width = mBoundingMetrics.width;
+  aDesiredStretchSize.Width() = mBoundingMetrics.width;
   aDesiredStretchSize.mBoundingMetrics = mBoundingMetrics;
   mReference.x = 0;
-  mReference.y = aDesiredStretchSize.ascent;
+  mReference.y = aDesiredStretchSize.TopAscent();
   // Place our mMathMLChar, its origin is in our coordinate system
   if (useMathMLChar) {
-    nscoord dy = aDesiredStretchSize.ascent - mBoundingMetrics.ascent;
+    nscoord dy = aDesiredStretchSize.TopAscent() - mBoundingMetrics.ascent;
     mMathMLChar.SetRect(nsRect(0, dy, charSize.width, charSize.ascent + charSize.descent));
   }
 
@@ -869,7 +861,7 @@ nsMathMLmoFrame::Stretch(nsRenderingContext& aRenderingContext,
     }
 
     mBoundingMetrics.width += leadingSpace + trailingSpace;
-    aDesiredStretchSize.width = mBoundingMetrics.width;
+    aDesiredStretchSize.Width() = mBoundingMetrics.width;
     aDesiredStretchSize.mBoundingMetrics.width = mBoundingMetrics.width;
 
     nscoord dx = (StyleVisibility()->mDirection ?
@@ -932,7 +924,7 @@ nsMathMLmoFrame::TransmitAutomaticData()
   return NS_OK;
 }
 
-NS_IMETHODIMP
+nsresult
 nsMathMLmoFrame::SetInitialChildList(ChildListID     aListID,
                                      nsFrameList&    aChildList)
 {
@@ -945,7 +937,7 @@ nsMathMLmoFrame::SetInitialChildList(ChildListID     aListID,
   return rv;
 }
 
-NS_IMETHODIMP
+nsresult
 nsMathMLmoFrame::Reflow(nsPresContext*          aPresContext,
                         nsHTMLReflowMetrics&     aDesiredSize,
                         const nsHTMLReflowState& aReflowState,
@@ -961,9 +953,9 @@ nsMathMLmoFrame::Reflow(nsPresContext*          aPresContext,
     // return empty space for now, but this is not yet final since there
     // can be lspace and rspace attributes that reclaim some room.
     // These will be dealt with later in Stretch().
-    aDesiredSize.width = 0;
-    aDesiredSize.height = 0;
-    aDesiredSize.ascent = 0;
+    aDesiredSize.Width() = 0;
+    aDesiredSize.Height() = 0;
+    aDesiredSize.SetTopAscent(0);
     aDesiredSize.mBoundingMetrics = nsBoundingMetrics();
     aStatus = NS_FRAME_COMPLETE;
 
@@ -1005,8 +997,9 @@ nsMathMLmoFrame::GetIntrinsicWidthMetrics(nsRenderingContext *aRenderingContext,
 {
   ProcessOperatorData();
   if (UseMathMLChar()) {
-    uint32_t stretchHint = GetStretchHint(mFlags, mPresentationData, true);
-    aDesiredSize.width = mMathMLChar.
+    uint32_t stretchHint = GetStretchHint(mFlags, mPresentationData, true,
+                                          StyleFont());
+    aDesiredSize.Width() = mMathMLChar.
       GetMaxWidth(PresContext(), *aRenderingContext,
                   stretchHint, mMaxSize,
                   NS_MATHML_OPERATOR_MAXSIZE_IS_ABSOLUTE(mFlags));
@@ -1020,9 +1013,9 @@ nsMathMLmoFrame::GetIntrinsicWidthMetrics(nsRenderingContext *aRenderingContext,
   // embellished container but for determining total intrinsic width it should
   // be safe to include it for the core here instead.
   bool isRTL = StyleVisibility()->mDirection;
-  aDesiredSize.width +=
+  aDesiredSize.Width() +=
     mEmbellishData.leadingSpace + mEmbellishData.trailingSpace;
-  aDesiredSize.mBoundingMetrics.width = aDesiredSize.width;
+  aDesiredSize.mBoundingMetrics.width = aDesiredSize.Width();
   if (isRTL) {
     aDesiredSize.mBoundingMetrics.leftBearing += mEmbellishData.trailingSpace;
     aDesiredSize.mBoundingMetrics.rightBearing += mEmbellishData.trailingSpace;
@@ -1032,7 +1025,7 @@ nsMathMLmoFrame::GetIntrinsicWidthMetrics(nsRenderingContext *aRenderingContext,
   }
 }
 
-NS_IMETHODIMP
+nsresult
 nsMathMLmoFrame::AttributeChanged(int32_t         aNameSpaceID,
                                   nsIAtom*        aAttribute,
                                   int32_t         aModType)

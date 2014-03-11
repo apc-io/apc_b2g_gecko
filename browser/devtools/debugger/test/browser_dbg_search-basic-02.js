@@ -19,7 +19,7 @@ function test() {
     gSources = gDebugger.DebuggerView.Sources;
     gSearchBox = gDebugger.DebuggerView.Filtering._searchbox;
 
-    waitForSourceAndCaretAndScopes(gPanel, "-02.js", 6)
+    waitForSourceAndCaretAndScopes(gPanel, "-02.js", 1)
       .then(performSimpleSearch)
       .then(() => verifySourceAndCaret("-01.js", 1, 1, [1, 1]))
       .then(combineWithLineSearch)
@@ -40,7 +40,7 @@ function test() {
 function performSimpleSearch() {
   let finished = promise.all([
     ensureSourceIs(gPanel, "-02.js"),
-    ensureCaretAt(gPanel, 6),
+    ensureCaretAt(gPanel, 1),
     waitForDebuggerEvents(gPanel, gDebugger.EVENTS.FILE_SEARCH_MATCH_FOUND),
     waitForSourceShown(gPanel, "-01.js")
   ]);
@@ -104,7 +104,7 @@ function combineWithTokenColonSearch() {
 }
 
 function verifySourceAndCaret(aUrl, aLine, aColumn, aSelection) {
-  ok(gSources.selectedItem.label.contains(aUrl),
+  ok(gSources.selectedItem.attachment.label.contains(aUrl),
     "The selected item's label appears to be correct.");
   ok(gSources.selectedItem.value.contains(aUrl),
     "The selected item's value appears to be correct.");

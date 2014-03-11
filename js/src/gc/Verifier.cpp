@@ -36,7 +36,7 @@ CheckNonAddressThing(uintptr_t *w, Rooted<T> *rootp)
     return w >= (uintptr_t*)rootp->address() && w < (uintptr_t*)(rootp->address() + 1);
 }
 
-static JS_ALWAYS_INLINE bool
+static MOZ_ALWAYS_INLINE bool
 CheckStackRootThing(uintptr_t *w, Rooted<void *> *rootp, ThingRootKind kind)
 {
     if (kind == THING_ROOT_BINDINGS)
@@ -368,6 +368,8 @@ typedef HashMap<void *, VerifyNode *, DefaultHasher<void *>, SystemAllocPolicy> 
  */
 struct VerifyPreTracer : JSTracer
 {
+    JS::AutoDisableGenerationalGC noggc;
+
     /* The gcNumber when the verification began. */
     uint64_t number;
 
@@ -381,13 +383,10 @@ struct VerifyPreTracer : JSTracer
     char *term;
     NodeMap nodemap;
 
-    VerifyPreTracer(JSRuntime *rt) : root(nullptr) {
-        JS::DisableGenerationalGC(rt);
-    }
+    VerifyPreTracer(JSRuntime *rt) : noggc(rt), root(nullptr) {}
 
     ~VerifyPreTracer() {
         js_free(root);
-        JS::EnableGenerationalGC(runtime);
     }
 };
 
@@ -452,6 +451,15 @@ void
 gc::StartVerifyPreBarriers(JSRuntime *rt)
 {
     if (rt->gcVerifyPreData || rt->gcIncrementalState != NO_INCREMENTAL)
+        return;
+
+    /*
+     * The post barrier verifier requires the storebuffer to be enabled, but the
+     * pre barrier verifier disables it as part of disabling GGC.  Don't allow
+     * starting the pre barrier verifier if the post barrier verifier is already
+     * running.
+     */
+    if (rt->gcVerifyPostData)
         return;
 
     MinorGC(rt, JS::gcreason::EVICT_NURSERY);
@@ -571,6 +579,10 @@ static void
 AssertMarkedOrAllocated(const EdgeValue &edge)
 {
     if (!edge.thing || IsMarkedOrAllocated(static_cast<Cell *>(edge.thing)))
+        return;
+
+    // Permanent atoms aren't marked during graph traversal.
+    if (edge.kind == JSTRACE_STRING && static_cast<JSString *>(edge.thing)->isPermanentAtom())
         return;
 
     char msgbuf[1024];
@@ -760,7 +772,7 @@ js::gc::EndVerifyPostBarriers(JSRuntime *rt)
     if (!edges.init())
         goto oom;
     trc->edges = &edges;
-    rt->gcStoreBuffer.mark(trc);
+    rt->gcStoreBuffer.markAll(trc);
 
     /* Walk the heap to find any edges not the the |edges| set. */
     JS_TracerInit(trc, rt, PostVerifierVisitEdge);
@@ -867,15 +879,6 @@ js::gc::FinishVerifier(JSRuntime *rt)
         rt->gcVerifyPostData = nullptr;
     }
 #endif
-}
-
-void
-js::gc::CrashAtUnhandlableOOM(const char *reason)
-{
-    char msgbuf[1024];
-    JS_snprintf(msgbuf, sizeof(msgbuf), "[unhandlable oom] %s", reason);
-    MOZ_ReportAssertionFailure(msgbuf, __FILE__, __LINE__);
-    MOZ_CRASH();
 }
 
 #endif /* JS_GC_ZEAL */

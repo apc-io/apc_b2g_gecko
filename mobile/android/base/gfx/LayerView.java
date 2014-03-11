@@ -16,7 +16,7 @@ import org.mozilla.gecko.TouchEventInterceptor;
 import org.mozilla.gecko.ZoomConstraints;
 import org.mozilla.gecko.mozglue.generatorannotations.WrapElementForJNI;
 import org.mozilla.gecko.mozglue.RobocopTarget;
-import org.mozilla.gecko.util.EventDispatcher;
+import org.mozilla.gecko.EventDispatcher;
 
 import android.content.Context;
 import android.graphics.Bitmap;
@@ -500,10 +500,6 @@ public class LayerView extends FrameLayout implements Tabs.OnTabsChangedListener
         return BitmapUtils.decodeResource(context, resId, options);
     }
 
-    Bitmap getShadowPattern() {
-        return getDrawable("shadow");
-    }
-
     Bitmap getScrollbarImage() {
         return getDrawable("scrollbar");
     }
@@ -687,7 +683,7 @@ public class LayerView extends FrameLayout implements Tabs.OnTabsChangedListener
 
     @Override
     public void onTabChanged(Tab tab, Tabs.TabEvents msg, Object data) {
-        if (msg == Tabs.TabEvents.VIEWPORT_CHANGE && Tabs.getInstance().isSelectedTab(tab)) {
+        if (msg == Tabs.TabEvents.VIEWPORT_CHANGE && Tabs.getInstance().isSelectedTab(tab) && mLayerClient != null) {
             setZoomConstraints(tab.getZoomConstraints());
             setIsRTL(tab.getIsRTL());
         }

@@ -3,15 +3,22 @@
  *
  * Copyright (c) 2013 Glenn Randers-Pehrson
  * Written by Mans Rullgard, 2011.
- * Last changed in libpng 1.6.7 [November 14, 2013]
+ * Last changed in libpng 1.6.8 [December 19, 2013]
  *
  * This code is released under the libpng license.
  * For conditions of distribution and use, see the disclaimer
  * and license in png.h
  */
 
+/* These are required because Mozilla's moz.build system doesn't pass
+ * -DDefined macros to the assembler.
+ */
+#define PNG_READ_SUPPORTED
+#define MOZ_PNG_HAVE_ARM_NEON
+
 /* This is required to get the symbol renames, which are #defines, and also
- * includes the definition (or not) of PNG_ARM_NEON_OPT.
+ * includes the definition (or not) of PNG_ARM_NEON_OPT and
+ * PNG_ARM_NEON_IMPLEMENTATION.
  */
 #define PNG_VERSION_INFO_ONLY
 #include "../pngpriv.h"
@@ -46,6 +53,14 @@ ELF     .size   \name, . - \name
         .purgem endfunc
     .endm
         .text
+
+        /* Explicitly specifying alignment here because some versions of
+           gas don't align code correctly. See
+           http://lists.gnu.org/archive/html/bug-binutils/2011-06/msg00199.html
+           and https://bugzilla.mozilla.org/show_bug.cgi?id=920992
+         */
+        .align 2
+
     .if \export
         .global \name
     .endif

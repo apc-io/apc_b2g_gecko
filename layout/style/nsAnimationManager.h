@@ -29,20 +29,20 @@ struct AnimationEventInfo {
                      const nsString& aAnimationName,
                      uint32_t aMessage, mozilla::TimeDuration aElapsedTime,
                      const nsAString& aPseudoElement)
-    : mElement(aElement),
-      mEvent(true, aMessage, aAnimationName, aElapsedTime.ToSeconds(),
-             aPseudoElement)
+    : mElement(aElement), mEvent(true, aMessage)
   {
+    // XXX Looks like nobody initialize WidgetEvent::time
+    mEvent.animationName = aAnimationName;
+    mEvent.elapsedTime = aElapsedTime.ToSeconds();
+    mEvent.pseudoElement = aPseudoElement;
   }
 
   // InternalAnimationEvent doesn't support copy-construction, so we need
   // to ourselves in order to work with nsTArray
   AnimationEventInfo(const AnimationEventInfo &aOther)
-    : mElement(aOther.mElement),
-      mEvent(true, aOther.mEvent.message,
-             aOther.mEvent.animationName, aOther.mEvent.elapsedTime,
-             aOther.mEvent.pseudoElement)
+    : mElement(aOther.mElement), mEvent(true, aOther.mEvent.message)
   {
+    mEvent.AssignAnimationEventData(aOther.mEvent, false);
   }
 };
 
@@ -128,7 +128,7 @@ struct ElementAnimations MOZ_FINAL
   typedef mozilla::TimeDuration TimeDuration;
 
   ElementAnimations(mozilla::dom::Element *aElement, nsIAtom *aElementProperty,
-                    nsAnimationManager *aAnimationManager);
+                    nsAnimationManager *aAnimationManager, TimeStamp aNow);
 
   // This function takes as input the start time, duration, and direction of an
   // animation and returns the position in the current iteration.  Note that
@@ -141,7 +141,7 @@ struct ElementAnimations MOZ_FINAL
   // This function returns -1 for the position if the animation should not be
   // run (because it is not currently active and has no fill behavior), but
   // only does so if aAnimation is non-null; with a null aAnimation it is an
-  // error to give aCurrentTime < aStartTime, and fill-forwards is assumed.
+  // error to give aElapsedDuration < 0, and fill-forwards is assumed.
   // After calling GetPositionInIteration with non-null aAnimation and aEa, be
   // sure to call CheckNeedsRefresh on the animation manager afterwards.
   static double GetPositionInIteration(TimeDuration aElapsedDuration,
@@ -174,8 +174,21 @@ struct ElementAnimations MOZ_FINAL
     aPresContext->PresShell()->RestyleForAnimation(mElement, styleHint);
   }
 
-  // True if this animation can be performed on the compositor thread.
+  // If aFlags contains CanAnimate_AllowPartial, returns whether the
+  // state of this element's animations at the current refresh driver
+  // time contains animation data that can be done on the compositor
+  // thread.  (This is useful for determining whether a layer should be
+  // active, or whether to send data to the layer.)
+  // If aFlags does not contain CanAnimate_AllowPartial, returns whether
+  // the state of this element's animations at the current refresh driver
+  // time can be fully represented by data sent to the compositor.
+  // (This is useful for determining whether throttle the animation
+  // (suppress main-thread style updates).)
+  // Note that when CanPerformOnCompositorThread returns true, it also,
+  // as a side-effect, notifies the ActiveLayerTracker.  FIXME:  This
+  // should probably move to the relevant callers.
   virtual bool CanPerformOnCompositorThread(CanAnimateFlags aFlags) const MOZ_OVERRIDE;
+
   virtual bool HasAnimationOfProperty(nsCSSProperty aProperty) const MOZ_OVERRIDE;
 
   // False when we know that our current style rule is valid
@@ -275,6 +288,9 @@ public:
                                           nsCSSPseudoElements::Type aPseudoType,
                                           bool aCreateIfNeeded);
 
+  // Updates styles on throttled animations. See note on nsTransitionManager
+  void UpdateAllThrottledStyles();
+
 protected:
   virtual void ElementDataRemoved() MOZ_OVERRIDE
   {
@@ -297,6 +313,14 @@ private:
                     float aToKey, nsStyleContext* aToContext);
   nsIStyleRule* GetAnimationRule(mozilla::dom::Element* aElement,
                                  nsCSSPseudoElements::Type aPseudoType);
+
+  // Update the animated styles of an element and its descendants.
+  // If the element has an animation, it is flushed back to its primary frame.
+  // If the element does not have an animation, then its style is reparented.
+  void UpdateThrottledStylesForSubtree(nsIContent* aContent,
+                                       nsStyleContext* aParentStyle,
+                                       nsStyleChangeList &aChangeList);
+  void UpdateAllThrottledStylesInternal();
 
   // The guts of DispatchEvents
   void DoDispatchEvents();

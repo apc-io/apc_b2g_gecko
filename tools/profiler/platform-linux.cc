@@ -42,8 +42,6 @@
 #include <sys/prctl.h> // set name
 #include <stdlib.h>
 #include <sched.h>
-#include <iostream>
-#include <fstream>
 #ifdef ANDROID
 #include <android/log.h>
 #else
@@ -82,6 +80,10 @@
 #include <string.h>
 #include <stdio.h>
 #include <list>
+
+#ifdef MOZ_NUWA_PROCESS
+#include "ipc/Nuwa.h"
+#endif
 
 #define SIGNAL_SAVE_PROFILE SIGUSR2
 
@@ -229,9 +231,15 @@ static void ProfilerSignalHandler(int signal, siginfo_t* info, void* context) {
   sem_post(&sSignalHandlingDone);
 }
 
+// If the Nuwa process is enabled, we need to use the wrapper of tgkill() to
+// perform the mapping of thread ID.
+#ifdef MOZ_NUWA_PROCESS
+extern "C" MFBT_API int tgkill(pid_t tgid, pid_t tid, int signalno);
+#else
 int tgkill(pid_t tgid, pid_t tid, int signalno) {
   return syscall(SYS_tgkill, tgid, tid, signalno);
 }
+#endif
 
 class PlatformData : public Malloced {
  public:
@@ -262,6 +270,18 @@ static void* SignalSender(void* arg) {
   // It returns NULL.
   static void* initialize_atfork = setup_atfork();
 # endif
+
+#ifdef MOZ_NUWA_PROCESS
+  // If the Nuwa process is enabled, we need to mark and freeze the sampler
+  // thread in the Nuwa process and have this thread recreated in the spawned
+  // child.
+  if(IsNuwaProcess()) {
+    NuwaMarkCurrentThread(nullptr, nullptr);
+    // Freeze the thread here so the spawned child will get the correct tgid
+    // from the getpid() call below.
+    NuwaFreezeCurrentThread();
+  }
+#endif
 
   int vm_tgid_ = getpid();
 
@@ -568,8 +588,19 @@ void TickSample::PopulateContext(void* aContext)
   }
 }
 
+// WARNING: Works with values up to 1 second
 void OS::SleepMicro(int microseconds)
 {
-  usleep(microseconds);
+  struct timespec ts;
+  ts.tv_sec  = 0;
+  ts.tv_nsec = microseconds * 1000UL;
+
+  while (true) {
+    // in the case of interrupt we keep waiting
+    // nanosleep puts the remaining to back into ts
+    if (!nanosleep(&ts, &ts) || errno != EINTR) {
+      return;
+    }
+  }
 }
 

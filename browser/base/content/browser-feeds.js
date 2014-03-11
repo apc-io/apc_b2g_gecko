@@ -34,8 +34,12 @@ var FeedHandler = {
       return false;
     }
 
-    while (container.firstChild)
-      container.removeChild(container.firstChild);
+    for (let i = container.childNodes.length - 1; i >= 0; --i) {
+      let node = container.childNodes[i];
+      if (isSubview && node.localName == "label")
+        continue;
+      container.removeChild(node);
+    }
 
     if (!feeds || feeds.length <= 1)
       return false;
@@ -46,14 +50,15 @@ var FeedHandler = {
       var item = document.createElement(itemNodeType);
       var baseTitle = feedInfo.title || feedInfo.href;
       var labelStr = gNavigatorBundle.getFormattedString("feedShowFeedNew", [baseTitle]);
-      item.setAttribute("class", "feed-" + itemNodeType);
       item.setAttribute("label", labelStr);
       item.setAttribute("feed", feedInfo.href);
       item.setAttribute("tooltiptext", feedInfo.href);
       item.setAttribute("crop", "center");
+      let className = "feed-" + itemNodeType;
       if (isSubview) {
-        item.setAttribute("tabindex", "0");
+        className += " subviewbutton";
       }
+      item.setAttribute("class", className);
       container.appendChild(item);
     }
     return true;
@@ -147,14 +152,7 @@ var FeedHandler = {
     }
   },
 
-  addFeed: function(link, targetDoc) {
-    // find which tab this is for, and set the attribute on the browser
-    var browserForLink = gBrowser.getBrowserForDocument(targetDoc);
-    if (!browserForLink) {
-      // ignore feeds loaded in subframes (see bug 305472)
-      return;
-    }
-
+  addFeed: function(link, browserForLink) {
     if (!browserForLink.feeds)
       browserForLink.feeds = [];
 

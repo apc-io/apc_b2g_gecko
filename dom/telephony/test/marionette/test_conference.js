@@ -106,26 +106,49 @@ function dial(number) {
   log("Make an outgoing call: " + number);
 
   let deferred = Promise.defer();
-  let call = telephony.dial(number);
 
-  ok(call);
-  is(call.number, number);
-  is(call.state, "dialing");
+  telephony.dial(number).then(call => {
+    ok(call);
+    is(call.number, number);
+    is(call.state, "dialing");
 
-  call.onalerting = function onalerting(event) {
-    call.onalerting = null;
-    log("Received 'onalerting' call event.");
-    checkEventCallState(event, call, "alerting");
-    deferred.resolve(call);
-  };
+    call.onalerting = function onalerting(event) {
+      call.onalerting = null;
+      log("Received 'onalerting' call event.");
+      checkEventCallState(event, call, "alerting");
+      deferred.resolve(call);
+    };
+  });
 
   return deferred.promise;
 }
 
-function answer(call) {
+// Answering an incoming call could trigger conference state change.
+function answer(call, conferenceStateChangeCallback) {
   log("Answering the incoming call.");
 
   let deferred = Promise.defer();
+  let done = function() {
+    deferred.resolve(call);
+  };
+
+  let pending = ["call.onconnected"];
+  let receive = function(name) {
+    receivedPending(name, pending, done);
+  };
+
+  // When there's already a connected conference call, answering a new incoming
+  // call triggers conference state change. We should wait for
+  // |conference.onstatechange| before checking the state of the conference call.
+  if (conference.state === "connected") {
+    pending.push("conference.onstatechange");
+    check_onstatechange(conference, "conference", "held", function() {
+      if (typeof conferenceStateChangeCallback === "function") {
+        conferenceStateChangeCallback();
+      }
+      receive("conference.onstatechange");
+    });
+  }
 
   call.onconnecting = function onconnectingIn(event) {
     log("Received 'connecting' call event for incoming call.");
@@ -138,7 +161,7 @@ function answer(call) {
     call.onconnected = null;
     checkEventCallState(event, call, "connected");
     ok(!call.onconnecting);
-    deferred.resolve(call);
+    receive("call.onconnected");
   };
   call.answer();
 
@@ -592,7 +615,9 @@ function setupConferenceThreeCalls(outNumber, inNumber, inNumber2) {
     .then(call => { inCall2 = call; })
     .then(() => checkAll(conference, [inCall2], 'connected', [outCall, inCall],
                          [outInfo.active, inInfo.active, inInfo2.incoming]))
-    .then(() => answer(inCall2))
+    .then(() => answer(inCall2, function() {
+      checkState(inCall2, [inCall2], 'held', [outCall, inCall]);
+    }))
     .then(() => checkAll(inCall2, [inCall2], 'held', [outCall, inCall],
                          [outInfo.held, inInfo.held, inInfo2.active]))
     .then(() => addCallsToConference([inCall2], function() {

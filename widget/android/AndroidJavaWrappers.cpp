@@ -968,10 +968,6 @@ nsJNIString::nsJNIString(jstring jstr, JNIEnv *jenv)
     JNIEnv *jni = jenv;
     if (!jni) {
         jni = AndroidBridge::GetJNIEnv();
-        if (!jni) {
-            SetIsVoid(true);
-            return;
-        }
     }
     const jchar* jCharPtr = jni->GetStringChars(jstr, nullptr);
 
@@ -985,7 +981,7 @@ nsJNIString::nsJNIString(jstring jstr, JNIEnv *jenv)
     if (len <= 0) {
         SetIsVoid(true);
     } else {
-        Assign(reinterpret_cast<const PRUnichar*>(jCharPtr), len);
+        Assign(reinterpret_cast<const char16_t*>(jCharPtr), len);
     }
     jni->ReleaseStringChars(jstr, jCharPtr);
 }

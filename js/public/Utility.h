@@ -42,16 +42,6 @@ namespace js {}
 
 #define JS_ASSERT(expr)           MOZ_ASSERT(expr)
 #define JS_ASSERT_IF(cond, expr)  MOZ_ASSERT_IF(cond, expr)
-#define JS_ALWAYS_TRUE(expr)      MOZ_ALWAYS_TRUE(expr)
-#define JS_ALWAYS_FALSE(expr)     MOZ_ALWAYS_FALSE(expr)
-
-#if defined(JS_DEBUG)
-# define JS_DIAGNOSTICS_ASSERT(expr) MOZ_ASSERT(expr)
-#elif defined(JS_CRASH_DIAGNOSTICS)
-# define JS_DIAGNOSTICS_ASSERT(expr) do { if (!(expr)) MOZ_CRASH(); } while(0)
-#else
-# define JS_DIAGNOSTICS_ASSERT(expr) ((void) 0)
-#endif
 
 #define JS_STATIC_ASSERT(cond)           static_assert(cond, "JS_STATIC_ASSERT")
 #define JS_STATIC_ASSERT_IF(cond, expr)  MOZ_STATIC_ASSERT_IF(cond, expr, "JS_STATIC_ASSERT_IF")
@@ -83,7 +73,7 @@ extern JS_PUBLIC_DATA(uint32_t) OOM_counter; /* data race, who cares. */
 
 #ifdef JS_OOM_DO_BACKTRACES
 #define JS_OOM_BACKTRACE_SIZE 32
-static JS_ALWAYS_INLINE void
+static MOZ_ALWAYS_INLINE void
 PrintBacktrace()
 {
     void* OOM_trace[JS_OOM_BACKTRACE_SIZE];
@@ -129,7 +119,7 @@ PrintBacktrace()
         if (++OOM_counter > OOM_maxAllocations) { \
             JS_OOM_EMIT_BACKTRACE();\
             js_ReportOutOfMemory(cx);\
-            return nullptr; \
+            return false; \
         } \
     } while (0)
 
@@ -167,26 +157,6 @@ static inline void js_free(void* p)
     free(p);
 }
 #endif/* JS_USE_CUSTOM_ALLOCATOR */
-
-/*
- * JS_ROTATE_LEFT32
- *
- * There is no rotate operation in the C Language so the construct (a << 4) |
- * (a >> 28) is used instead. Most compilers convert this to a rotate
- * instruction but some versions of MSVC don't without a little help.  To get
- * MSVC to generate a rotate instruction, we have to use the _rotl intrinsic
- * and use a pragma to make _rotl inline.
- *
- * MSVC in VS2005 will do an inline rotate instruction on the above construct.
- */
-#if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_AMD64) || \
-    defined(_M_X64))
-#include <stdlib.h>
-#pragma intrinsic(_rotl)
-#define JS_ROTATE_LEFT32(a, bits) _rotl(a, bits)
-#else
-#define JS_ROTATE_LEFT32(a, bits) (((a) << (bits)) | ((a) >> (32 - (bits))))
-#endif
 
 #include <new>
 
@@ -389,10 +359,10 @@ static inline void js_free(void* p)
                      mozilla::Forward<P12>(p12)))\
     }\
 
-JS_DECLARE_NEW_METHODS(js_new, js_malloc, static JS_ALWAYS_INLINE)
+JS_DECLARE_NEW_METHODS(js_new, js_malloc, static MOZ_ALWAYS_INLINE)
 
 template <class T>
-static JS_ALWAYS_INLINE void
+static MOZ_ALWAYS_INLINE void
 js_delete(T *p)
 {
     if (p) {
@@ -402,7 +372,7 @@ js_delete(T *p)
 }
 
 template<class T>
-static JS_ALWAYS_INLINE void
+static MOZ_ALWAYS_INLINE void
 js_delete_poison(T *p)
 {
     if (p) {
@@ -413,21 +383,21 @@ js_delete_poison(T *p)
 }
 
 template <class T>
-static JS_ALWAYS_INLINE T *
+static MOZ_ALWAYS_INLINE T *
 js_pod_malloc()
 {
     return (T *)js_malloc(sizeof(T));
 }
 
 template <class T>
-static JS_ALWAYS_INLINE T *
+static MOZ_ALWAYS_INLINE T *
 js_pod_calloc()
 {
     return (T *)js_calloc(sizeof(T));
 }
 
 template <class T>
-static JS_ALWAYS_INLINE T *
+static MOZ_ALWAYS_INLINE T *
 js_pod_malloc(size_t numElems)
 {
     if (numElems & mozilla::tl::MulOverflowMask<sizeof(T)>::value)
@@ -436,7 +406,7 @@ js_pod_malloc(size_t numElems)
 }
 
 template <class T>
-static JS_ALWAYS_INLINE T *
+static MOZ_ALWAYS_INLINE T *
 js_pod_calloc(size_t numElems)
 {
     if (numElems & mozilla::tl::MulOverflowMask<sizeof(T)>::value)

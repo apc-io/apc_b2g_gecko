@@ -2,8 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "jsapi.h"
 #include "CameraRecorderProfiles.h"
+#include "jsapi.h"
 #include "CameraCommon.h"
 
 using namespace mozilla;
@@ -28,7 +28,7 @@ RecorderVideoProfile::GetJsObject(JSContext* aCx, JSObject** aObject)
 {
   NS_ENSURE_TRUE(aObject, NS_ERROR_INVALID_ARG);
 
-  JS::Rooted<JSObject*> o(aCx, JS_NewObject(aCx, nullptr, nullptr, nullptr));
+  JS::Rooted<JSObject*> o(aCx, JS_NewObject(aCx, nullptr, JS::NullPtr(), JS::NullPtr()));
   NS_ENSURE_TRUE(o, NS_ERROR_OUT_OF_MEMORY);
 
   const char* codec = GetCodecName();
@@ -89,7 +89,7 @@ RecorderAudioProfile::GetJsObject(JSContext* aCx, JSObject** aObject)
 {
   NS_ENSURE_TRUE(aObject, NS_ERROR_INVALID_ARG);
 
-  JS::Rooted<JSObject*> o(aCx, JS_NewObject(aCx, nullptr, nullptr, nullptr));
+  JS::Rooted<JSObject*> o(aCx, JS_NewObject(aCx, nullptr, JS::NullPtr(), JS::NullPtr()));
   NS_ENSURE_TRUE(o, NS_ERROR_OUT_OF_MEMORY);
 
   const char* codec = GetCodecName();
@@ -159,7 +159,7 @@ RecorderProfileManager::GetJsObject(JSContext* aCx, JSObject** aObject) const
 {
   NS_ENSURE_TRUE(aObject, NS_ERROR_INVALID_ARG);
 
-  JS::Rooted<JSObject*> o(aCx, JS_NewObject(aCx, nullptr, nullptr, nullptr));
+  JS::Rooted<JSObject*> o(aCx, JS_NewObject(aCx, nullptr, JS::NullPtr(), JS::NullPtr()));
   if (!o) {
     return NS_ERROR_OUT_OF_MEMORY;
   }

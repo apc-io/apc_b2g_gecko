@@ -42,8 +42,8 @@ nsGfxButtonControlFrame::GetType() const
   return nsGkAtoms::gfxButtonControlFrame;
 }
 
-#ifdef DEBUG
-NS_IMETHODIMP
+#ifdef DEBUG_FRAME_DUMP
+nsresult
 nsGfxButtonControlFrame::GetFrameName(nsAString& aResult) const
 {
   return MakeFrameName(NS_LITERAL_STRING("ButtonControl"), aResult);
@@ -178,7 +178,7 @@ nsGfxButtonControlFrame::GetLabel(nsXPIDLString& aLabel)
   return NS_OK;
 }
 
-NS_IMETHODIMP
+nsresult
 nsGfxButtonControlFrame::AttributeChanged(int32_t         aNameSpaceID,
                                           nsIAtom*        aAttribute,
                                           int32_t         aModType)
@@ -216,7 +216,7 @@ nsGfxButtonControlFrame::GetContentInsertionFrame()
   return this;
 }
 
-NS_IMETHODIMP
+nsresult
 nsGfxButtonControlFrame::HandleEvent(nsPresContext* aPresContext, 
                                      WidgetGUIEvent* aEvent,
                                      nsEventStatus* aEventStatus)

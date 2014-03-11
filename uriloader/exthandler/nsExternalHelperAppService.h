@@ -107,7 +107,7 @@ public:
    * @param aFile           [out] An nsIFile representation of that platform
    *                        application path.
    */
-  virtual nsresult GetFileTokenForPath(const PRUnichar * platformAppPath,
+  virtual nsresult GetFileTokenForPath(const char16_t * platformAppPath,
                                        nsIFile ** aFile);
 
   virtual NS_HIDDEN_(nsresult) OSProtocolHandlerExists(const char *aScheme,
@@ -326,7 +326,12 @@ protected:
    * Stores the SHA-256 hash associated with the file that we downloaded.
    */
   nsAutoCString mHash;
-
+  /**
+   * Stores the signature information of the downloaded file in an nsIArray of
+   * nsIX509CertList of nsIX509Cert. If the file is unsigned this will be
+   * empty.
+   */
+  nsCOMPtr<nsIArray> mSignatureInfo;
   /**
    * Creates the temporary file for the download and an output stream for it.
    * Upon successful return, both mTempFile and mSaver will be valid.

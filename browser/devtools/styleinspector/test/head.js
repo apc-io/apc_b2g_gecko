@@ -6,9 +6,12 @@
 const TEST_BASE_HTTP = "http://example.com/browser/browser/devtools/styleinspector/test/";
 const TEST_BASE_HTTPS = "https://example.com/browser/browser/devtools/styleinspector/test/";
 
+//Services.prefs.setBoolPref("devtools.dump.emit", true);
 Services.prefs.setBoolPref("devtools.debugger.log", true);
+
 SimpleTest.registerCleanupFunction(() => {
   Services.prefs.clearUserPref("devtools.debugger.log");
+  Services.prefs.clearUserPref("devtools.dump.emit");
 });
 
 let tempScope = {};
@@ -77,6 +80,42 @@ function openComputedView(callback)
       callback(inspector, computedView);
     })
   });
+}
+
+/**
+ * Simple DOM node accesor function that takes either a node or a string css
+ * selector as argument and returns the corresponding node
+ * @param {String|DOMNode} nodeOrSelector
+ * @return {DOMNode}
+ */
+function getNode(nodeOrSelector)
+{
+  let node = nodeOrSelector;
+
+  if (typeof nodeOrSelector === "string") {
+    node = content.document.querySelector(nodeOrSelector);
+    ok(node, "A node was found for selector " + nodeOrSelector);
+  }
+
+  return node;
+}
+
+/**
+ * Set the inspector's current selection to a node or to the first match of the
+ * given css selector
+ * @param {String|DOMNode} nodeOrSelector
+ * @param {InspectorPanel} inspector The instance of InspectorPanel currently loaded in the toolbox
+ * @param {String} reason Defaults to "test" which instructs the inspector not to highlight the node upon selection
+ * @return a promise that resolves when the inspector is updated with the new
+ * node
+ */
+function selectNode(nodeOrSelector, inspector, reason="test")
+{
+  info("Selecting the node " + nodeOrSelector);
+  let node = getNode(nodeOrSelector);
+  let updated = inspector.once("inspector-updated");
+  inspector.selection.setNode(node, reason);
+  return updated;
 }
 
 function addStyle(aDocument, aString)

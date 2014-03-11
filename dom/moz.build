@@ -48,7 +48,9 @@ PARALLEL_DIRS += [
     'datastore',
     'devicestorage',
     'encoding',
+    'events',
     'file',
+    'filesystem',
     'fmradio',
     'asmjscache',
     'media',
@@ -73,9 +75,12 @@ PARALLEL_DIRS += [
     'camera',
     'audiochannel',
     'promise',
+    'smil',
     'telephony',
     'inputmethod',
     'webidl',
+    'xbl',
+    'xslt',
 ]
 
 if CONFIG['OS_ARCH'] == 'WINNT':
@@ -91,6 +96,7 @@ if CONFIG['MOZ_B2G_RIL']:
     PARALLEL_DIRS += [
         'icc',
         'cellbroadcast',
+        'mobileconnection',
         'voicemail',
         'wappush',
     ]
@@ -112,6 +118,6 @@ TEST_DIRS += [
     'imptests',
 ]
 
-if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('gtk2', 'cocoa', 'windows', 'android', 'qt', 'os2'):
+if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('gtk2', 'cocoa', 'windows', 'android', 'qt'):
     TEST_DIRS += ['plugins/test']
 

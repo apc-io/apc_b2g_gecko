@@ -100,6 +100,11 @@ struct BaselineScript
   public:
     static const uint32_t MAX_JSSCRIPT_LENGTH = 0x0fffffffu;
 
+    // Limit the locals on a given script so that stack check on baseline frames
+    // doesn't overflow a uint32_t value.
+    // (MAX_JSSCRIPT_SLOTS * sizeof(Value)) must fit within a uint32_t.
+    static const uint32_t MAX_JSSCRIPT_SLOTS = 0xffffu;
+
   private:
     // Code pointer containing the actual method.
     HeapPtr<JitCode> method_;
@@ -289,8 +294,8 @@ struct BaselineScript
 
     void toggleSPS(bool enable);
 
-    void noteAccessedGetter(JSContext *cx, uint32_t pcOffset);
-    void noteArrayWriteHole(JSContext *cx, uint32_t pcOffset);
+    void noteAccessedGetter(uint32_t pcOffset);
+    void noteArrayWriteHole(uint32_t pcOffset);
 
     static size_t offsetOfFlags() {
         return offsetof(BaselineScript, flags_);
@@ -307,7 +312,7 @@ struct BaselineScript
 inline bool
 IsBaselineEnabled(JSContext *cx)
 {
-    return cx->compartment()->options().baseline(cx);
+    return cx->runtime()->options().baseline();
 }
 
 MethodStatus

@@ -9,7 +9,7 @@ const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 this.EXPORTED_SYMBOLS = [
   "RESTRequest",
   "RESTResponse",
-  "TokenAuthenticatedRESTRequest"
+  "TokenAuthenticatedRESTRequest",
 ];
 
 #endif
@@ -145,6 +145,11 @@ RESTRequest.prototype = {
   IN_PROGRESS: 2,
   COMPLETED:   4,
   ABORTED:     8,
+
+  /**
+   * HTTP status text of response
+   */
+  statusText: null,
 
   /**
    * Request timeout (in seconds, though decimal values can be used for
@@ -612,8 +617,7 @@ RESTResponse.prototype = {
   get status() {
     let status;
     try {
-      let channel = this.request.channel.QueryInterface(Ci.nsIHttpChannel);
-      status = channel.responseStatus;
+      status = this.request.channel.responseStatus;
     } catch (ex) {
       this._log.debug("Caught exception fetching HTTP status code:" +
                       CommonUtils.exceptionStr(ex));
@@ -624,13 +628,28 @@ RESTResponse.prototype = {
   },
 
   /**
+   * HTTP status text
+   */
+  get statusText() {
+    let statusText;
+    try {
+      statusText = this.request.channel.responseStatusText;
+    } catch (ex) {
+      this._log.debug("Caught exception fetching HTTP status text:" +
+                      CommonUtils.exceptionStr(ex));
+      return null;
+    }
+    delete this.statusText;
+    return this.statusText = statusText;
+  },
+
+  /**
    * Boolean flag that indicates whether the HTTP status code is 2xx or not.
    */
   get success() {
     let success;
     try {
-      let channel = this.request.channel.QueryInterface(Ci.nsIHttpChannel);
-      success = channel.requestSucceeded;
+      success = this.request.channel.requestSucceeded;
     } catch (ex) {
       this._log.debug("Caught exception fetching HTTP success flag:" +
                       CommonUtils.exceptionStr(ex));
@@ -704,3 +723,4 @@ TokenAuthenticatedRESTRequest.prototype = {
     );
   },
 };
+

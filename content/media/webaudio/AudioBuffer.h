@@ -10,11 +10,11 @@
 #include "nsWrapperCache.h"
 #include "nsCycleCollectionParticipant.h"
 #include "mozilla/Attributes.h"
-#include "EnableWebAudioCheck.h"
 #include "nsAutoPtr.h"
 #include "nsTArray.h"
 #include "AudioContext.h"
 #include "js/TypeDecls.h"
+#include "mozilla/MemoryReporting.h"
 
 namespace mozilla {
 
@@ -30,13 +30,14 @@ class AudioContext;
  * are Float32Arrays, or in mSharedChannels if the mJSChannels objects have
  * been neutered.
  */
-class AudioBuffer MOZ_FINAL : public nsWrapperCache,
-                              public EnableWebAudioCheck
+class AudioBuffer MOZ_FINAL : public nsWrapperCache
 {
 public:
   AudioBuffer(AudioContext* aContext, uint32_t aLength,
               float aSampleRate);
   ~AudioBuffer();
+
+  size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
   // This function needs to be called in order to allocate
   // all of the channels.  It is fallible!

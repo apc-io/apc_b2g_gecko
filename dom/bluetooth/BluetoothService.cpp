@@ -34,7 +34,6 @@
 #include "nsISystemMessagesInternal.h"
 #include "nsITimer.h"
 #include "nsServiceManagerUtils.h"
-#include "nsThreadUtils.h"
 #include "nsXPCOM.h"
 
 #if defined(MOZ_WIDGET_GONK)
@@ -47,7 +46,7 @@
  * B2G blueZ:
  *   MOZ_B2G_BT and MOZ_B2G_BT_BLUEZ are both defined.
  */
-#include "BluetoothGonkService.h"
+#include "BluetoothDBusService.h"
 #elif defined(MOZ_B2G_BT_BLUEDROID)
 /**
  * B2G bluedroid:
@@ -83,10 +82,10 @@ USING_BLUETOOTH_NAMESPACE
 
 namespace {
 
-StaticRefPtr<BluetoothService> gBluetoothService;
+StaticRefPtr<BluetoothService> sBluetoothService;
 
-bool gInShutdown = false;
-bool gToggleInProgress = false;
+bool sInShutdown = false;
+bool sToggleInProgress = false;
 
 bool
 IsMainProcess()
@@ -132,46 +131,53 @@ GetAllBluetoothActors(InfallibleTArray<BluetoothParent*>& aActors)
 
 } // anonymous namespace
 
-class BluetoothService::ToggleBtAck : public nsRunnable
+BluetoothService::ToggleBtAck::ToggleBtAck(bool aEnabled)
+  : mEnabled(aEnabled)
 {
-public:
-  ToggleBtAck(bool aEnabled)
-    : mEnabled(aEnabled)
-  {
-    MOZ_ASSERT(!NS_IsMainThread());
+  MOZ_ASSERT(!NS_IsMainThread());
+}
+
+NS_METHOD
+BluetoothService::ToggleBtAck::Run()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  // This is requested in Bug 836516. With settings this property, WLAN
+  // firmware could be aware of Bluetooth has been turned on/off, so that the
+  // mecahnism of handling coexistence of WIFI and Bluetooth could be started.
+  //
+  // In the future, we may have our own way instead of setting a system
+  // property to let firmware developers be able to sense that Bluetooth has
+  // been toggled.
+#if defined(MOZ_WIDGET_GONK)
+  if (property_set(PROP_BLUETOOTH_ENABLED, mEnabled ? "true" : "false") != 0) {
+    BT_WARNING("Failed to set bluetooth enabled property");
   }
+#endif
 
-  NS_IMETHOD Run()
-  {
-    MOZ_ASSERT(NS_IsMainThread());
+  NS_ENSURE_TRUE(sBluetoothService, NS_OK);
 
-    NS_ENSURE_TRUE(gBluetoothService, NS_OK);
-
-    if (gInShutdown) {
-      gBluetoothService = nullptr;
-      return NS_OK;
-    }
-
-    // Update mEnabled of BluetoothService object since
-    // StartInternal/StopInternal have been already done.
-    gBluetoothService->SetEnabled(mEnabled);
-    gToggleInProgress = false;
-
-    nsAutoString signalName;
-    signalName = mEnabled ? NS_LITERAL_STRING("Enabled")
-                          : NS_LITERAL_STRING("Disabled");
-    BluetoothSignal signal(signalName, NS_LITERAL_STRING(KEY_MANAGER), true);
-    gBluetoothService->DistributeSignal(signal);
-
-    // Event 'AdapterAdded' has to be fired after firing 'Enabled'
-    gBluetoothService->TryFiringAdapterAdded();
-
+  if (sInShutdown) {
+    sBluetoothService = nullptr;
     return NS_OK;
   }
 
-private:
-  bool mEnabled;
-};
+  // Update mEnabled of BluetoothService object since
+  // StartInternal/StopInternal have been already done.
+  sBluetoothService->SetEnabled(mEnabled);
+  sToggleInProgress = false;
+
+  nsAutoString signalName;
+  signalName = mEnabled ? NS_LITERAL_STRING("Enabled")
+                        : NS_LITERAL_STRING("Disabled");
+  BluetoothSignal signal(signalName, NS_LITERAL_STRING(KEY_MANAGER), true);
+  sBluetoothService->DistributeSignal(signal);
+
+  // Event 'AdapterAdded' has to be fired after firing 'Enabled'
+  sBluetoothService->TryFiringAdapterAdded();
+
+  return NS_OK;
+}
 
 class BluetoothService::ToggleBtTask : public nsRunnable
 {
@@ -189,7 +195,7 @@ public:
 
     /**
      * mEnabled: expected status of bluetooth
-     * gBluetoothService->IsEnabled(): real status of bluetooth
+     * sBluetoothService->IsEnabled(): real status of bluetooth
      *
      * When two values are the same, we don't switch on/off bluetooth
      * but we still do ToggleBtAck task. One special case happens at startup
@@ -198,39 +204,25 @@ public:
      *
      * Please see bug 892392 for more information.
      */
-    if (!mIsStartup && mEnabled == gBluetoothService->IsEnabledInternal()) {
+    if (!mIsStartup && mEnabled == sBluetoothService->IsEnabledInternal()) {
       BT_WARNING("Bluetooth has already been enabled/disabled before.");
+      nsCOMPtr<nsIRunnable> ackTask = new BluetoothService::ToggleBtAck(mEnabled);
+      if (NS_FAILED(NS_DispatchToMainThread(ackTask))) {
+        BT_WARNING("Failed to dispatch to main thread!");
+      }
     } else {
       // Switch on/off bluetooth
       if (mEnabled) {
-        if (NS_FAILED(gBluetoothService->StartInternal())) {
+        if (NS_FAILED(sBluetoothService->StartInternal())) {
           BT_WARNING("Bluetooth service failed to start!");
           mEnabled = !mEnabled;
         }
       } else {
-        if (NS_FAILED(gBluetoothService->StopInternal())) {
+        if (NS_FAILED(sBluetoothService->StopInternal())) {
           BT_WARNING("Bluetooth service failed to stop!");
           mEnabled = !mEnabled;
         }
       }
-    }
-
-    // This is requested in Bug 836516. With settings this property, WLAN
-    // firmware could be aware of Bluetooth has been turned on/off, so that the
-    // mecahnism of handling coexistence of WIFI and Bluetooth could be started.
-    //
-    // In the future, we may have our own way instead of setting a system
-    // property to let firmware developers be able to sense that Bluetooth has
-    // been toggled.
-#if defined(MOZ_WIDGET_GONK)
-    if (property_set(PROP_BLUETOOTH_ENABLED, mEnabled ? "true" : "false") != 0) {
-      BT_WARNING("Failed to set bluetooth enabled property");
-    }
-#endif
-
-    nsCOMPtr<nsIRunnable> ackTask = new BluetoothService::ToggleBtAck(mEnabled);
-    if (NS_FAILED(NS_DispatchToMainThread(ackTask))) {
-      BT_WARNING("Failed to dispatch to main thread!");
     }
 
     return NS_OK;
@@ -246,7 +238,7 @@ class BluetoothService::StartupTask : public nsISettingsServiceCallback
 public:
   NS_DECL_ISUPPORTS
 
-  NS_IMETHOD Handle(const nsAString& aName, const JS::Value& aResult)
+  NS_IMETHOD Handle(const nsAString& aName, JS::Handle<JS::Value> aResult)
   {
     MOZ_ASSERT(NS_IsMainThread());
 
@@ -257,8 +249,8 @@ public:
 
     // It is theoretically possible to shut down before the first settings check
     // has completed (though extremely unlikely).
-    if (gBluetoothService) {
-      return gBluetoothService->HandleStartupSettingsCheck(aResult.toBoolean());
+    if (sBluetoothService) {
+      return sBluetoothService->HandleStartupSettingsCheck(aResult.toBoolean());
     }
 
     return NS_OK;
@@ -278,7 +270,7 @@ NS_IMPL_ISUPPORTS1(BluetoothService, nsIObserver)
 bool
 BluetoothService::IsToggling() const
 {
-  return gToggleInProgress;
+  return sToggleInProgress;
 }
 
 BluetoothService::~BluetoothService()
@@ -315,7 +307,7 @@ BluetoothService::Create()
   }
 
 #if defined(MOZ_B2G_BT_BLUEZ)
-  return new BluetoothGonkService();
+  return new BluetoothDBusService();
 #elif defined(MOZ_B2G_BT_BLUEDROID)
   return new BluetoothServiceBluedroid();
 #endif
@@ -463,7 +455,7 @@ BluetoothService::StartStopBluetooth(bool aStart, bool aIsStartup)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  if (gInShutdown) {
+  if (sInShutdown) {
     if (aStart) {
       // Don't try to start if we're already shutting down.
       MOZ_ASSERT(false, "Start called while in shutdown!");
@@ -483,6 +475,8 @@ BluetoothService::StartStopBluetooth(bool aStart, bool aIsStartup)
     NS_ENSURE_TRUE(profile, NS_ERROR_FAILURE);
     if (profile->IsConnected()) {
       profile->Disconnect(nullptr);
+    } else {
+      profile->Reset();
     }
 
     profile = BluetoothOppManager::Get();
@@ -495,13 +489,18 @@ BluetoothService::StartStopBluetooth(bool aStart, bool aIsStartup)
     NS_ENSURE_TRUE(profile, NS_ERROR_FAILURE);
     if (profile->IsConnected()) {
       profile->Disconnect(nullptr);
+    } else {
+      profile->Reset();
     }
 
     profile = BluetoothHidManager::Get();
     NS_ENSURE_TRUE(profile, NS_ERROR_FAILURE);
     if (profile->IsConnected()) {
       profile->Disconnect(nullptr);
+    } else {
+      profile->Reset();
     }
+
   }
 
   if (!mBluetoothThread) {
@@ -547,8 +546,8 @@ BluetoothService::SetEnabled(bool aEnabled)
    * aEnabled: expected status of bluetooth
    */
   if (mEnabled == aEnabled) {
-    BT_WARNING("Bluetooth has already been enabled/disabled before\
-                or the toggling is failed.");
+    BT_WARNING("Bluetooth has already been enabled/disabled before "
+               "or the toggling is failed.");
   }
 
   mEnabled = aEnabled;
@@ -558,21 +557,21 @@ nsresult
 BluetoothService::HandleStartup()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(!gToggleInProgress);
+  MOZ_ASSERT(!sToggleInProgress);
 
   nsCOMPtr<nsISettingsService> settings =
     do_GetService("@mozilla.org/settingsService;1");
   NS_ENSURE_TRUE(settings, NS_ERROR_UNEXPECTED);
 
   nsCOMPtr<nsISettingsServiceLock> settingsLock;
-  nsresult rv = settings->CreateLock(getter_AddRefs(settingsLock));
+  nsresult rv = settings->CreateLock(nullptr, getter_AddRefs(settingsLock));
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsRefPtr<StartupTask> callback = new StartupTask();
   rv = settingsLock->Get(BLUETOOTH_ENABLED_SETTING, callback);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  gToggleInProgress = true;
+  sToggleInProgress = true;
   return NS_OK;
 }
 
@@ -605,10 +604,10 @@ BluetoothService::HandleSettingsChanged(const nsAString& aData)
     return NS_OK;
   }
 
-  JSObject& obj(val.toObject());
+  JS::Rooted<JSObject*> obj(cx, &val.toObject());
 
   JS::Rooted<JS::Value> key(cx);
-  if (!JS_GetProperty(cx, &obj, "key", &key)) {
+  if (!JS_GetProperty(cx, obj, "key", &key)) {
     MOZ_ASSERT(!JS_IsExceptionPending(cx));
     return NS_ERROR_OUT_OF_MEMORY;
   }
@@ -626,7 +625,7 @@ BluetoothService::HandleSettingsChanged(const nsAString& aData)
 
   if (match) {
     JS::Rooted<JS::Value> value(cx);
-    if (!JS_GetProperty(cx, &obj, "value", &value)) {
+    if (!JS_GetProperty(cx, obj, "value", &value)) {
       MOZ_ASSERT(!JS_IsExceptionPending(cx));
       return NS_ERROR_OUT_OF_MEMORY;
     }
@@ -649,7 +648,7 @@ BluetoothService::HandleSettingsChanged(const nsAString& aData)
 
   if (match) {
     JS::Rooted<JS::Value> value(cx);
-    if (!JS_GetProperty(cx, &obj, "value", &value)) {
+    if (!JS_GetProperty(cx, obj, "value", &value)) {
       MOZ_ASSERT(!JS_IsExceptionPending(cx));
       return NS_ERROR_OUT_OF_MEMORY;
     }
@@ -659,12 +658,12 @@ BluetoothService::HandleSettingsChanged(const nsAString& aData)
       return NS_ERROR_UNEXPECTED;
     }
 
-    if (gToggleInProgress || value.toBoolean() == IsEnabled()) {
+    if (sToggleInProgress || value.toBoolean() == IsEnabled()) {
       // Nothing to do here.
       return NS_OK;
     }
 
-    gToggleInProgress = true;
+    sToggleInProgress = true;
 
     nsresult rv = StartStopBluetooth(value.toBoolean(), false);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -682,7 +681,7 @@ BluetoothService::HandleShutdown()
   // bluetooth is going away, and then we wait for them to acknowledge. Then we
   // close down all the bluetooth machinery.
 
-  gInShutdown = true;
+  sInShutdown = true;
 
   Cleanup();
 
@@ -745,12 +744,12 @@ BluetoothService::Get()
   MOZ_ASSERT(NS_IsMainThread());
 
   // If we already exist, exit early
-  if (gBluetoothService) {
-    return gBluetoothService;
+  if (sBluetoothService) {
+    return sBluetoothService;
   }
 
   // If we're in shutdown, don't create a new instance
-  if (gInShutdown) {
+  if (sInShutdown) {
     BT_WARNING("BluetoothService can't be created during shutdown");
     return nullptr;
   }
@@ -764,13 +763,13 @@ BluetoothService::Get()
     return nullptr;
   }
 
-  gBluetoothService = service;
-  return gBluetoothService;
+  sBluetoothService = service;
+  return sBluetoothService;
 }
 
 nsresult
 BluetoothService::Observe(nsISupports* aSubject, const char* aTopic,
-                          const PRUnichar* aData)
+                          const char16_t* aData)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -818,7 +817,8 @@ BluetoothService::Notify(const BluetoothSignal& aData)
   nsString type = NS_LITERAL_STRING("bluetooth-pairing-request");
 
   AutoSafeJSContext cx;
-  JS::Rooted<JSObject*> obj(cx, JS_NewObject(cx, nullptr, nullptr, nullptr));
+  JS::Rooted<JSObject*> obj(cx, JS_NewObject(cx, nullptr, JS::NullPtr(),
+                                             JS::NullPtr()));
   NS_ENSURE_TRUE_VOID(obj);
 
   if (!SetJsObject(cx, aData.value(), obj)) {
@@ -857,7 +857,7 @@ BluetoothService::Notify(const BluetoothSignal& aData)
     do_GetService("@mozilla.org/system-message-internal;1");
   NS_ENSURE_TRUE_VOID(systemMessenger);
 
-  systemMessenger->BroadcastMessage(type,
-                                    OBJECT_TO_JSVAL(obj),
-                                    JS::UndefinedValue());
+  JS::Rooted<JS::Value> value(cx, JS::ObjectValue(*obj));
+  systemMessenger->BroadcastMessage(type, value,
+                                    JS::UndefinedHandleValue);
 }

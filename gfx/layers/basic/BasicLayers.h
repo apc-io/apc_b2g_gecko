@@ -111,11 +111,11 @@ public:
   virtual already_AddRefed<ReadbackLayer> CreateReadbackLayer();
   virtual ImageFactory *GetImageFactory();
 
-  virtual LayersBackend GetBackendType() { return LAYERS_BASIC; }
+  virtual LayersBackend GetBackendType() { return LayersBackend::LAYERS_BASIC; }
   virtual void GetBackendName(nsAString& name) { name.AssignLiteral("Basic"); }
 
-#ifdef DEBUG
   bool InConstruction() { return mPhase == PHASE_CONSTRUCTION; }
+#ifdef DEBUG
   bool InDrawing() { return mPhase == PHASE_DRAWING; }
   bool InForward() { return mPhase == PHASE_FORWARD; }
 #endif
@@ -196,13 +196,6 @@ protected:
   bool mTransactionIncomplete;
   bool mCompositorMightResample;
 };
-
-void
-PaintContext(gfxPattern* aPattern,
-             const nsIntRegion& aVisible,
-             float aOpacity,
-             gfxContext* aContext,
-             Layer* aMaskLayer);
 
 }
 }

@@ -12,17 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Don't use STL wrappers; this isn't Gecko code
-STL_FLAGS =
-
-# must link statically with the CRT; this isn't Gecko code
-USE_STATIC_LIBS = 1
-
 include $(topsrcdir)/config/rules.mk
-
-INCLUDES        += \
-                -I$(srcdir)/../../../content/media/plugins \
-                $(NULL)
 
 EXTRA_DSO_LDOPTS += \
 		-L$(DEPTH)/media/omx-plugin/lib/gb/libutils \
@@ -33,7 +23,3 @@ EXTRA_DSO_LDOPTS += \
 		-lstagefright_color_conversion \
 		$(NULL)
 
-INCLUDES        += \
-                -I$(srcdir)/../include/froyo \
-                -I$(srcdir)/../include/froyo/media/stagefright/openmax \
-                $(NULL)

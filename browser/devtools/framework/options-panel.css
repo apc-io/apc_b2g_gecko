@@ -7,7 +7,6 @@
 }
 
 #options-panel {
-  overflow-y: auto;
   display: block;
 }
 
@@ -23,7 +22,7 @@
 .options-vertical-pane {
   margin: 5px;
   width: calc(50% - 30px);
-  min-width: 400px;
+  min-width: 350px;
   -moz-padding-start: 5px;
 }
 
@@ -46,11 +45,6 @@
   /* !important is required otherwise font-size will still be 1.4rem */
   font-style: italic;
   padding: 4px 0 0; /* To align it with the checkbox */
-}
-
-.options-citation-label + label {
-  padding: 3px 0 0 !important; /* To align it with the checkbox */
-  font-style: italic;
 }
 
 .hidden-labels-box:not(.visible) > label,

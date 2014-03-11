@@ -6,6 +6,7 @@
 #ifndef SHARED_SURFACE_GL_H_
 #define SHARED_SURFACE_GL_H_
 
+#include "ScopedGLHelpers.h"
 #include "SharedSurface.h"
 #include "SurfaceFactory.h"
 #include "SurfaceTypes.h"
@@ -21,6 +22,9 @@ class gfxImageSurface;
 namespace mozilla {
     namespace gl {
         class GLContext;
+    }
+    namespace gfx {
+        class DataSourceSurface;
     }
 }
 
@@ -43,7 +47,7 @@ protected:
     SharedSurface_GL(SharedSurfaceType type,
                      AttachmentType attachType,
                      GLContext* gl,
-                     const gfxIntSize& size,
+                     const gfx::IntSize& size,
                      bool hasAlpha)
         : SharedSurface(type, APITypeT::OpenGL, attachType, size, hasAlpha)
         , mGL(gl)
@@ -121,7 +125,7 @@ class SharedSurface_Basic
 public:
     static SharedSurface_Basic* Create(GLContext* gl,
                                        const GLFormats& formats,
-                                       const gfxIntSize& size,
+                                       const gfx::IntSize& size,
                                        bool hasAlpha);
 
     static SharedSurface_Basic* Cast(SharedSurface* surf) {
@@ -132,12 +136,14 @@ public:
 
 protected:
     const GLuint mTex;
-    nsRefPtr<gfxImageSurface> mData;
+    GLuint mFB;
+
+    RefPtr<gfx::DataSourceSurface> mData;
 
     SharedSurface_Basic(GLContext* gl,
-                        const gfxIntSize& size,
+                        const gfx::IntSize& size,
                         bool hasAlpha,
-                        gfxImageFormat format,
+                        gfx::SurfaceFormat format,
                         GLuint tex);
 
 public:
@@ -160,7 +166,7 @@ public:
     }
 
     // Implementation-specific functions below:
-    gfxImageSurface* GetData() {
+    gfx::DataSourceSurface* GetData() {
         return mData;
     }
 };
@@ -173,7 +179,7 @@ public:
         : SurfaceFactory_GL(gl, SharedSurfaceType::Basic, caps)
     {}
 
-    virtual SharedSurface* CreateShared(const gfxIntSize& size) {
+    virtual SharedSurface* CreateShared(const gfx::IntSize& size) {
         bool hasAlpha = mReadCaps.alpha;
         return SharedSurface_Basic::Create(mGL, mFormats, size, hasAlpha);
     }
@@ -188,8 +194,9 @@ public:
     static SharedSurface_GLTexture* Create(GLContext* prodGL,
                                            GLContext* consGL,
                                            const GLFormats& formats,
-                                           const gfxIntSize& size,
-                                           bool hasAlpha);
+                                           const gfx::IntSize& size,
+                                           bool hasAlpha,
+                                           GLuint texture = 0);
 
     static SharedSurface_GLTexture* Cast(SharedSurface* surf) {
         MOZ_ASSERT(surf->Type() == SharedSurfaceType::GLTextureShare);
@@ -200,14 +207,16 @@ public:
 protected:
     GLContext* mConsGL;
     const GLuint mTex;
+    const bool mOwnsTex;
     GLsync mSync;
     mutable Mutex mMutex;
 
     SharedSurface_GLTexture(GLContext* prodGL,
                             GLContext* consGL,
-                            const gfxIntSize& size,
+                            const gfx::IntSize& size,
                             bool hasAlpha,
-                            GLuint tex)
+                            GLuint tex,
+                            bool ownsTex)
         : SharedSurface_GL(SharedSurfaceType::GLTextureShare,
                            AttachmentType::GLTexture,
                            prodGL,
@@ -215,6 +224,7 @@ protected:
                            hasAlpha)
         , mConsGL(consGL)
         , mTex(tex)
+        , mOwnsTex(ownsTex)
         , mSync(0)
         , mMutex("SharedSurface_GLTexture mutex")
     {
@@ -258,7 +268,7 @@ public:
         MOZ_ASSERT(consGL != prodGL);
     }
 
-    virtual SharedSurface* CreateShared(const gfxIntSize& size) {
+    virtual SharedSurface* CreateShared(const gfx::IntSize& size) {
         bool hasAlpha = mReadCaps.alpha;
         return SharedSurface_GLTexture::Create(mGL, mConsGL, mFormats, size, hasAlpha);
     }

@@ -182,18 +182,15 @@ template <typename T>
 class BarrieredCell : public gc::Cell
 {
   public:
-    JS_ALWAYS_INLINE JS::Zone *zone() const { return tenuredZone(); }
-    JS_ALWAYS_INLINE JS::shadow::Zone *shadowZone() const { return JS::shadow::Zone::asShadowZone(zone()); }
-    JS_ALWAYS_INLINE JS::Zone *zoneFromAnyThread() const { return tenuredZoneFromAnyThread(); }
-    JS_ALWAYS_INLINE JS::shadow::Zone *shadowZoneFromAnyThread() const {
+    MOZ_ALWAYS_INLINE JS::Zone *zone() const { return tenuredZone(); }
+    MOZ_ALWAYS_INLINE JS::shadow::Zone *shadowZone() const { return JS::shadow::Zone::asShadowZone(zone()); }
+    MOZ_ALWAYS_INLINE JS::Zone *zoneFromAnyThread() const { return tenuredZoneFromAnyThread(); }
+    MOZ_ALWAYS_INLINE JS::shadow::Zone *shadowZoneFromAnyThread() const {
         return JS::shadow::Zone::asShadowZone(zoneFromAnyThread());
     }
 
-    static JS_ALWAYS_INLINE void readBarrier(T *thing) {
+    static MOZ_ALWAYS_INLINE void readBarrier(T *thing) {
 #ifdef JSGC_INCREMENTAL
-        // Off thread Ion compilation never occurs when barriers are active.
-        js::AutoThreadSafeAccess ts(thing);
-
         JS::shadow::Zone *shadowZone = thing->shadowZoneFromAnyThread();
         if (shadowZone->needsBarrier()) {
             MOZ_ASSERT(!RuntimeFromMainThreadIsHeapMajorCollecting(shadowZone));
@@ -204,7 +201,7 @@ class BarrieredCell : public gc::Cell
 #endif
     }
 
-    static JS_ALWAYS_INLINE bool needWriteBarrierPre(JS::Zone *zone) {
+    static MOZ_ALWAYS_INLINE bool needWriteBarrierPre(JS::Zone *zone) {
 #ifdef JSGC_INCREMENTAL
         return JS::shadow::Zone::asShadowZone(zone)->needsBarrier();
 #else
@@ -212,9 +209,9 @@ class BarrieredCell : public gc::Cell
 #endif
     }
 
-    static JS_ALWAYS_INLINE bool isNullLike(T *thing) { return !thing; }
+    static MOZ_ALWAYS_INLINE bool isNullLike(T *thing) { return !thing; }
 
-    static JS_ALWAYS_INLINE void writeBarrierPre(T *thing) {
+    static MOZ_ALWAYS_INLINE void writeBarrierPre(T *thing) {
 #ifdef JSGC_INCREMENTAL
         if (isNullLike(thing) || !thing->shadowRuntimeFromAnyThread()->needsBarrier())
             return;
@@ -254,7 +251,7 @@ ShadowZoneOfString(JSString *str)
     return JS::shadow::Zone::asShadowZone(reinterpret_cast<const js::gc::Cell *>(str)->tenuredZone());
 }
 
-JS_ALWAYS_INLINE JS::Zone *
+MOZ_ALWAYS_INLINE JS::Zone *
 ZoneOfValue(const JS::Value &value)
 {
     JS_ASSERT(value.isMarkable());
@@ -279,7 +276,7 @@ ShadowZoneOfStringFromAnyThread(JSString *str)
         reinterpret_cast<const js::gc::Cell *>(str)->tenuredZoneFromAnyThread());
 }
 
-JS_ALWAYS_INLINE JS::Zone *
+MOZ_ALWAYS_INLINE JS::Zone *
 ZoneOfValueFromAnyThread(const JS::Value &value)
 {
     JS_ASSERT(value.isMarkable());
@@ -330,6 +327,12 @@ class BarrieredPtr
     void pre() { T::writeBarrierPre(value); }
 };
 
+/*
+ * EncapsulatedPtr only automatically handles pre-barriers. Post-barriers must
+ * be manually implemented when using this class. HeapPtr and RelocatablePtr
+ * should be used in all cases that do not require explicit low-level control
+ * of moving behavior, e.g. for HashMap keys.
+ */
 template <class T, typename Unioned = uintptr_t>
 class EncapsulatedPtr : public BarrieredPtr<T, Unioned>
 {
@@ -363,7 +366,14 @@ class EncapsulatedPtr : public BarrieredPtr<T, Unioned>
 /*
  * A pre- and post-barriered heap pointer, for use inside the JS engine.
  *
- * Not to be confused with JS::Heap<T>.
+ * Not to be confused with JS::Heap<T>. This is a different class from the
+ * external interface and implements substantially different semantics.
+ *
+ * The post-barriers implemented by this class are faster than those
+ * implemented by RelocatablePtr<T> or JS::Heap<T> at the cost of not
+ * automatically handling deletion or movement. It should generally only be
+ * stored in memory that has GC lifetime. HeapPtr must not be used in contexts
+ * where it may be implicitly moved or deleted, e.g. most containers.
  */
 template <class T, class Unioned = uintptr_t>
 class HeapPtr : public BarrieredPtr<T, Unioned>
@@ -371,7 +381,7 @@ class HeapPtr : public BarrieredPtr<T, Unioned>
   public:
     HeapPtr() : BarrieredPtr<T, Unioned>(nullptr) {}
     explicit HeapPtr(T *v) : BarrieredPtr<T, Unioned>(v) { post(); }
-    explicit HeapPtr(const HeapPtr<T> &v) : BarrieredPtr<T, Unioned>(v) { post(); }
+    explicit HeapPtr(const HeapPtr<T, Unioned> &v) : BarrieredPtr<T, Unioned>(v) { post(); }
 
     void init(T *v) {
         JS_ASSERT(!IsPoisonedPtr<T>(v));
@@ -387,7 +397,7 @@ class HeapPtr : public BarrieredPtr<T, Unioned>
         return *this;
     }
 
-    HeapPtr<T, Unioned> &operator=(const HeapPtr<T> &v) {
+    HeapPtr<T, Unioned> &operator=(const HeapPtr<T, Unioned> &v) {
         this->pre();
         JS_ASSERT(!IsPoisonedPtr<T>(v.value));
         this->value = v.value;
@@ -404,6 +414,17 @@ class HeapPtr : public BarrieredPtr<T, Unioned>
     BarrieredSetPair(Zone *zone,
                      HeapPtr<T1> &v1, T1 *val1,
                      HeapPtr<T2> &v2, T2 *val2);
+
+  private:
+    /*
+     * Unlike RelocatablePtr<T>, HeapPtr<T> must be managed with GC lifetimes.
+     * Specifically, the memory used by the pointer itself must be live until
+     * at least the next minor GC. For that reason, move semantics are invalid
+     * and are deleted here. Please note that not all containers support move
+     * semantics, so this does not completely prevent invalid uses.
+     */
+    HeapPtr(HeapPtr<T> &&) MOZ_DELETE;
+    HeapPtr<T, Unioned> &operator=(HeapPtr<T, Unioned> &&) MOZ_DELETE;
 };
 
 /*
@@ -436,6 +457,13 @@ class FixedHeapPtr
     }
 };
 
+/*
+ * A pre- and post-barriered heap pointer, for use inside the JS engine.
+ *
+ * Unlike HeapPtr<T>, it can be used in memory that is not managed by the GC,
+ * i.e. in C++ containers.  It is, however, somewhat slower, so should only be
+ * used in contexts where this ability is necessary.
+ */
 template <class T>
 class RelocatablePtr : public BarrieredPtr<T>
 {
@@ -445,6 +473,13 @@ class RelocatablePtr : public BarrieredPtr<T>
         if (v)
             post();
     }
+
+    /*
+     * For RelocatablePtr, move semantics are equivalent to copy semantics. In
+     * C++, a copy constructor taking const-ref is the way to get a single
+     * function that will be used for both lvalue and rvalue copies, so we can
+     * simply omit the rvalue variant.
+     */
     RelocatablePtr(const RelocatablePtr<T> &v) : BarrieredPtr<T>(v) {
         if (this->value)
             post();
@@ -570,6 +605,9 @@ struct EncapsulatedPtrHasher
 template <class T>
 struct DefaultHasher< EncapsulatedPtr<T> > : EncapsulatedPtrHasher<T> { };
 
+bool
+StringIsPermanentAtom(JSString *str);
+
 /*
  * Base class for barriered value types.
  */
@@ -622,6 +660,8 @@ class BarrieredValue : public ValueOperations<BarrieredValue>
 
     static void writeBarrierPre(Zone *zone, const Value &v) {
 #ifdef JSGC_INCREMENTAL
+        if (v.isString() && StringIsPermanentAtom(v.toString()))
+            return;
         JS::shadow::Zone *shadowZone = JS::shadow::Zone::asShadowZone(zone);
         if (shadowZone->needsBarrier()) {
             JS_ASSERT_IF(v.isMarkable(), shadowRuntimeFromMainThread(v)->needsBarrier());
@@ -656,6 +696,8 @@ class BarrieredValue : public ValueOperations<BarrieredValue>
     const Value * extract() const { return &value; }
 };
 
+// Like EncapsulatedPtr, but specialized for Value.
+// See the comments on that class for details.
 class EncapsulatedValue : public BarrieredValue
 {
   public:
@@ -677,11 +719,8 @@ class EncapsulatedValue : public BarrieredValue
     }
 };
 
-/*
- * A pre- and post-barriered heap JS::Value, for use inside the JS engine.
- *
- * Not to be confused with JS::Heap<JS::Value>.
- */
+// Like HeapPtr, but specialized for Value.
+// See the comments on that class for details.
 class HeapValue : public BarrieredValue
 {
   public:
@@ -780,8 +819,13 @@ class HeapValue : public BarrieredValue
     void post(JSRuntime *rt) {
         writeBarrierPost(rt, value, &value);
     }
+
+    HeapValue(HeapValue &&) MOZ_DELETE;
+    HeapValue &operator=(HeapValue &&) MOZ_DELETE;
 };
 
+// Like RelocatablePtr, but specialized for Value.
+// See the comments on that class for details.
 class RelocatableValue : public BarrieredValue
 {
   public:
@@ -856,6 +900,9 @@ class RelocatableValue : public BarrieredValue
     }
 };
 
+// A pre- and post-barriered Value that is specialized to be aware that it
+// resides in a slots or elements vector. This allows it to be relocated in
+// memory, but with substantially less overhead than a RelocatablePtr.
 class HeapSlot : public BarrieredValue
 {
   public:
@@ -1026,6 +1073,8 @@ class BarrieredId
     }
 };
 
+// Like EncapsulatedPtr, but specialized for jsid.
+// See the comments on that class for details.
 class EncapsulatedId : public BarrieredId
 {
   public:
@@ -1041,6 +1090,8 @@ class EncapsulatedId : public BarrieredId
     }
 };
 
+// Like RelocatablePtr, but specialized for jsid.
+// See the comments on that class for details.
 class RelocatableId : public BarrieredId
 {
   public:
@@ -1073,11 +1124,8 @@ class RelocatableId : public BarrieredId
     }
 };
 
-/*
- * A pre- and post-barriered heap jsid, for use inside the JS engine.
- *
- * Not to be confused with JS::Heap<jsid>.
- */
+// Like HeapPtr, but specialized for jsid.
+// See the comments on that class for details.
 class HeapId : public BarrieredId
 {
   public:
@@ -1120,6 +1168,9 @@ class HeapId : public BarrieredId
     void post() {};
 
     HeapId(const HeapId &v) MOZ_DELETE;
+
+    HeapId(HeapId &&) MOZ_DELETE;
+    HeapId &operator=(HeapId &&) MOZ_DELETE;
 };
 
 /*

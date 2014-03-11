@@ -29,20 +29,12 @@ class BluetoothOppManager : public BluetoothSocketObserver
                           , public BluetoothProfileManagerBase
 {
 public:
-  NS_DECL_ISUPPORTS
-  NS_DECL_NSIOBSERVER
   BT_DECL_PROFILE_MGR_BASE
   virtual void GetName(nsACString& aName)
   {
     aName.AssignLiteral("OPP");
   }
 
-  /*
-   * Channel of reserved services are fixed values, please check
-   * function add_reserved_service_records() in
-   * external/bluetooth/bluez/src/adapter.c for more information.
-   */
-  static const int DEFAULT_OPP_CHANNEL = 10;
   static const int MAX_PACKET_LENGTH = 0xFFFE;
 
   virtual ~BluetoothOppManager();
@@ -53,6 +45,7 @@ public:
   bool Listen();
 
   bool SendFile(const nsAString& aDeviceAddress, BlobParent* aActor);
+  bool SendFile(const nsAString& aDeviceAddress, nsIDOMBlob* aBlob);
   bool StopSendingFile();
   bool ConfirmReceivingFile(bool aConfirm);
 
@@ -95,13 +88,13 @@ private:
   void AfterFirstPut();
   void AfterOppDisconnected();
   void ValidateFileName();
-  bool IsReservedChar(PRUnichar c);
+  bool IsReservedChar(char16_t c);
   void ClearQueue();
   void RetrieveSentFileName();
   void NotifyAboutFileChange();
   bool AcquireSdcardMountLock();
   void SendObexData(uint8_t* aData, uint8_t aOpcode, int aSize);
-  void AppendBlobToSend(const nsAString& aDeviceAddress, BlobParent* aActor);
+  void AppendBlobToSend(const nsAString& aDeviceAddress, nsIDOMBlob* aBlob);
   void DiscardBlobsToSend();
   bool ProcessNextBatch();
   void ConnectInternal(const nsAString& aDeviceAddress);

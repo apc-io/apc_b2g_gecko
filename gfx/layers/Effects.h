@@ -39,6 +39,7 @@ namespace layers {
 
 struct Effect : public RefCounted<Effect>
 {
+  MOZ_DECLARE_REFCOUNTED_TYPENAME(Effect)
   Effect(EffectTypes aType) : mType(aType) {}
 
   EffectTypes mType;
@@ -95,7 +96,7 @@ struct EffectMask : public Effect
 struct EffectRenderTarget : public TexturedEffect
 {
   EffectRenderTarget(CompositingRenderTarget *aRenderTarget)
-    : TexturedEffect(EFFECT_RENDER_TARGET, aRenderTarget, true, gfx::FILTER_LINEAR)
+    : TexturedEffect(EFFECT_RENDER_TARGET, aRenderTarget, true, gfx::Filter::LINEAR)
     , mRenderTarget(aRenderTarget)
   {}
 
@@ -105,49 +106,16 @@ struct EffectRenderTarget : public TexturedEffect
   RefPtr<CompositingRenderTarget> mRenderTarget;
 };
 
-struct EffectBGRX : public TexturedEffect
+struct EffectRGB : public TexturedEffect
 {
-  EffectBGRX(TextureSource *aBGRXTexture,
-             bool aPremultiplied,
-             gfx::Filter aFilter,
-             bool aFlipped = false)
-    : TexturedEffect(EFFECT_BGRX, aBGRXTexture, aPremultiplied, aFilter)
+  EffectRGB(TextureSource *aTexture,
+            bool aPremultiplied,
+            gfx::Filter aFilter,
+            bool aFlipped = false)
+    : TexturedEffect(EFFECT_RGB, aTexture, aPremultiplied, aFilter)
   {}
 
-  virtual const char* Name() { return "EffectBGRX"; }
-};
-
-struct EffectRGBX : public TexturedEffect
-{
-  EffectRGBX(TextureSource *aRGBXTexture,
-             bool aPremultiplied,
-             gfx::Filter aFilter)
-    : TexturedEffect(EFFECT_RGBX, aRGBXTexture, aPremultiplied, aFilter)
-  {}
-
-  virtual const char* Name() { return "EffectRGBX"; }
-};
-
-struct EffectBGRA : public TexturedEffect
-{
-  EffectBGRA(TextureSource *aBGRATexture,
-             bool aPremultiplied,
-             gfx::Filter aFilter)
-    : TexturedEffect(EFFECT_BGRA, aBGRATexture, aPremultiplied, aFilter)
-  {}
-
-  virtual const char* Name() { return "EffectBGRA"; }
-};
-
-struct EffectRGBA : public TexturedEffect
-{
-  EffectRGBA(TextureSource *aRGBATexture,
-             bool aPremultiplied,
-             gfx::Filter aFilter)
-    : TexturedEffect(EFFECT_RGBA, aRGBATexture, aPremultiplied, aFilter)
-  {}
-
-  virtual const char* Name() { return "EffectRGBA"; }
+  virtual const char* Name() { return "EffectRGB"; }
 };
 
 struct EffectYCbCr : public TexturedEffect
@@ -189,7 +157,7 @@ struct EffectSolidColor : public Effect
 
 struct EffectChain
 {
-  EffectChain() : mLayerRef(NULL) {}
+  EffectChain() : mLayerRef(nullptr) {}
   explicit EffectChain(void* aLayerRef) : mLayerRef(aLayerRef) {}
 
   RefPtr<Effect> mPrimaryEffect;
@@ -214,22 +182,14 @@ CreateTexturedEffect(gfx::SurfaceFormat aFormat,
   MOZ_ASSERT(aSource);
   RefPtr<TexturedEffect> result;
   switch (aFormat) {
-  case gfx::FORMAT_B8G8R8A8:
-    result = new EffectBGRA(aSource, true, aFilter);
+  case gfx::SurfaceFormat::B8G8R8A8:
+  case gfx::SurfaceFormat::B8G8R8X8:
+  case gfx::SurfaceFormat::R8G8B8X8:
+  case gfx::SurfaceFormat::R5G6B5:
+  case gfx::SurfaceFormat::R8G8B8A8:
+    result = new EffectRGB(aSource, true, aFilter);
     break;
-  case gfx::FORMAT_B8G8R8X8:
-    result = new EffectBGRX(aSource, true, aFilter);
-    break;
-  case gfx::FORMAT_R8G8B8X8:
-    result = new EffectRGBX(aSource, true, aFilter);
-    break;
-  case gfx::FORMAT_R5G6B5:
-    result = new EffectRGBX(aSource, true, aFilter);
-    break;
-  case gfx::FORMAT_R8G8B8A8:
-    result = new EffectRGBA(aSource, true, aFilter);
-    break;
-  case gfx::FORMAT_YUV:
+  case gfx::SurfaceFormat::YUV:
     result = new EffectYCbCr(aSource, aFilter);
     break;
   default:
@@ -253,8 +213,8 @@ CreateTexturedEffect(TextureSource* aSource,
 {
   MOZ_ASSERT(aSource);
   if (aSourceOnWhite) {
-    MOZ_ASSERT(aSource->GetFormat() == gfx::FORMAT_R8G8B8X8 ||
-               aSourceOnWhite->GetFormat() == gfx::FORMAT_B8G8R8X8);
+    MOZ_ASSERT(aSource->GetFormat() == gfx::SurfaceFormat::R8G8B8X8 ||
+               aSourceOnWhite->GetFormat() == gfx::SurfaceFormat::B8G8R8X8);
     return new EffectComponentAlpha(aSource, aSourceOnWhite, aFilter);
   }
 

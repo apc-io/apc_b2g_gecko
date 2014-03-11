@@ -26,11 +26,12 @@ class DrawTargetCG;
 class SourceSurfaceCG : public SourceSurface
 {
 public:
+  MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(SourceSurfaceCG)
   SourceSurfaceCG() {}
   SourceSurfaceCG(CGImageRef aImage) : mImage(aImage) {}
   ~SourceSurfaceCG();
 
-  virtual SurfaceType GetType() const { return SURFACE_COREGRAPHICS_IMAGE; }
+  virtual SurfaceType GetType() const { return SurfaceType::COREGRAPHICS_IMAGE; }
   virtual IntSize GetSize() const;
   virtual SurfaceFormat GetFormat() const;
   virtual TemporaryRef<DataSourceSurface> GetDataSurface();
@@ -54,11 +55,12 @@ private:
 class DataSourceSurfaceCG : public DataSourceSurface
 {
 public:
+  MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(DataSourceSurfaceCG)
   DataSourceSurfaceCG() {}
   DataSourceSurfaceCG(CGImageRef aImage);
   ~DataSourceSurfaceCG();
 
-  virtual SurfaceType GetType() const { return SURFACE_DATA; }
+  virtual SurfaceType GetType() const { return SurfaceType::DATA; }
   virtual IntSize GetSize() const;
   virtual SurfaceFormat GetFormat() const { return mFormat; }
 
@@ -88,6 +90,7 @@ private:
 class SourceSurfaceCGContext : public DataSourceSurface
 {
 public:
+  MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(DataSourceSurfaceCGContext)
   virtual void DrawTargetWillChange() = 0;
   virtual CGImageRef GetImage() = 0;
 };
@@ -95,10 +98,11 @@ public:
 class SourceSurfaceCGBitmapContext : public SourceSurfaceCGContext
 {
 public:
+  MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(DataSourceSurfaceCGBitmapContext)
   SourceSurfaceCGBitmapContext(DrawTargetCG *);
   ~SourceSurfaceCGBitmapContext();
 
-  virtual SurfaceType GetType() const { return SURFACE_COREGRAPHICS_CGCONTEXT; }
+  virtual SurfaceType GetType() const { return SurfaceType::COREGRAPHICS_CGCONTEXT; }
   virtual IntSize GetSize() const;
   virtual SurfaceFormat GetFormat() const { return mFormat; }
   virtual TemporaryRef<DataSourceSurface> GetDataSurface()
@@ -150,10 +154,11 @@ private:
 class SourceSurfaceCGIOSurfaceContext : public SourceSurfaceCGContext
 {
 public:
+  MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(DataSourceSurfaceCGIOSurfaceContext)
   SourceSurfaceCGIOSurfaceContext(DrawTargetCG *);
   ~SourceSurfaceCGIOSurfaceContext();
 
-  virtual SurfaceType GetType() const { return SURFACE_COREGRAPHICS_CGCONTEXT; }
+  virtual SurfaceType GetType() const { return SurfaceType::COREGRAPHICS_CGCONTEXT; }
   virtual IntSize GetSize() const;
   virtual SurfaceFormat GetFormat() const { return mFormat; }
 

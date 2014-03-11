@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 Components.utils.import("resource://gre/modules/Services.jsm");
+Components.utils.import("resource://gre/modules/CharsetMenu.jsm");
 
 const Cc = Components.classes;
 const Ci = Components.interfaces;
@@ -656,9 +657,10 @@ function BrowserCharsetReload()
   }
 }
 
-function BrowserSetForcedCharacterSet(aCharset)
+function BrowserSetCharacterSet(aEvent)
 {
-  gBrowser.docShell.charset = aCharset;
+  if (aEvent.target.hasAttribute("charset"))
+    gBrowser.docShell.charset = aEvent.target.getAttribute("charset");
   BrowserCharsetReload();
 }
 

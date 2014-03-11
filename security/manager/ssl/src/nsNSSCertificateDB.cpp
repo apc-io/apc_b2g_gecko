@@ -11,6 +11,9 @@
 #include "nsNSSCertificateDB.h"
 
 #include "CertVerifier.h"
+#include "ExtendedValidation.h"
+#include "NSSCertDBTrustDomain.h"
+#include "insanity/pkixtypes.h"
 #include "nsNSSComponent.h"
 #include "mozilla/Base64.h"
 #include "nsCOMPtr.h"
@@ -55,6 +58,31 @@ using mozilla::psm::SharedSSLState;
 extern PRLogModuleInfo* gPIPNSSLog;
 #endif
 
+static nsresult
+attemptToLogInWithDefaultPassword()
+{
+#ifdef NSS_DISABLE_DBM
+  // The SQL NSS DB requires the user to be authenticated to set certificate
+  // trust settings, even if the user's password is empty. To maintain
+  // compatibility with the DBM-based database, try to log in with the
+  // default empty password. This will allow, at least, tests that need to
+  // change certificate trust to pass on all platforms. TODO(bug 978120): Do
+  // proper testing and/or implement a better solution so that we are confident
+  // that this does the correct thing outside of xpcshell tests too.
+  ScopedPK11SlotInfo slot(PK11_GetInternalKeySlot());
+  if (!slot) {
+    return MapSECStatus(SECFailure);
+  }
+  if (PK11_NeedUserInit(slot)) {
+    // Ignore the return value. Presumably PK11_InitPin will fail if the user
+    // has a non-default password.
+    (void) PK11_InitPin(slot, nullptr, nullptr);
+  }
+#endif
+
+  return NS_OK;
+}
+
 NS_IMPL_ISUPPORTS2(nsNSSCertificateDB, nsIX509CertDB, nsIX509CertDB2)
 
 nsNSSCertificateDB::nsNSSCertificateDB()
@@ -65,6 +93,12 @@ nsNSSCertificateDB::nsNSSCertificateDB()
 
 nsNSSCertificateDB::~nsNSSCertificateDB()
 {
+  nsNSSShutDownPreventionLock locker;
+  if (isAlreadyShutDown()) {
+    return;
+  }
+
+  shutdown(calledFromObject);
 }
 
 NS_IMETHODIMP
@@ -79,26 +113,18 @@ nsNSSCertificateDB::FindCertByNickname(nsISupports *aToken,
   if (isAlreadyShutDown()) {
     return NS_ERROR_NOT_AVAILABLE;
   }
-  ScopedCERTCertificate cert;
+  insanity::pkix::ScopedCERTCertificate cert;
   char *asciiname = nullptr;
   NS_ConvertUTF16toUTF8 aUtf8Nickname(nickname);
   asciiname = const_cast<char*>(aUtf8Nickname.get());
   PR_LOG(gPIPNSSLog, PR_LOG_DEBUG, ("Getting \"%s\"\n", asciiname));
-#if 0
-  // what it should be, but for now...
-  if (aToken) {
-    cert = PK11_FindCertFromNickname(asciiname, nullptr);
-  } else {
-    cert = CERT_FindCertByNickname(CERT_GetDefaultCertDB(), asciiname);
-  }
-#endif
   cert = PK11_FindCertFromNickname(asciiname, nullptr);
   if (!cert) {
     cert = CERT_FindCertByNickname(CERT_GetDefaultCertDB(), asciiname);
   }
   if (cert) {
     PR_LOG(gPIPNSSLog, PR_LOG_DEBUG, ("got it\n"));
-    nsCOMPtr<nsIX509Cert> pCert = nsNSSCertificate::Create(cert);
+    nsCOMPtr<nsIX509Cert> pCert = nsNSSCertificate::Create(cert.get());
     if (pCert) {
       pCert.forget(_rvCert);
       return NS_OK;
@@ -133,7 +159,7 @@ nsNSSCertificateDB::FindCertByDBKey(const char *aDBkey, nsISupports *aToken,
     return NS_ERROR_INVALID_ARG;
   }
 
-  ScopedCERTCertificate cert;
+  insanity::pkix::ScopedCERTCertificate cert;
   // someday maybe we can speed up the search using the moduleID and slotID
   // moduleID = NS_NSS_GET_LONG(keyItem.data);
   // slotID = NS_NSS_GET_LONG(&keyItem.data[NS_NSS_LONG]);
@@ -154,7 +180,7 @@ nsNSSCertificateDB::FindCertByDBKey(const char *aDBkey, nsISupports *aToken,
   cert = CERT_FindCertByIssuerAndSN(CERT_GetDefaultCertDB(), &issuerSN);
   PR_FREEIF(keyItem.data);
   if (cert) {
-    nsCOMPtr<nsIX509Cert> nssCert = nsNSSCertificate::Create(cert);
+    nsCOMPtr<nsIX509Cert> nssCert = nsNSSCertificate::Create(cert.get());
     if (!nssCert)
       return NS_ERROR_OUT_OF_MEMORY;
     nssCert.forget(_cert);
@@ -166,7 +192,7 @@ NS_IMETHODIMP
 nsNSSCertificateDB::FindCertNicknames(nsISupports *aToken, 
                                      uint32_t      aType,
                                      uint32_t     *_count,
-                                     PRUnichar  ***_certNames)
+                                     char16_t  ***_certNames)
 {
   nsNSSShutDownPreventionLock locker;
   if (isAlreadyShutDown()) {
@@ -177,24 +203,15 @@ nsNSSCertificateDB::FindCertNicknames(nsISupports *aToken,
   /*
    * obtain the cert list from NSS
    */
-  ScopedCERTCertList certList;
-  PK11CertListType pk11type;
-#if 0
-  // this would seem right, but it didn't work...
-  // oh, I know why - bonks out on internal slot certs
-  if (aType == nsIX509Cert::USER_CERT)
-    pk11type = PK11CertListUser;
-  else 
-#endif
-    pk11type = PK11CertListUnique;
-  certList = PK11_ListCerts(pk11type, nullptr);
+  insanity::pkix::ScopedCERTCertList certList;
+  certList = PK11_ListCerts(PK11CertListUnique, nullptr);
   if (!certList)
     goto cleanup;
   /*
    * get list of cert names from list of certs
    * XXX also cull the list (NSS only distinguishes based on user/non-user
    */
-  getCertNames(certList, aType, _count, _certNames, locker);
+  getCertNames(certList.get(), aType, _count, _certNames, locker);
   rv = NS_OK;
   /*
    * finish up
@@ -341,7 +358,7 @@ nsNSSCertificateDB::handleCACertDownload(nsIArray *x509Certs,
     return rv;
 
   PR_LOG(gPIPNSSLog, PR_LOG_DEBUG, ("Creating temp cert\n"));
-  ScopedCERTCertificate tmpCert;
+  insanity::pkix::ScopedCERTCertificate tmpCert;
   CERTCertDBHandle *certdb = CERT_GetDefaultCertDB();
   tmpCert = CERT_FindCertByDERCert(certdb, &der);
   if (!tmpCert) {
@@ -357,7 +374,7 @@ nsNSSCertificateDB::handleCACertDownload(nsIArray *x509Certs,
     return NS_ERROR_FAILURE;
   }
 
-  if (!CERT_IsCACert(tmpCert, nullptr)) {
+  if (!CERT_IsCACert(tmpCert.get(), nullptr)) {
     DisplayCertificateAlert(ctx, "NotACACert", certToShow, proofOfLock);
     return NS_ERROR_FAILURE;
   }
@@ -378,7 +395,7 @@ nsNSSCertificateDB::handleCACertDownload(nsIArray *x509Certs,
 
   PR_LOG(gPIPNSSLog, PR_LOG_DEBUG, ("trust is %d\n", trustBits));
   nsXPIDLCString nickname;
-  nickname.Adopt(CERT_MakeCANickname(tmpCert));
+  nickname.Adopt(CERT_MakeCANickname(tmpCert.get()));
 
   PR_LOG(gPIPNSSLog, PR_LOG_DEBUG, ("Created nick \"%s\"\n", nickname.get()));
 
@@ -388,7 +405,7 @@ nsNSSCertificateDB::handleCACertDownload(nsIArray *x509Certs,
                    !!(trustBits & nsIX509CertDB::TRUSTED_EMAIL),
                    !!(trustBits & nsIX509CertDB::TRUSTED_OBJSIGN));
 
-  SECStatus srv = __CERT_AddTempCertToPerm(tmpCert,
+  SECStatus srv = __CERT_AddTempCertToPerm(tmpCert.get(),
                                            const_cast<char*>(nickname.get()),
                                            trust.GetTrust());
 
@@ -398,7 +415,7 @@ nsNSSCertificateDB::handleCACertDownload(nsIArray *x509Certs,
   // Import additional delivered certificates that can be verified.
 
   // build a CertList for filtering
-  ScopedCERTCertList certList(CERT_NewCertList());
+  insanity::pkix::ScopedCERTCertList certList(CERT_NewCertList());
   if (!certList) {
     return NS_ERROR_FAILURE;
   }
@@ -426,10 +443,10 @@ nsNSSCertificateDB::handleCACertDownload(nsIArray *x509Certs,
       continue;  // Let's try to import the rest of 'em
     }
     
-    CERT_AddCertToListTail(certList, tmpCert2);
+    CERT_AddCertToListTail(certList.get(), tmpCert2);
   }
 
-  return ImportValidCACertsInList(certList, ctx, proofOfLock);
+  return ImportValidCACertsInList(certList.get(), ctx, proofOfLock);
 }
 
 /*
@@ -493,8 +510,9 @@ nsNSSCertificateDB::ImportCertificates(uint8_t * data, uint32_t length,
 
 static 
 SECStatus 
-ImportCertsIntoPermanentStorage(const ScopedCERTCertList &certChain, const SECCertUsage usage,
-                               const PRBool caOnly)
+ImportCertsIntoPermanentStorage(
+  const insanity::pkix::ScopedCERTCertList& certChain,
+  const SECCertUsage usage, const PRBool caOnly)
 {
   CERTCertDBHandle *certdb = CERT_GetDefaultCertDB();
 
@@ -543,7 +561,7 @@ nsNSSCertificateDB::ImportEmailCertificate(uint8_t * data, uint32_t length,
   nsresult nsrv = NS_OK;
   CERTCertDBHandle *certdb;
   CERTCertificate **certArray = nullptr;
-  ScopedCERTCertList certList;
+  insanity::pkix::ScopedCERTCertList certList;
   CERTCertListNode *node;
   SECItem **rawArray;
   int numcerts;
@@ -559,7 +577,7 @@ nsNSSCertificateDB::ImportEmailCertificate(uint8_t * data, uint32_t length,
     return NS_ERROR_FAILURE;
   }
 
-  RefPtr<CertVerifier> certVerifier(GetDefaultCertVerifier());
+  RefPtr<SharedCertVerifier> certVerifier(GetDefaultCertVerifier());
   NS_ENSURE_TRUE(certVerifier, NS_ERROR_UNEXPECTED);
 
   certdb = CERT_GetDefaultCertDB();
@@ -599,7 +617,7 @@ nsNSSCertificateDB::ImportEmailCertificate(uint8_t * data, uint32_t length,
     if (cert)
       cert = CERT_DupCertificate(cert);
     if (cert)
-      CERT_AddCertToListTail(certList, cert);
+      CERT_AddCertToListTail(certList.get(), cert);
   }
 
   /* go down the remaining list of certs and verify that they have
@@ -614,20 +632,19 @@ nsNSSCertificateDB::ImportEmailCertificate(uint8_t * data, uint32_t length,
       continue;
     }
 
-    CERTCertList *verifyCertChain = nullptr;
+    insanity::pkix::ScopedCERTCertList certChain;
 
-    SECStatus rv = certVerifier->VerifyCert(node->cert,
+    SECStatus rv = certVerifier->VerifyCert(node->cert, nullptr,
                                             certificateUsageEmailRecipient,
-                                            now, ctx, 0, &verifyCertChain);
-
-    ScopedCERTCertList certChain(verifyCertChain);
+                                            now, ctx, 0, &certChain);
 
     if (rv != SECSuccess) {
       nsCOMPtr<nsIX509Cert> certToShow = nsNSSCertificate::Create(node->cert);
       DisplayCertificateAlert(ctx, "NotImportingUnverifiedCert", certToShow, locker);
       continue;
     }
-    rv = ImportCertsIntoPermanentStorage(certChain, certUsageEmailRecipient, false);
+    rv = ImportCertsIntoPermanentStorage(certChain, certUsageEmailRecipient,
+                                         false);
     if (rv != SECSuccess) {
       goto loser;
     } 
@@ -656,7 +673,7 @@ nsNSSCertificateDB::ImportServerCertificate(uint8_t * data, uint32_t length,
 
   SECStatus srv = SECFailure;
   nsresult nsrv = NS_OK;
-  ScopedCERTCertificate cert;
+  insanity::pkix::ScopedCERTCertificate cert;
   SECItem **rawCerts = nullptr;
   int numcerts;
   int i;
@@ -689,7 +706,7 @@ nsNSSCertificateDB::ImportServerCertificate(uint8_t * data, uint32_t length,
     rawCerts[i] = &certCollection->rawCerts[i];
   }
 
-  serverNickname = nsNSSCertificate::defaultServerNickname(cert);
+  serverNickname = DefaultServerNicknameForCert(cert.get());
   srv = CERT_ImportCerts(CERT_GetDefaultCertDB(), certUsageSSLServer,
              numcerts, rawCerts, nullptr, true, false,
              serverNickname);
@@ -700,7 +717,8 @@ nsNSSCertificateDB::ImportServerCertificate(uint8_t * data, uint32_t length,
   }
 
   trust.SetValidServerPeer();
-  srv = CERT_ChangeCertTrust(CERT_GetDefaultCertDB(), cert, trust.GetTrust());
+  srv = CERT_ChangeCertTrust(CERT_GetDefaultCertDB(), cert.get(),
+                             trust.GetTrust());
   if ( srv != SECSuccess ) {
     nsrv = NS_ERROR_FAILURE;
     goto loser;
@@ -764,7 +782,7 @@ nsresult
 nsNSSCertificateDB::ImportValidCACertsInList(CERTCertList *certList, nsIInterfaceRequestor *ctx,
                                              const nsNSSShutDownPreventionLock &proofOfLock)
 {
-  RefPtr<CertVerifier> certVerifier(GetDefaultCertVerifier());
+  RefPtr<SharedCertVerifier> certVerifier(GetDefaultCertVerifier());
   if (!certVerifier)
     return NS_ERROR_UNEXPECTED;
 
@@ -782,15 +800,10 @@ nsNSSCertificateDB::ImportValidCACertsInList(CERTCertList *certList, nsIInterfac
   for (node = CERT_LIST_HEAD(certList);
        !CERT_LIST_END(node,certList);
        node = CERT_LIST_NEXT(node)) {
-
-    //bool alert_and_skip = false;
-    CERTCertList *verifyCertChain = nullptr;
-
-    SECStatus rv = certVerifier->VerifyCert(node->cert, certificateUsageVerifyCA,
-                                            PR_Now(), ctx, 0, &verifyCertChain);
-
-    ScopedCERTCertList certChain(verifyCertChain);
-
+    insanity::pkix::ScopedCERTCertList certChain;
+    SECStatus rv = certVerifier->VerifyCert(node->cert, nullptr,
+                                            certificateUsageVerifyCA,
+                                            PR_Now(), ctx, 0, &certChain);
     if (rv != SECSuccess) {
       nsCOMPtr<nsIX509Cert> certToShow = nsNSSCertificate::Create(node->cert);
       DisplayCertificateAlert(ctx, "NotImportingUnverifiedCert", certToShow, proofOfLock);
@@ -864,7 +877,7 @@ nsNSSCertificateDB::ImportUserCertificate(uint8_t *data, uint32_t length, nsIInt
   SECItem *CACerts;
   CERTDERCerts * collectArgs;
   PLArenaPool *arena;
-  ScopedCERTCertificate cert;
+  insanity::pkix::ScopedCERTCertificate cert;
 
   arena = PORT_NewArena(DER_DEFAULT_CHUNKSIZE);
   if (!arena) {
@@ -882,9 +895,9 @@ nsNSSCertificateDB::ImportUserCertificate(uint8_t *data, uint32_t length, nsIInt
     goto loser;
   }
 
-  slot = PK11_KeyForCertExists(cert, nullptr, ctx);
+  slot = PK11_KeyForCertExists(cert.get(), nullptr, ctx);
   if (!slot) {
-    nsCOMPtr<nsIX509Cert> certToShow = nsNSSCertificate::Create(cert);
+    nsCOMPtr<nsIX509Cert> certToShow = nsNSSCertificate::Create(cert.get());
     DisplayCertificateAlert(ctx, "UserCertIgnoredNoPrivateKey", certToShow, locker);
     goto loser;
   }
@@ -898,13 +911,13 @@ nsNSSCertificateDB::ImportUserCertificate(uint8_t *data, uint32_t length, nsIInt
   	nickname = cert->nickname;
   }
   else {
-    get_default_nickname(cert, ctx, nickname, locker);
+    get_default_nickname(cert.get(), ctx, nickname, locker);
   }
 
   /* user wants to import the cert */
   {
     char *cast_const_away = const_cast<char*>(nickname.get());
-    slot = PK11_ImportCertForKey(cert, cast_const_away, ctx);
+    slot = PK11_ImportCertForKey(cert.get(), cast_const_away, ctx);
   }
   if (!slot) {
     goto loser;
@@ -912,7 +925,7 @@ nsNSSCertificateDB::ImportUserCertificate(uint8_t *data, uint32_t length, nsIInt
   slot = nullptr;
 
   {
-    nsCOMPtr<nsIX509Cert> certToShow = nsNSSCertificate::Create(cert);
+    nsCOMPtr<nsIX509Cert> certToShow = nsNSSCertificate::Create(cert.get());
     DisplayCertificateAlert(ctx, "UserCertImported", certToShow, locker);
   }
   rv = NS_OK;
@@ -941,7 +954,7 @@ nsNSSCertificateDB::DeleteCertificate(nsIX509Cert *aCert)
     return NS_ERROR_NOT_AVAILABLE;
   }
   nsCOMPtr<nsIX509Cert2> nssCert = do_QueryInterface(aCert);
-  ScopedCERTCertificate cert(nssCert->GetCert());
+  insanity::pkix::ScopedCERTCertificate cert(nssCert->GetCert());
   if (!cert) return NS_ERROR_FAILURE;
   SECStatus srv = SECSuccess;
 
@@ -962,7 +975,7 @@ nsNSSCertificateDB::DeleteCertificate(nsIX509Cert *aCert)
     // trust that cert if it chains up properly.
     nsNSSCertTrust trust(0, 0, 0);
     srv = CERT_ChangeCertTrust(CERT_GetDefaultCertDB(), 
-                               cert, trust.GetTrust());
+                               cert.get(), trust.GetTrust());
   }
   PR_LOG(gPIPNSSLog, PR_LOG_DEBUG, ("cert deleted: %d", srv));
   return (srv) ? NS_ERROR_FAILURE : NS_OK;
@@ -982,13 +995,20 @@ nsNSSCertificateDB::SetCertTrust(nsIX509Cert *cert,
   if (isAlreadyShutDown()) {
     return NS_ERROR_NOT_AVAILABLE;
   }
-  SECStatus srv;
   nsNSSCertTrust trust;
-  nsCOMPtr<nsIX509Cert2> pipCert = do_QueryInterface(cert);
-  if (!pipCert)
-    return NS_ERROR_FAILURE;
-  ScopedCERTCertificate nsscert(pipCert->GetCert());
+  nsresult rv;
+  nsCOMPtr<nsIX509Cert2> pipCert = do_QueryInterface(cert, &rv);
+  if (!pipCert) {
+    return rv;
+  }
+  insanity::pkix::ScopedCERTCertificate nsscert(pipCert->GetCert());
 
+  rv = attemptToLogInWithDefaultPassword();
+  if (NS_WARN_IF(rv != NS_OK)) {
+    return rv;
+  }
+
+  SECStatus srv;
   if (type == nsIX509Cert::CA_CERT) {
     // always start with untrusted and move up
     trust.SetValidCA();
@@ -996,27 +1016,27 @@ nsNSSCertificateDB::SetCertTrust(nsIX509Cert *cert,
                      !!(trusted & nsIX509CertDB::TRUSTED_EMAIL),
                      !!(trusted & nsIX509CertDB::TRUSTED_OBJSIGN));
     srv = CERT_ChangeCertTrust(CERT_GetDefaultCertDB(), 
-                               nsscert,
+                               nsscert.get(),
                                trust.GetTrust());
   } else if (type == nsIX509Cert::SERVER_CERT) {
     // always start with untrusted and move up
     trust.SetValidPeer();
     trust.AddPeerTrust(trusted & nsIX509CertDB::TRUSTED_SSL, 0, 0);
     srv = CERT_ChangeCertTrust(CERT_GetDefaultCertDB(), 
-                               nsscert,
+                               nsscert.get(),
                                trust.GetTrust());
   } else if (type == nsIX509Cert::EMAIL_CERT) {
     // always start with untrusted and move up
     trust.SetValidPeer();
     trust.AddPeerTrust(0, !!(trusted & nsIX509CertDB::TRUSTED_EMAIL), 0);
     srv = CERT_ChangeCertTrust(CERT_GetDefaultCertDB(), 
-                               nsscert,
+                               nsscert.get(),
                                trust.GetTrust());
   } else {
     // ignore user certs
     return NS_OK;
   }
-  return (srv) ? NS_ERROR_FAILURE : NS_OK;
+  return MapSECStatus(srv);
 }
 
 NS_IMETHODIMP 
@@ -1034,9 +1054,9 @@ nsNSSCertificateDB::IsCertTrusted(nsIX509Cert *cert,
   }
   SECStatus srv;
   nsCOMPtr<nsIX509Cert2> pipCert = do_QueryInterface(cert);
-  ScopedCERTCertificate nsscert(pipCert->GetCert());
+  insanity::pkix::ScopedCERTCertificate nsscert(pipCert->GetCert());
   CERTCertTrust nsstrust;
-  srv = CERT_GetCertTrust(nsscert, &nsstrust);
+  srv = CERT_GetCertTrust(nsscert.get(), &nsstrust);
   if (srv != SECSuccess)
     return NS_ERROR_FAILURE;
 
@@ -1169,7 +1189,7 @@ nsNSSCertificateDB::ExportPKCS12File(nsISupports     *aToken,
                                      nsIFile          *aFile,
                                      uint32_t          count,
                                      nsIX509Cert     **certs)
-                                     //const PRUnichar **aCertNames)
+                                     //const char16_t **aCertNames)
 {
   nsNSSShutDownPreventionLock locker;
   if (isAlreadyShutDown()) {
@@ -1209,12 +1229,12 @@ void
 nsNSSCertificateDB::getCertNames(CERTCertList *certList,
                                  uint32_t      type, 
                                  uint32_t     *_count,
-                                 PRUnichar  ***_certNames,
+                                 char16_t  ***_certNames,
                                  const nsNSSShutDownPreventionLock &/*proofOfLock*/)
 {
   CERTCertListNode *node;
   uint32_t numcerts = 0, i=0;
-  PRUnichar **tmpArray = nullptr;
+  char16_t **tmpArray = nullptr;
 
   PR_LOG(gPIPNSSLog, PR_LOG_DEBUG, ("List of certs %d:\n", type));
   for (node = CERT_LIST_HEAD(certList);
@@ -1226,7 +1246,7 @@ nsNSSCertificateDB::getCertNames(CERTCertList *certList,
   }
   PR_LOG(gPIPNSSLog, PR_LOG_DEBUG, ("num certs: %d\n", numcerts));
   int nc = (numcerts == 0) ? 1 : numcerts;
-  tmpArray = (PRUnichar **)nsMemory::Alloc(sizeof(PRUnichar *) * nc);
+  tmpArray = (char16_t **)nsMemory::Alloc(sizeof(char16_t *) * nc);
   if (numcerts == 0) goto finish;
   for (node = CERT_LIST_HEAD(certList);
        !CERT_LIST_END(node, certList);
@@ -1249,9 +1269,9 @@ nsNSSCertificateDB::getCertNames(CERTCertList *certList,
         }
       }
       nsAutoString certname = NS_ConvertASCIItoUTF16(namestr ? namestr : "");
-      certstr.Append(PRUnichar(DELIM));
+      certstr.Append(char16_t(DELIM));
       certstr += certname;
-      certstr.Append(PRUnichar(DELIM));
+      certstr.Append(char16_t(DELIM));
       certstr += keystr;
       tmpArray[i++] = ToNewUnicode(certstr);
     }
@@ -1282,14 +1302,14 @@ nsNSSCertificateDB::FindEmailEncryptionCert(const nsAString &aNickname, nsIX509C
   asciiname = const_cast<char*>(aUtf8Nickname.get());
 
   /* Find a good cert in the user's database */
-  ScopedCERTCertificate cert;
+  insanity::pkix::ScopedCERTCertificate cert;
   cert = CERT_FindUserCertByUsage(CERT_GetDefaultCertDB(), asciiname, 
            certUsageEmailRecipient, true, ctx);
   if (!cert) {
     return NS_OK;
   }
 
-  nsCOMPtr<nsIX509Cert> nssCert = nsNSSCertificate::Create(cert);
+  nsCOMPtr<nsIX509Cert> nssCert = nsNSSCertificate::Create(cert.get());
   if (!nssCert) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
@@ -1312,7 +1332,7 @@ nsNSSCertificateDB::FindEmailSigningCert(const nsAString &aNickname, nsIX509Cert
     return NS_ERROR_NOT_AVAILABLE;
   }
 
-  ScopedCERTCertificate cert;
+  insanity::pkix::ScopedCERTCertificate cert;
   nsCOMPtr<nsIInterfaceRequestor> ctx = new PipUIContext();
   char *asciiname = nullptr;
   NS_ConvertUTF16toUTF8 aUtf8Nickname(aNickname);
@@ -1325,7 +1345,7 @@ nsNSSCertificateDB::FindEmailSigningCert(const nsAString &aNickname, nsIX509Cert
     return NS_OK;
   }
 
-  nsCOMPtr<nsIX509Cert> nssCert = nsNSSCertificate::Create(cert);
+  nsCOMPtr<nsIX509Cert> nssCert = nsNSSCertificate::Create(cert.get());
   if (!nssCert) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
@@ -1341,7 +1361,7 @@ nsNSSCertificateDB::FindCertByEmailAddress(nsISupports *aToken, const char *aEma
     return NS_ERROR_NOT_AVAILABLE;
   }
   
-  RefPtr<CertVerifier> certVerifier(GetDefaultCertVerifier());
+  RefPtr<SharedCertVerifier> certVerifier(GetDefaultCertVerifier());
   NS_ENSURE_TRUE(certVerifier, NS_ERROR_UNEXPECTED);
 
   ScopedCERTCertList certlist(
@@ -1361,7 +1381,7 @@ nsNSSCertificateDB::FindCertByEmailAddress(nsISupports *aToken, const char *aEma
        !CERT_LIST_END(node, certlist);
        node = CERT_LIST_NEXT(node)) {
 
-    SECStatus srv = certVerifier->VerifyCert(node->cert,
+    SECStatus srv = certVerifier->VerifyCert(node->cert, nullptr,
                                              certificateUsageEmailRecipient,
                                              PR_Now(), nullptr /*XXX pinarg*/);
     if (srv == SECSuccess) {
@@ -1393,7 +1413,9 @@ nsNSSCertificateDB::ConstructX509FromBase64(const char *base64,
   if (isAlreadyShutDown()) {
     return NS_ERROR_NOT_AVAILABLE;
   }
-  NS_ENSURE_ARG_POINTER(_retval);
+  if (NS_WARN_IF(!_retval)) {
+    return NS_ERROR_INVALID_POINTER;
+  }
 
   // sure would be nice to have a smart pointer class for PL_ allocations
   // unfortunately, we cannot distinguish out-of-memory from bad-input here
@@ -1416,23 +1438,39 @@ nsNSSCertificateDB::ConstructX509FromBase64(const char *base64,
       lengthDER--;
   }
 
+  nsresult rv = ConstructX509(certDER, lengthDER, _retval);
+  PL_strfree(certDER);
+  return rv;
+}
+
+/* nsIX509Cert constructX509 (in string certDER, unsigned long len); */
+NS_IMETHODIMP
+nsNSSCertificateDB::ConstructX509(const char* certDER,
+                                  uint32_t lengthDER,
+                                  nsIX509Cert** _retval)
+{
+  nsNSSShutDownPreventionLock locker;
+  if (isAlreadyShutDown()) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+  if (NS_WARN_IF(!_retval)) {
+    return NS_ERROR_INVALID_POINTER;
+  }
 
   SECItem secitem_cert;
   secitem_cert.type = siDERCertBuffer;
   secitem_cert.data = (unsigned char*)certDER;
   secitem_cert.len = lengthDER;
 
-  ScopedCERTCertificate cert;
+  insanity::pkix::ScopedCERTCertificate cert;
   cert =
     CERT_NewTempCertificate(CERT_GetDefaultCertDB(), &secitem_cert,
                             nullptr, false, true);
-  PL_strfree(certDER);
-
   if (!cert)
     return (PORT_GetError() == SEC_ERROR_NO_MEMORY)
       ? NS_ERROR_OUT_OF_MEMORY : NS_ERROR_FAILURE;
 
-  nsCOMPtr<nsIX509Cert> nssCert = nsNSSCertificate::Create(cert);
+  nsCOMPtr<nsIX509Cert> nssCert = nsNSSCertificate::Create(cert.get());
   if (!nssCert) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
@@ -1523,7 +1561,7 @@ nsNSSCertificateDB::get_default_nickname(CERTCertificate *cert,
       PR_smprintf_free(tmp);
     }
 
-    ScopedCERTCertificate dummycert;
+    insanity::pkix::ScopedCERTCertificate dummycert;
 
     if (PK11_IsInternal(slot)) {
       /* look up the nickname to make sure it isn't in use already */
@@ -1584,8 +1622,8 @@ NS_IMETHODIMP nsNSSCertificateDB::AddCertFromBase64(const char *aBase64, const c
 
   PR_LOG(gPIPNSSLog, PR_LOG_DEBUG, ("Creating temp cert\n"));
   CERTCertDBHandle *certdb = CERT_GetDefaultCertDB();
-  ScopedCERTCertificate tmpCert(CERT_FindCertByDERCert(certdb, &der));
-  if (!tmpCert) 
+  insanity::pkix::ScopedCERTCertificate tmpCert(CERT_FindCertByDERCert(certdb, &der));
+  if (!tmpCert)
     tmpCert = CERT_NewTempCertificate(certdb, &der,
                                       nullptr, false, true);
   nsMemory::Free(der.data);
@@ -1594,7 +1632,7 @@ NS_IMETHODIMP nsNSSCertificateDB::AddCertFromBase64(const char *aBase64, const c
 
   if (!tmpCert) {
     NS_ERROR("Couldn't create cert from DER blob");
-    return NS_ERROR_FAILURE;
+    return MapSECStatus(SECFailure);
   }
 
   if (tmpCert->isperm) {
@@ -1602,16 +1640,19 @@ NS_IMETHODIMP nsNSSCertificateDB::AddCertFromBase64(const char *aBase64, const c
   }
 
   nsXPIDLCString nickname;
-  nickname.Adopt(CERT_MakeCANickname(tmpCert));
+  nickname.Adopt(CERT_MakeCANickname(tmpCert.get()));
 
   PR_LOG(gPIPNSSLog, PR_LOG_DEBUG, ("Created nick \"%s\"\n", nickname.get()));
 
-  SECStatus srv = __CERT_AddTempCertToPerm(tmpCert,
+  rv = attemptToLogInWithDefaultPassword();
+  if (NS_WARN_IF(rv != NS_OK)) {
+    return rv;
+  }
+
+  SECStatus srv = __CERT_AddTempCertToPerm(tmpCert.get(),
                                            const_cast<char*>(nickname.get()),
                                            trust.GetTrust());
-
-
-  return (srv == SECSuccess) ? NS_OK : NS_ERROR_FAILURE;
+  return MapSECStatus(srv);
 }
 
 NS_IMETHODIMP
@@ -1624,19 +1665,41 @@ nsNSSCertificateDB::AddCert(const nsACString & aCertDER, const char *aTrust,
   return AddCertFromBase64(base64.get(), aTrust, aName);
 }
 
+NS_IMETHODIMP
+nsNSSCertificateDB::SetCertTrustFromString(nsIX509Cert3* cert,
+                                           const char* trustString)
+{
+  CERTCertTrust trust;
+
+  // need to calculate the trust bits from the aTrust string.
+  SECStatus srv = CERT_DecodeTrustString(&trust,
+                                         const_cast<char *>(trustString));
+  if (srv != SECSuccess) {
+    return MapSECStatus(SECFailure);
+  }
+  insanity::pkix::ScopedCERTCertificate nssCert(cert->GetCert());
+
+  nsresult rv = attemptToLogInWithDefaultPassword();
+  if (NS_WARN_IF(rv != NS_OK)) {
+    return rv;
+  }
+
+  srv = CERT_ChangeCertTrust(CERT_GetDefaultCertDB(), nssCert.get(), &trust);
+  return MapSECStatus(srv);
+}
+
 NS_IMETHODIMP 
 nsNSSCertificateDB::GetCerts(nsIX509CertList **_retval)
 {
   nsNSSShutDownPreventionLock locker;
   if (isAlreadyShutDown()) {
     return NS_ERROR_NOT_AVAILABLE;
-  }
-
-  CERTCertList *certList;
+  }  
 
   nsCOMPtr<nsIInterfaceRequestor> ctx = new PipUIContext();
   nsCOMPtr<nsIX509CertList> nssCertList;
-  certList = PK11_ListCerts(PK11CertListUnique, ctx);
+  insanity::pkix::ScopedCERTCertList certList(
+    PK11_ListCerts(PK11CertListUnique, ctx));
 
   // nsNSSCertList 1) adopts certList, and 2) handles the nullptr case fine.
   // (returns an empty list) 
@@ -1673,7 +1736,7 @@ nsNSSCertificateDB::GetRecentBadCerts(bool isPrivate, nsIRecentBadCerts** result
 NS_IMETHODIMP
 nsNSSCertificateDB::VerifyCertNow(nsIX509Cert* aCert,
                                   int64_t /*SECCertificateUsage*/ aUsage,
-                                  bool aLocalOnly,
+                                  uint32_t aFlags,
                                   nsIX509CertList** verifiedChain,
                                   bool* aHasEVPolicy,
                                   int32_t* /*PRErrorCode*/ _retval )
@@ -1692,13 +1755,8 @@ nsNSSCertificateDB::VerifyCertNow(nsIX509Cert* aCert,
     return NS_ERROR_NOT_AVAILABLE;
   }
 
-  nsresult rv;
-#ifndef NSS_NO_LIBPKIX
-  nsCOMPtr<nsINSSComponent> inss = do_GetService(PSM_COMPONENT_CONTRACTID, &rv);
-  if (NS_FAILED(rv)) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
-  inss->EnsureIdentityInfoLoaded();
+#ifndef MOZ_NO_EV_CERTS
+  EnsureIdentityInfoLoaded();
 #endif
 
   nsCOMPtr<nsIX509Cert2> x509Cert = do_QueryInterface(aCert);
@@ -1707,21 +1765,19 @@ nsNSSCertificateDB::VerifyCertNow(nsIX509Cert* aCert,
   }
   ScopedCERTCertificate nssCert(x509Cert->GetCert());
 
-  RefPtr<CertVerifier> certVerifier(GetDefaultCertVerifier());
+  RefPtr<SharedCertVerifier> certVerifier(GetDefaultCertVerifier());
   NS_ENSURE_TRUE(certVerifier, NS_ERROR_FAILURE);
 
-  CertVerifier::Flags flags = aLocalOnly ? CertVerifier::FLAG_LOCAL_ONLY : 0;
-  CERTCertList* resultChain = nullptr;
+  insanity::pkix::ScopedCERTCertList resultChain;
   SECOidTag evOidPolicy;
   SECStatus srv;
 
-  srv = certVerifier->VerifyCert(nssCert,
+  srv = certVerifier->VerifyCert(nssCert, nullptr,
                                  aUsage, PR_Now(),
                                  nullptr, // Assume no context
-                                 flags,
+                                 aFlags,
                                  &resultChain,
-                                 &evOidPolicy,
-                                 nullptr);
+                                 &evOidPolicy);
 
   PRErrorCode error = PR_GetError();
 

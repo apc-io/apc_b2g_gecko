@@ -10,6 +10,7 @@
 #define PL_ARENA_CONST_ALIGN_MASK (sizeof(void*)-1)
 #include "nsLineLayout.h"
 
+#include "SVGTextFrame.h"
 #include "nsBlockFrame.h"
 #include "nsStyleConsts.h"
 #include "nsContainerFrame.h"
@@ -56,7 +57,7 @@ nsLineLayout::nsLineLayout(nsPresContext* aPresContext,
     mLastOptionalBreakContent(nullptr),
     mForceBreakContent(nullptr),
     mBlockRS(nullptr),/* XXX temporary */
-    mLastOptionalBreakPriority(eNoBreak),
+    mLastOptionalBreakPriority(gfxBreakPriority::eNoBreak),
     mLastOptionalBreakContentOffset(-1),
     mForceBreakContentOffset(-1),
     mMinLineHeight(0),
@@ -322,8 +323,6 @@ nsLineLayout::UpdateBand(const nsRect& aNewAvailSpace,
   for (PerSpanData* psd = mCurrentSpan; psd; psd = psd->mParent) {
     psd->mRightEdge += deltaWidth;
     psd->mContainsFloat = true;
-    NS_ASSERTION(psd->mX - mTrimmableWidth <= psd->mRightEdge,
-                 "We placed a float where there was no room!");
 #ifdef NOISY_REFLOW
     printf("  span %p: oldRightEdge=%d newRightEdge=%d\n",
            psd, psd->mRightEdge - deltaRightEdge, psd->mRightEdge);
@@ -775,13 +774,13 @@ nsLineLayout::ReflowFrame(nsIFrame* aFrame,
     reflowState.mLineLayout = this;
     reflowState.mFlags.mIsTopOfPage = mIsTopOfPage;
     if (reflowState.ComputedWidth() == NS_UNCONSTRAINEDSIZE)
-      reflowState.availableWidth = availableSpaceOnLine;
-    pfd->mMargin = reflowState.mComputedMargin;
-    pfd->mBorderPadding = reflowState.mComputedBorderPadding;
+      reflowState.AvailableWidth() = availableSpaceOnLine;
+    pfd->mMargin = reflowState.ComputedPhysicalMargin();
+    pfd->mBorderPadding = reflowState.ComputedPhysicalBorderPadding();
     pfd->SetFlag(PFD_RELATIVEPOS,
                  reflowState.mStyleDisplay->IsRelativelyPositionedStyle());
     if (pfd->GetFlag(PFD_RELATIVEPOS)) {
-      pfd->mOffsets = reflowState.mComputedOffsets;
+      pfd->mOffsets = reflowState.ComputedPhysicalOffsets();
     }
 
     // Apply start margins (as appropriate) to the frame computing the
@@ -812,10 +811,10 @@ nsLineLayout::ReflowFrame(nsIFrame* aFrame,
   aFrame->WillReflow(mPresContext);
 
   // Adjust spacemanager coordinate system for the frame.
-  nsHTMLReflowMetrics metrics;
+  nsHTMLReflowMetrics metrics(mBlockReflowState->GetWritingMode());
 #ifdef DEBUG
-  metrics.width = nscoord(0xdeadbeef);
-  metrics.height = nscoord(0xdeadbeef);
+  metrics.Width() = nscoord(0xdeadbeef);
+  metrics.Height() = nscoord(0xdeadbeef);
 #endif
   nscoord tx = pfd->mBounds.x;
   nscoord ty = pfd->mBounds.y;
@@ -911,25 +910,25 @@ nsLineLayout::ReflowFrame(nsIFrame* aFrame,
 
   mFloatManager->Translate(-tx, -ty);
 
-  NS_ASSERTION(metrics.width>=0, "bad width");
-  NS_ASSERTION(metrics.height>=0,"bad height");
-  if (metrics.width<0) metrics.width=0;
-  if (metrics.height<0) metrics.height=0;
+  NS_ASSERTION(metrics.Width() >= 0, "bad width");
+  NS_ASSERTION(metrics.Height() >= 0,"bad height");
+  if (metrics.Width() < 0) metrics.Width() = 0;
+  if (metrics.Height() < 0) metrics.Height() = 0;
 
 #ifdef DEBUG
   // Note: break-before means ignore the reflow metrics since the
   // frame will be reflowed another time.
   if (!NS_INLINE_IS_BREAK_BEFORE(aReflowStatus)) {
-    if (CRAZY_WIDTH(metrics.width) || CRAZY_HEIGHT(metrics.height)) {
+    if (CRAZY_WIDTH(metrics.Width()) || CRAZY_HEIGHT(metrics.Height())) {
       printf("nsLineLayout: ");
       nsFrame::ListTag(stdout, aFrame);
-      printf(" metrics=%d,%d!\n", metrics.width, metrics.height);
+      printf(" metrics=%d,%d!\n", metrics.Width(), metrics.Height());
     }
-    if ((metrics.width == nscoord(0xdeadbeef)) ||
-        (metrics.height == nscoord(0xdeadbeef))) {
+    if ((metrics.Width() == nscoord(0xdeadbeef)) ||
+        (metrics.Height() == nscoord(0xdeadbeef))) {
       printf("nsLineLayout: ");
       nsFrame::ListTag(stdout, aFrame);
-      printf(" didn't set w/h %d,%d!\n", metrics.width, metrics.height);
+      printf(" didn't set w/h %d,%d!\n", metrics.Width(), metrics.Height());
     }
   }
 #endif
@@ -941,11 +940,11 @@ nsLineLayout::ReflowFrame(nsIFrame* aFrame,
   // added in later by nsLineLayout::ReflowInlineFrames.
   pfd->mOverflowAreas = metrics.mOverflowAreas;
 
-  pfd->mBounds.width = metrics.width;
-  pfd->mBounds.height = metrics.height;
+  pfd->mBounds.width = metrics.Width();
+  pfd->mBounds.height = metrics.Height();
 
   // Size the frame, but |RelativePositionFrames| will size the view.
-  aFrame->SetSize(nsSize(metrics.width, metrics.height));
+  aFrame->SetSize(nsSize(metrics.Width(), metrics.Height()));
 
   // Tell the frame that we're done reflowing it
   aFrame->DidReflow(mPresContext,
@@ -969,7 +968,7 @@ nsLineLayout::ReflowFrame(nsIFrame* aFrame,
         // parent is not this because we are executing pullup code)
         nsContainerFrame* parent = static_cast<nsContainerFrame*>
                                                   (kidNextInFlow->GetParent());
-        parent->DeleteNextInFlowChild(mPresContext, kidNextInFlow, true);
+        parent->DeleteNextInFlowChild(kidNextInFlow, true);
       }
     }
 
@@ -1024,7 +1023,7 @@ nsLineLayout::ReflowFrame(nsIFrame* aFrame,
           // record soft break opportunity after this content that can't be
           // part of a text run. This is not a text frame so we know
           // that offset INT32_MAX means "after the content".
-          if (NotifyOptionalBreakPosition(aFrame->GetContent(), INT32_MAX, optionalBreakAfterFits, eNormalBreak)) {
+          if (NotifyOptionalBreakPosition(aFrame->GetContent(), INT32_MAX, optionalBreakAfterFits, gfxBreakPriority::eNormalBreak)) {
             // If this returns true then we are being told to actually break here.
             aReflowStatus = NS_INLINE_LINE_BREAK_AFTER(aReflowStatus);
           }
@@ -1068,9 +1067,10 @@ nsLineLayout::ApplyStartMargin(PerFrameData* pfd,
 
   // Only apply start-margin on the first-in flow for inline frames,
   // and make sure to not apply it to any inline other than the first
-  // in an ib split.  Note that the ib special sibling annotations
-  // only live on the first continuation, but we don't want to apply
-  // the start margin for later continuations anyway.
+  // in an ib split.  Note that the ib sibling (block-in-inline
+  // sibling) annotations only live on the first continuation, but we
+  // don't want to apply the start margin for later continuations
+  // anyway.
   if (pfd->mFrame->GetPrevContinuation() ||
       pfd->mFrame->FrameIsNonFirstInIBSplit()) {
     // Zero this out so that when we compute the max-element-width of
@@ -1083,7 +1083,7 @@ nsLineLayout::ApplyStartMargin(PerFrameData* pfd,
   else {
     pfd->mBounds.x += ltr ? pfd->mMargin.left : pfd->mMargin.right;
 
-    NS_WARN_IF_FALSE(NS_UNCONSTRAINEDSIZE != aReflowState.availableWidth,
+    NS_WARN_IF_FALSE(NS_UNCONSTRAINEDSIZE != aReflowState.AvailableWidth(),
                      "have unconstrained width; this should only result from "
                      "very large sizes, not attempts at intrinsic width "
                      "calculation");
@@ -1092,7 +1092,7 @@ nsLineLayout::ApplyStartMargin(PerFrameData* pfd,
       // in the reflow state), adjust available width to account for the
       // left margin. The right margin will be accounted for when we
       // finish flowing the frame.
-      aReflowState.availableWidth -= ltr ? pfd->mMargin.left : pfd->mMargin.right;
+      aReflowState.AvailableWidth() -= ltr ? pfd->mMargin.left : pfd->mMargin.right;
     }
   }
 }
@@ -1131,38 +1131,33 @@ nsLineLayout::CanPlaceFrame(PerFrameData* pfd,
   NS_PRECONDITION(pfd && pfd->mFrame, "bad args, null pointers for frame data");
   
   *aOptionalBreakAfterFits = true;
-  // Compute right margin to use
-  if (0 != pfd->mBounds.width) {
-    // XXXwaterson this is probably not exactly right; e.g., embeddings, etc.
-    bool ltr = (NS_STYLE_DIRECTION_LTR == aFrameDirection);
 
-    /*
-     * We want to only apply the end margin if we're the last continuation and
-     * either not in an {ib} split or the last inline in it.  In all other
-     * cases we want to zero it out.  That means zeroing it out if any of these
-     * conditions hold:
-     * 1) The frame is not complete (in this case it will get a next-in-flow)
-     * 2) The frame is complete but has a non-fluid continuation on its
-     *    continuation chain.  Note that if it has a fluid continuation, that
-     *    continuation will get destroyed later, so we don't want to drop the
-     *    end-margin in that case.
-     * 3) The frame is in an {ib} split and is not the last part.
-     *
-     * However, none of that applies if this is a letter frame (XXXbz why?)
-     */
-    if ((NS_FRAME_IS_NOT_COMPLETE(aStatus) ||
-         pfd->mFrame->LastInFlow()->GetNextContinuation() ||
-         pfd->mFrame->FrameIsNonLastInIBSplit())
-        && !pfd->GetFlag(PFD_ISLETTERFRAME)) {
-      if (ltr)
-        pfd->mMargin.right = 0;
-      else
-        pfd->mMargin.left = 0;
+  // XXXwaterson this is probably not exactly right; e.g., embeddings, etc.
+  bool ltr = NS_STYLE_DIRECTION_LTR == aFrameDirection;
+
+  /*
+   * We want to only apply the end margin if we're the last continuation and
+   * either not in an {ib} split or the last inline in it.  In all other
+   * cases we want to zero it out.  That means zeroing it out if any of these
+   * conditions hold:
+   * 1) The frame is not complete (in this case it will get a next-in-flow)
+   * 2) The frame is complete but has a non-fluid continuation on its
+   *    continuation chain.  Note that if it has a fluid continuation, that
+   *    continuation will get destroyed later, so we don't want to drop the
+   *    end-margin in that case.
+   * 3) The frame is in an {ib} split and is not the last part.
+   *
+   * However, none of that applies if this is a letter frame (XXXbz why?)
+   */
+  if ((NS_FRAME_IS_NOT_COMPLETE(aStatus) ||
+       pfd->mFrame->LastInFlow()->GetNextContinuation() ||
+       pfd->mFrame->FrameIsNonLastInIBSplit())
+      && !pfd->GetFlag(PFD_ISLETTERFRAME)) {
+    if (ltr) {
+      pfd->mMargin.right = 0;
+    } else {
+      pfd->mMargin.left = 0;
     }
-  }
-  else {
-    // Don't apply margin to empty frames.
-    pfd->mMargin.left = pfd->mMargin.right = 0;
   }
 
   PerSpanData* psd = mCurrentSpan;
@@ -1171,7 +1166,6 @@ nsLineLayout::CanPlaceFrame(PerFrameData* pfd,
     return true;
   }
 
-  bool ltr = NS_STYLE_DIRECTION_LTR == aFrameDirection;
   nscoord endMargin = ltr ? pfd->mMargin.right : pfd->mMargin.left;
 
 #ifdef NOISY_CAN_PLACE_FRAME
@@ -1288,27 +1282,24 @@ nsLineLayout::CanPlaceFrame(PerFrameData* pfd,
 void
 nsLineLayout::PlaceFrame(PerFrameData* pfd, nsHTMLReflowMetrics& aMetrics)
 {
-  // If frame is zero width then do not apply its left and right margins.
-  PerSpanData* psd = mCurrentSpan;
-  bool emptyFrame = false;
-  if ((0 == pfd->mBounds.width) && (0 == pfd->mBounds.height)) {
-    pfd->mBounds.x = psd->mX;
-    pfd->mBounds.y = mTopEdge;
-    emptyFrame = true;
-  }
-
   // Record ascent and update max-ascent and max-descent values
-  if (aMetrics.ascent == nsHTMLReflowMetrics::ASK_FOR_BASELINE)
+  if (aMetrics.TopAscent() == nsHTMLReflowMetrics::ASK_FOR_BASELINE)
     pfd->mAscent = pfd->mFrame->GetBaseline();
   else
-    pfd->mAscent = aMetrics.ascent;
+    pfd->mAscent = aMetrics.TopAscent();
 
   bool ltr = (NS_STYLE_DIRECTION_LTR == pfd->mFrame->StyleVisibility()->mDirection);
   // Advance to next X coordinate
-  psd->mX = pfd->mBounds.XMost() + (ltr ? pfd->mMargin.right : pfd->mMargin.left);
+  mCurrentSpan->mX = pfd->mBounds.XMost() +
+                     (ltr ? pfd->mMargin.right : pfd->mMargin.left);
 
-  // Count the number of non-empty frames on the line...
-  if (!emptyFrame) {
+  // Count the number of non-placeholder frames on the line...
+  if (pfd->mFrame->GetType() == nsGkAtoms::placeholderFrame) {
+    NS_ASSERTION(pfd->mBounds.width == 0 && pfd->mBounds.height == 0,
+                 "placeholders should have 0 width/height (checking "
+                 "placeholders were never counted by the old code in "
+                 "this function)");
+  } else {
     mTotalPlacedFrames++;
   }
 }
@@ -1335,10 +1326,10 @@ nsLineLayout::AddBulletFrame(nsIFrame* aFrame,
   pfd->mBorderPadding.SizeTo(0, 0, 0, 0);
   pfd->mFlags = 0;  // all flags default to false
   pfd->SetFlag(PFD_ISBULLET, true);
-  if (aMetrics.ascent == nsHTMLReflowMetrics::ASK_FOR_BASELINE)
+  if (aMetrics.TopAscent() == nsHTMLReflowMetrics::ASK_FOR_BASELINE)
     pfd->mAscent = aFrame->GetBaseline();
   else
-    pfd->mAscent = aMetrics.ascent;
+    pfd->mAscent = aMetrics.TopAscent();
 
   // Note: y value will be updated during vertical alignment
   pfd->mBounds = aFrame->GetRect();
@@ -1534,6 +1525,20 @@ nsLineLayout::PlaceTopBottomFrames(PerSpanData* psd,
   }
 }
 
+static float
+GetInflationForVerticalAlignment(nsIFrame* aFrame,
+                                 nscoord aInflationMinFontSize)
+{
+  if (aFrame->IsSVGText()) {
+    const nsIFrame* container =
+      nsLayoutUtils::GetClosestFrameOfType(aFrame, nsGkAtoms::svgTextFrame);
+    NS_ASSERTION(container, "expected to find an ancestor SVGTextFrame");
+    return
+      static_cast<const SVGTextFrame*>(container)->GetFontSizeScaleFactor();
+  }
+  return nsLayoutUtils::FontSizeInflationInner(aFrame, aInflationMinFontSize);
+}
+
 #define VERTICAL_ALIGN_FRAMES_NO_MINIMUM nscoord_MAX
 #define VERTICAL_ALIGN_FRAMES_NO_MAXIMUM nscoord_MIN
 
@@ -1551,7 +1556,7 @@ nsLineLayout::VerticalAlignFrames(PerSpanData* psd)
   // Get the parent frame's font for all of the frames in this span
   nsRefPtr<nsFontMetrics> fm;
   float inflation =
-    nsLayoutUtils::FontSizeInflationInner(spanFrame, mInflationMinFontSize);
+    GetInflationForVerticalAlignment(spanFrame, mInflationMinFontSize);
   nsLayoutUtils::GetFontMetricsForFrame(spanFrame, getter_AddRefs(fm),
                                         inflation);
   mBlockReflowState->rendContext->SetFont(fm);
@@ -1685,7 +1690,7 @@ nsLineLayout::VerticalAlignFrames(PerSpanData* psd)
     // is based on the line-height value, not the font-size. Also
     // compute the top leading.
     float inflation =
-      nsLayoutUtils::FontSizeInflationInner(spanFrame, mInflationMinFontSize);
+      GetInflationForVerticalAlignment(spanFrame, mInflationMinFontSize);
     nscoord logicalHeight = nsHTMLReflowState::
       CalcLineHeight(spanFrame->StyleContext(),
                      mBlockReflowState->ComputedHeight(),
@@ -1934,7 +1939,7 @@ nsLineLayout::VerticalAlignFrames(PerSpanData* psd)
         // Percentages are like lengths, except treated as a percentage
         // of the elements line-height value.
         float inflation =
-          nsLayoutUtils::FontSizeInflationInner(frame, mInflationMinFontSize);
+          GetInflationForVerticalAlignment(frame, mInflationMinFontSize);
         pctBasis = nsHTMLReflowState::CalcLineHeight(
           frame->StyleContext(), mBlockReflowState->ComputedHeight(),
           inflation);

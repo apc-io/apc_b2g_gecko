@@ -10,6 +10,7 @@
 #include "mozilla/gfx/2D.h"
 #include "mozilla/Preferences.h"
 
+#include "gfx2DGlue.h"
 #include "gfxFT2FontList.h"
 #include "gfxImageSurface.h"
 #include "mozilla/dom/ContentChild.h"
@@ -18,8 +19,12 @@
 #include "nsIScreenManager.h"
 #include "nsILocaleService.h"
 #include "nsServiceManagerUtils.h"
-
+#include "gfxPrefs.h"
 #include "cairo.h"
+
+#ifdef MOZ_WIDGET_ANDROID
+#include "AndroidBridge.h"
+#endif
 
 #include "ft2build.h"
 #include FT_FREETYPE_H
@@ -31,12 +36,12 @@ using namespace mozilla::gfx;
 
 static FT_Library gPlatformFTLibrary = nullptr;
 
-class FreetypeReporter MOZ_FINAL : public MemoryUniReporter
+class FreetypeReporter MOZ_FINAL : public nsIMemoryReporter
 {
 public:
+    NS_DECL_ISUPPORTS
+
     FreetypeReporter()
-      : MemoryUniReporter("explicit/freetype", KIND_HEAP, UNITS_BYTES,
-                          "Memory used by Freetype.")
     {
 #ifdef DEBUG
         // There must be only one instance of this class, due to |sAmount|
@@ -46,6 +51,9 @@ public:
         hasRun = true;
 #endif
     }
+
+    MOZ_DEFINE_MALLOC_SIZE_OF_ON_ALLOC(MallocSizeOfOnAlloc)
+    MOZ_DEFINE_MALLOC_SIZE_OF_ON_FREE(MallocSizeOfOnFree)
 
     static void* CountingAlloc(FT_Memory, long size)
     {
@@ -74,11 +82,19 @@ public:
         return pnew;
     }
 
-private:
-    int64_t Amount() MOZ_OVERRIDE { return sAmount; }
+    NS_IMETHOD CollectReports(nsIHandleReportCallback* aHandleReport,
+                              nsISupports* aData)
+    {
+        return MOZ_COLLECT_REPORT(
+            "explicit/freetype", KIND_HEAP, UNITS_BYTES, sAmount,
+            "Memory used by Freetype.");
+    }
 
+private:
     static int64_t sAmount;
 };
+
+NS_IMPL_ISUPPORTS1(FreetypeReporter, nsIMemoryReporter)
 
 int64_t FreetypeReporter::sAmount = 0;
 
@@ -106,11 +122,11 @@ gfxAndroidPlatform::gfxAndroidPlatform()
     screen->GetColorDepth(&mScreenDepth);
 
     mOffscreenFormat = mScreenDepth == 16
-                       ? gfxImageFormatRGB16_565
-                       : gfxImageFormatRGB24;
+                       ? gfxImageFormat::RGB16_565
+                       : gfxImageFormat::RGB24;
 
-    if (Preferences::GetBool("gfx.android.rgb16.force", false)) {
-        mOffscreenFormat = gfxImageFormatRGB16_565;
+    if (gfxPrefs::AndroidRGB16Force()) {
+        mOffscreenFormat = gfxImageFormat::RGB16_565;
     }
 
 }
@@ -124,13 +140,27 @@ gfxAndroidPlatform::~gfxAndroidPlatform()
 }
 
 already_AddRefed<gfxASurface>
-gfxAndroidPlatform::CreateOffscreenSurface(const gfxIntSize& size,
-                                      gfxContentType contentType)
+gfxAndroidPlatform::CreateOffscreenSurface(const IntSize& size,
+                                           gfxContentType contentType)
 {
     nsRefPtr<gfxASurface> newSurface;
-    newSurface = new gfxImageSurface(size, OptimalFormatForContent(contentType));
+    newSurface = new gfxImageSurface(ThebesIntSize(size),
+                                     OptimalFormatForContent(contentType));
 
     return newSurface.forget();
+}
+
+already_AddRefed<gfxASurface>
+gfxAndroidPlatform::OptimizeImage(gfxImageSurface *aSurface,
+                                  gfxImageFormat format)
+{
+    /* Android/Gonk have no special offscreen surfaces so we can avoid a copy */
+    if (OptimalFormatForContent(gfxASurface::ContentFromFormat(format)) ==
+        format) {
+        return nullptr;
+    }
+
+    return gfxPlatform::OptimizeImage(aSurface, format);
 }
 
 static bool
@@ -330,14 +360,7 @@ gfxAndroidPlatform::MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
 TemporaryRef<ScaledFont>
 gfxAndroidPlatform::GetScaledFontForFont(DrawTarget* aTarget, gfxFont *aFont)
 {
-    NativeFont nativeFont;
-    if (aTarget->GetType() == BACKEND_CAIRO || aTarget->GetType() == BACKEND_SKIA) {
-        nativeFont.mType = NATIVE_FONT_CAIRO_FONT_FACE;
-        nativeFont.mFont = aFont->GetCairoScaledFont();
-        return Factory::CreateScaledFontForNativeFont(nativeFont, aFont->GetAdjustedSize());
-    }
-
-    return nullptr;
+    return GetScaledFontForFontWithCairoSkia(aTarget, aFont);
 }
 
 bool
@@ -398,4 +421,17 @@ int
 gfxAndroidPlatform::GetScreenDepth() const
 {
     return mScreenDepth;
+}
+
+bool
+gfxAndroidPlatform::UseAcceleratedSkiaCanvas()
+{
+#ifdef MOZ_WIDGET_ANDROID
+    if (AndroidBridge::Bridge()->GetAPIVersion() < 11) {
+        // It's slower than software due to not having a compositing fast path
+        return false;
+    }
+#endif
+
+    return gfxPlatform::UseAcceleratedSkiaCanvas();
 }

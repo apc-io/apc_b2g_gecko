@@ -32,7 +32,7 @@
 #include "nsNetUtil.h"
 #include "nsCSSRendering.h"
 #include "nsIDOMHTMLAnchorElement.h"
-#include "nsINameSpaceManager.h"
+#include "nsNameSpaceManager.h"
 #include <algorithm>
 #ifdef ACCESSIBILITY
 #include "nsAccessibilityService.h"
@@ -797,7 +797,7 @@ nsImageFrame::GetIntrinsicRatio()
   return mIntrinsicRatio;
 }
 
-NS_IMETHODIMP
+nsresult
 nsImageFrame::Reflow(nsPresContext*          aPresContext,
                      nsHTMLReflowMetrics&     aMetrics,
                      const nsHTMLReflowState& aReflowState,
@@ -807,7 +807,7 @@ nsImageFrame::Reflow(nsPresContext*          aPresContext,
   DISPLAY_REFLOW(aPresContext, this, aReflowState, aMetrics, aStatus);
   NS_FRAME_TRACE(NS_FRAME_TRACE_CALLS,
                   ("enter nsImageFrame::Reflow: availSize=%d,%d",
-                  aReflowState.availableWidth, aReflowState.availableHeight));
+                  aReflowState.AvailableWidth(), aReflowState.AvailableHeight()));
 
   NS_PRECONDITION(mState & NS_FRAME_IN_REFLOW, "frame is not in reflow");
 
@@ -829,18 +829,18 @@ nsImageFrame::Reflow(nsPresContext*          aPresContext,
   mComputedSize = 
     nsSize(aReflowState.ComputedWidth(), aReflowState.ComputedHeight());
 
-  aMetrics.width = mComputedSize.width;
-  aMetrics.height = mComputedSize.height;
+  aMetrics.Width() = mComputedSize.width;
+  aMetrics.Height() = mComputedSize.height;
 
   // add borders and padding
-  aMetrics.width  += aReflowState.mComputedBorderPadding.LeftRight();
-  aMetrics.height += aReflowState.mComputedBorderPadding.TopBottom();
+  aMetrics.Width()  += aReflowState.ComputedPhysicalBorderPadding().LeftRight();
+  aMetrics.Height() += aReflowState.ComputedPhysicalBorderPadding().TopBottom();
   
   if (GetPrevInFlow()) {
-    aMetrics.width = GetPrevInFlow()->GetSize().width;
+    aMetrics.Width() = GetPrevInFlow()->GetSize().width;
     nscoord y = GetContinuationOffset();
-    aMetrics.height -= y + aReflowState.mComputedBorderPadding.top;
-    aMetrics.height = std::max(0, aMetrics.height);
+    aMetrics.Height() -= y + aReflowState.ComputedPhysicalBorderPadding().top;
+    aMetrics.Height() = std::max(0, aMetrics.Height());
   }
 
 
@@ -859,11 +859,11 @@ nsImageFrame::Reflow(nsPresContext*          aPresContext,
   }
   if (aPresContext->IsPaginated() &&
       ((loadStatus & imgIRequest::STATUS_SIZE_AVAILABLE) || (mState & IMAGE_SIZECONSTRAINED)) &&
-      NS_UNCONSTRAINEDSIZE != aReflowState.availableHeight && 
-      aMetrics.height > aReflowState.availableHeight) { 
+      NS_UNCONSTRAINEDSIZE != aReflowState.AvailableHeight() && 
+      aMetrics.Height() > aReflowState.AvailableHeight()) { 
     // our desired height was greater than 0, so to avoid infinite
     // splitting, use 1 pixel as the min
-    aMetrics.height = std::max(nsPresContext::CSSPixelsToAppUnits(1), aReflowState.availableHeight);
+    aMetrics.Height() = std::max(nsPresContext::CSSPixelsToAppUnits(1), aReflowState.AvailableHeight());
     aStatus = NS_FRAME_NOT_COMPLETE;
   }
 
@@ -898,7 +898,7 @@ nsImageFrame::Reflow(nsPresContext*          aPresContext,
 
   NS_FRAME_TRACE(NS_FRAME_TRACE_CALLS,
                   ("exit nsImageFrame::Reflow: size=%d,%d",
-                  aMetrics.width, aMetrics.height));
+                  aMetrics.Width(), aMetrics.Height()));
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowState, aMetrics);
   return NS_OK;
 }
@@ -925,7 +925,7 @@ nsImageFrame::ReflowCallbackCanceled()
 // aMaxFit. NOTE: it is assumed that the fontmetrics have already been selected
 // into the rendering context before this is called (for performance). MMP
 nscoord
-nsImageFrame::MeasureString(const PRUnichar*     aString,
+nsImageFrame::MeasureString(const char16_t*     aString,
                             int32_t              aLength,
                             nscoord              aMaxWidth,
                             uint32_t&            aMaxFit,
@@ -1008,7 +1008,7 @@ nsImageFrame::DisplayAltText(nsPresContext*      aPresContext,
   // XXX It would be nice if there was a way to have the font metrics tell
   // use where to break the text given a maximum width. At a minimum we need
   // to be able to get the break character...
-  const PRUnichar* str = aAltText.get();
+  const char16_t* str = aAltText.get();
   int32_t          strLen = aAltText.Length();
   nscoord          y = aRect.y;
 
@@ -1072,13 +1072,15 @@ public:
   nsDisplayAltFeedback(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame)
     : nsDisplayItem(aBuilder, aFrame) {}
 
-  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap)
+  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
+                           bool* aSnap) MOZ_OVERRIDE
   {
     *aSnap = false;
     return mFrame->GetVisualOverflowRectRelativeToSelf() + ToReferenceFrame();
   }
 
-  virtual void Paint(nsDisplayListBuilder* aBuilder, nsRenderingContext* aCtx)
+  virtual void Paint(nsDisplayListBuilder* aBuilder,
+                     nsRenderingContext* aCtx) MOZ_OVERRIDE
   {
     nsImageFrame* f = static_cast<nsImageFrame*>(mFrame);
     nsEventStates state = f->GetContent()->AsElement()->State();
@@ -1360,11 +1362,12 @@ nsDisplayImage::ConfigureLayer(ImageLayer *aLayer, const nsIntPoint& aOffset)
 
   const gfxRect destRect = GetDestRect();
 
-  gfxMatrix transform;
-  transform.Translate(destRect.TopLeft() + aOffset);
+  gfx::Matrix transform;
+  gfxPoint p = destRect.TopLeft() + aOffset;
+  transform.Translate(p.x, p.y);
   transform.Scale(destRect.Width()/imageWidth,
                   destRect.Height()/imageHeight);
-  aLayer->SetBaseTransform(gfx3DMatrix::From2D(transform));
+  aLayer->SetBaseTransform(gfx::Matrix4x4::From2D(transform));
   aLayer->SetVisibleRegion(nsIntRect(0, 0, imageWidth, imageHeight));
 }
 
@@ -1588,7 +1591,7 @@ nsImageFrame::GetAnchorHREFTargetAndNode(nsIURI** aHref, nsString& aTarget,
   return status;
 }
 
-NS_IMETHODIMP  
+nsresult  
 nsImageFrame::GetContentForEvent(WidgetEvent* aEvent,
                                  nsIContent** aContent)
 {
@@ -1629,7 +1632,7 @@ nsImageFrame::GetContentForEvent(WidgetEvent* aEvent,
 }
 
 // XXX what should clicks on transparent pixels do?
-NS_IMETHODIMP
+nsresult
 nsImageFrame::HandleEvent(nsPresContext* aPresContext,
                           WidgetGUIEvent* aEvent,
                           nsEventStatus* aEventStatus)
@@ -1690,7 +1693,7 @@ nsImageFrame::HandleEvent(nsPresContext* aPresContext,
   return nsSplittableFrame::HandleEvent(aPresContext, aEvent, aEventStatus);
 }
 
-NS_IMETHODIMP
+nsresult
 nsImageFrame::GetCursor(const nsPoint& aPoint,
                         nsIFrame::Cursor& aCursor)
 {
@@ -1719,7 +1722,7 @@ nsImageFrame::GetCursor(const nsPoint& aPoint,
   return nsFrame::GetCursor(aPoint, aCursor);
 }
 
-NS_IMETHODIMP
+nsresult
 nsImageFrame::AttributeChanged(int32_t aNameSpaceID,
                                nsIAtom* aAttribute,
                                int32_t aModType)
@@ -1745,17 +1748,18 @@ nsImageFrame::GetType() const
   return nsGkAtoms::imageFrame;
 }
 
-#ifdef DEBUG
-NS_IMETHODIMP
+#ifdef DEBUG_FRAME_DUMP
+nsresult
 nsImageFrame::GetFrameName(nsAString& aResult) const
 {
   return MakeFrameName(NS_LITERAL_STRING("ImageFrame"), aResult);
 }
 
 void
-nsImageFrame::List(FILE* out, int32_t aIndent, uint32_t aFlags) const
+nsImageFrame::List(FILE* out, const char* aPrefix, uint32_t aFlags) const
 {
-  ListGeneric(out, aIndent, aFlags);
+  nsCString str;
+  ListGeneric(str, aPrefix, aFlags);
 
   // output the img src url
   nsCOMPtr<nsIImageLoadingContent> imageLoader = do_QueryInterface(mContent);
@@ -1768,10 +1772,10 @@ nsImageFrame::List(FILE* out, int32_t aIndent, uint32_t aFlags) const
       currentRequest->GetURI(getter_AddRefs(uri));
       nsAutoCString uristr;
       uri->GetAsciiSpec(uristr);
-      fprintf(out, " [src=%s]", uristr.get());
+      str += nsPrintfCString(" [src=%s]", uristr.get());
     }
   }
-  fputs("\n", out);
+  fprintf_stderr(out, "%s\n", str.get());
 }
 #endif
 
@@ -1944,7 +1948,7 @@ nsImageFrame::IconLoad::Shutdown()
 
 NS_IMETHODIMP
 nsImageFrame::IconLoad::Observe(nsISupports *aSubject, const char* aTopic,
-                                const PRUnichar* aData)
+                                const char16_t* aData)
 {
   NS_ASSERTION(!nsCRT::strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID),
                "wrong topic");

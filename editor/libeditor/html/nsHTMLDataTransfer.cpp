@@ -34,8 +34,8 @@
 #include "nsIContent.h"
 #include "nsIContentFilter.h"
 #include "nsIDOMComment.h"
-#include "nsIDOMDOMStringList.h"
-#include "nsIDOMDataTransfer.h"
+#include "mozilla/dom/DOMStringList.h"
+#include "mozilla/dom/DataTransfer.h"
 #include "nsIDOMDocument.h"
 #include "nsIDOMDocumentFragment.h"
 #include "nsIDOMElement.h"
@@ -57,7 +57,7 @@
 #include "nsIFile.h"
 #include "nsIInputStream.h"
 #include "nsIMIMEService.h"
-#include "nsINameSpaceManager.h"
+#include "nsNameSpaceManager.h"
 #include "nsINode.h"
 #include "nsIParserUtils.h"
 #include "nsIPlaintextEditor.h"
@@ -932,7 +932,7 @@ RemoveFragComments(nsCString & aStr)
 }
 
 nsresult
-nsHTMLEditor::ParseCFHTML(nsCString & aCfhtml, PRUnichar **aStuffToPaste, PRUnichar **aCfcontext)
+nsHTMLEditor::ParseCFHTML(nsCString & aCfhtml, char16_t **aStuffToPaste, char16_t **aCfcontext)
 {
   // First obtain offsets from cfhtml str.
   int32_t startHTML, endHTML, startFragment, endFragment;
@@ -1231,24 +1231,25 @@ GetStringFromDataTransfer(nsIDOMDataTransfer *aDataTransfer, const nsAString& aT
     variant->GetAsAString(aOutputString);
 }
 
-nsresult nsHTMLEditor::InsertFromDataTransfer(nsIDOMDataTransfer *aDataTransfer,
+nsresult nsHTMLEditor::InsertFromDataTransfer(DataTransfer *aDataTransfer,
                                               int32_t aIndex,
                                               nsIDOMDocument *aSourceDoc,
                                               nsIDOMNode *aDestinationNode,
                                               int32_t aDestOffset,
                                               bool aDoDeleteSelection)
 {
-  nsCOMPtr<nsIDOMDOMStringList> types;
-  aDataTransfer->MozTypesAt(aIndex, getter_AddRefs(types));
+  ErrorResult rv;
+  nsRefPtr<DOMStringList> types = aDataTransfer->MozTypesAt(aIndex, rv);
+  if (rv.Failed()) {
+    return rv.ErrorCode();
+  }
 
-  bool hasPrivateHTMLFlavor;
-  types->Contains(NS_LITERAL_STRING(kHTMLContext), &hasPrivateHTMLFlavor);
+  bool hasPrivateHTMLFlavor = types->Contains(NS_LITERAL_STRING(kHTMLContext));
 
   bool isText = IsPlaintextEditor();
   bool isSafe = IsSafeToInsertData(aSourceDoc);
 
-  uint32_t length;
-  types->GetLength(&length);
+  uint32_t length = types->Length();
   for (uint32_t t = 0; t < length; t++) {
     nsAutoString type;
     types->Item(t, type);
@@ -1675,7 +1676,7 @@ nsHTMLEditor::InsertTextWithQuotations(const nsAString &aStringToInsert)
   // Whenever the quotedness changes (or we reach the string's end)
   // we will insert the hunk all at once, quoted or non.
 
-  static const PRUnichar cite('>');
+  static const char16_t cite('>');
   bool curHunkIsQuoted = (aStringToInsert.First() == cite);
 
   nsAString::const_iterator hunkStart, strEnd;
@@ -2121,7 +2122,7 @@ nsresult nsHTMLEditor::CreateDOMFragmentFromPaste(const nsAString &aInputString,
   if (!aInfoStr.IsEmpty())
   {
     int32_t sep, num;
-    sep = aInfoStr.FindChar((PRUnichar)',');
+    sep = aInfoStr.FindChar((char16_t)',');
     numstr1 = Substring(aInfoStr, 0, sep);
     numstr2 = Substring(aInfoStr, sep+1, aInfoStr.Length() - (sep+1));
 

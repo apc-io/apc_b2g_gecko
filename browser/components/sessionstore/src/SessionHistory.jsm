@@ -13,8 +13,6 @@ const Ci = Components.interfaces;
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "PrivacyLevel",
-  "resource:///modules/sessionstore/PrivacyLevel.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Utils",
   "resource:///modules/sessionstore/Utils.jsm");
 
@@ -22,24 +20,16 @@ function debug(msg) {
   Services.console.logStringMessage("SessionHistory: " + msg);
 }
 
-// The preference value that determines how much post data to save.
-XPCOMUtils.defineLazyGetter(this, "gPostData", function () {
-  const PREF = "browser.sessionstore.postdata";
-
-  // Observer that updates the cached value when the preference changes.
-  Services.prefs.addObserver(PREF, () => {
-    this.gPostData = Services.prefs.getIntPref(PREF);
-  }, false);
-
-  return Services.prefs.getIntPref(PREF);
-});
-
 /**
  * The external API exported by this module.
  */
 this.SessionHistory = Object.freeze({
-  collect: function (docShell, includePrivateData) {
-    return SessionHistoryInternal.collect(docShell, includePrivateData);
+  isEmpty: function (docShell) {
+    return SessionHistoryInternal.isEmpty(docShell);
+  },
+
+  collect: function (docShell) {
+    return SessionHistoryInternal.collect(docShell);
   },
 
   restore: function (docShell, tabData) {
@@ -52,24 +42,56 @@ this.SessionHistory = Object.freeze({
  */
 let SessionHistoryInternal = {
   /**
+   * Returns whether the given docShell's session history is empty.
+   *
+   * @param docShell
+   *        The docShell that owns the session history.
+   */
+  isEmpty: function (docShell) {
+    let webNavigation = docShell.QueryInterface(Ci.nsIWebNavigation);
+    let history = webNavigation.sessionHistory;
+    if (!webNavigation.currentURI) {
+      return true;
+    }
+    let uri = webNavigation.currentURI.spec;
+    return uri == "about:blank" && history.count == 0;
+  },
+
+  /**
    * Collects session history data for a given docShell.
    *
    * @param docShell
    *        The docShell that owns the session history.
-   * @param includePrivateData (optional)
-   *        True to always include private data and skip any privacy checks.
    */
-  collect: function (docShell, includePrivateData = false) {
+  collect: function (docShell) {
     let data = {entries: []};
     let isPinned = docShell.isAppTab;
     let webNavigation = docShell.QueryInterface(Ci.nsIWebNavigation);
     let history = webNavigation.sessionHistory;
 
     if (history && history.count > 0) {
+      let oldest;
+      let maxSerializeBack =
+        Services.prefs.getIntPref("browser.sessionstore.max_serialize_back");
+      if (maxSerializeBack >= 0) {
+        oldest = Math.max(0, history.index - maxSerializeBack);
+      } else { // History.getEntryAtIndex(0, ...) is the oldest.
+        oldest = 0;
+      }
+
+      let newest;
+      let maxSerializeFwd =
+        Services.prefs.getIntPref("browser.sessionstore.max_serialize_forward");
+      if (maxSerializeFwd >= 0) {
+        newest = Math.min(history.count - 1, history.index + maxSerializeFwd);
+      } else { // History.getEntryAtIndex(history.count - 1, ...) is the newest.
+        newest = history.count - 1;
+      }
+
       try {
-        for (let i = 0; i < history.count; i++) {
+        for (let i = oldest; i <= newest; i++) {
           let shEntry = history.getEntryAtIndex(i, false);
-          let entry = this.serializeEntry(shEntry, includePrivateData, isPinned);
+          let entry = this.serializeEntry(shEntry, isPinned);
           data.entries.push(entry);
         }
       } catch (ex) {
@@ -81,21 +103,23 @@ let SessionHistoryInternal = {
               "for the focused window/tab. See bug 669196.");
       }
 
-      // Ensure the index isn't out of bounds if an exception was thrown above.
-      data.index = Math.min(history.index + 1, data.entries.length);
+      // Set the one-based index of the currently active tab,
+      // ensuring it isn't out of bounds if an exception was thrown above.
+      data.index = Math.min(history.index - oldest + 1, data.entries.length);
     }
 
     // If either the session history isn't available yet or doesn't have any
     // valid entries, make sure we at least include the current page.
     if (data.entries.length == 0) {
       let uri = webNavigation.currentURI.spec;
+      let body = webNavigation.document.body;
       // We landed here because the history is inaccessible or there are no
       // history entries. In that case we should at least record the docShell's
       // current URL as a single history entry. If the URL is not about:blank
       // or it's a blank tab that was modified (like a custom newtab page),
       // record it. For about:blank we explicitly want an empty array without
       // an 'index' property to denote that there are no history entries.
-      if (uri != "about:blank" || webNavigation.document.body.hasChildNodes()) {
+      if (uri != "about:blank" || (body && body.hasChildNodes())) {
         data.entries.push({ url: uri });
         data.index = 1;
       }
@@ -105,17 +129,30 @@ let SessionHistoryInternal = {
   },
 
   /**
+   * Determines whether a given session history entry has been added dynamically.
+   *
+   * @param shEntry
+   *        The session history entry.
+   * @return bool
+   */
+  isDynamic: function (shEntry) {
+    // shEntry.isDynamicallyAdded() is true for dynamically added
+    // <iframe> and <frameset>, but also for <html> (the root of the
+    // document) so we use shEntry.parent to ensure that we're not looking
+    // at the root of the document
+    return shEntry.parent && shEntry.isDynamicallyAdded();
+  },
+
+  /**
    * Get an object that is a serialized representation of a History entry.
    *
    * @param shEntry
    *        nsISHEntry instance
-   * @param includePrivateData
-   *        Always return privacy sensitive data (use with care).
    * @param isPinned
    *        The tab is pinned and should be treated differently for privacy.
    * @return object
    */
-  serializeEntry: function (shEntry, includePrivateData, isPinned) {
+  serializeEntry: function (shEntry, isPinned) {
     let entry = { url: shEntry.URI.spec };
 
     // Save some bytes and don't include the title property
@@ -148,6 +185,9 @@ let SessionHistoryInternal = {
     if (shEntry.isSrcdocEntry)
       entry.isSrcdocEntry = shEntry.isSrcdocEntry;
 
+    if (shEntry.baseURI)
+      entry.baseURI = shEntry.baseURI.spec;
+
     if (shEntry.contentType)
       entry.contentType = shEntry.contentType;
 
@@ -155,17 +195,6 @@ let SessionHistoryInternal = {
     shEntry.getScrollPosition(x, y);
     if (x.value != 0 || y.value != 0)
       entry.scroll = x.value + "," + y.value;
-
-    // Collect post data for the current history entry.
-    try {
-      let postdata = this.serializePostData(shEntry, isPinned);
-      if (postdata) {
-        entry.postdata_b64 = postdata;
-      }
-    } catch (ex) {
-      // POSTDATA is tricky - especially since some extensions don't get it right
-      debug("Failed serializing post data: " + ex);
-    }
 
     // Collect owner data for the current history entry.
     try {
@@ -195,7 +224,7 @@ let SessionHistoryInternal = {
       for (let i = 0; i < shEntry.childCount; i++) {
         let child = shEntry.GetChildAt(i);
 
-        if (child) {
+        if (child && !this.isDynamic(child)) {
           // Don't try to restore framesets containing wyciwyg URLs.
           // (cf. bug 424689 and bug 450595)
           if (child.URI.schemeIs("wyciwyg")) {
@@ -203,7 +232,7 @@ let SessionHistoryInternal = {
             break;
           }
 
-          children.push(this.serializeEntry(child, includePrivateData, isPinned));
+          children.push(this.serializeEntry(child, isPinned));
         }
       }
 
@@ -213,40 +242,6 @@ let SessionHistoryInternal = {
     }
 
     return entry;
-  },
-
-  /**
-   * Serialize post data contained in the given session history entry.
-   *
-   * @param shEntry
-   *        The session history entry.
-   * @param isPinned
-   *        Whether the docShell is owned by a pinned tab.
-   * @return The base64 encoded post data.
-   */
-  serializePostData: function (shEntry, isPinned) {
-    let isHttps = shEntry.URI.schemeIs("https");
-    if (!shEntry.postData || !gPostData ||
-        !PrivacyLevel.canSave({isHttps: isHttps, isPinned: isPinned})) {
-      return null;
-    }
-
-    shEntry.postData.QueryInterface(Ci.nsISeekableStream)
-                    .seek(Ci.nsISeekableStream.NS_SEEK_SET, 0);
-    let stream = Cc["@mozilla.org/binaryinputstream;1"]
-                   .createInstance(Ci.nsIBinaryInputStream);
-    stream.setInputStream(shEntry.postData);
-    let postBytes = stream.readByteArray(stream.available());
-    let postdata = String.fromCharCode.apply(null, postBytes);
-    if (gPostData != -1 &&
-        postdata.replace(/^(Content-.*\r\n)+(\r\n)*/, "").length > gPostData) {
-      return null;
-    }
-
-    // We can stop doing base64 encoding once our serialization into JSON
-    // is guaranteed to handle all chars in strings, including embedded
-    // nulls.
-    return btoa(postdata);
   },
 
   /**
@@ -337,6 +332,8 @@ let SessionHistoryInternal = {
       shEntry.referrerURI = Utils.makeURI(entry.referrer);
     if (entry.isSrcdocEntry)
       shEntry.srcdocData = entry.srcdocData;
+    if (entry.baseURI)
+      shEntry.baseURI = Utils.makeURI(entry.baseURI);
 
     if (entry.cacheKey) {
       var cacheKey = Cc["@mozilla.org/supports-PRUint32;1"].
@@ -373,14 +370,6 @@ let SessionHistoryInternal = {
       var scrollPos = (entry.scroll || "0,0").split(",");
       scrollPos = [parseInt(scrollPos[0]) || 0, parseInt(scrollPos[1]) || 0];
       shEntry.setScrollPosition(scrollPos[0], scrollPos[1]);
-    }
-
-    if (entry.postdata_b64) {
-      var postdata = atob(entry.postdata_b64);
-      var stream = Cc["@mozilla.org/io/string-input-stream;1"].
-                   createInstance(Ci.nsIStringInputStream);
-      stream.setData(postdata, postdata.length);
-      shEntry.postData = stream;
     }
 
     let childDocIdents = {};

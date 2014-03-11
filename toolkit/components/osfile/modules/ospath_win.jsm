@@ -140,9 +140,11 @@ let join = function(...path) {
   let paths = [];
   let root;
   let absolute = false;
-  for each(let subpath in path) {
+  for (let subpath of path) {
+    if (subpath == null) {
+      throw new TypeError("invalid path component");
+    }
     let drive = this.winGetDrive(subpath);
-    let abs   = this.winIsAbsolute(subpath);
     if (drive) {
       root = drive;
       let component = trimBackslashes(subpath.slice(drive.length));
@@ -151,8 +153,8 @@ let join = function(...path) {
       } else {
         paths = [];
       }
-      absolute = abs;
-    } else if (abs) {
+      absolute = true;
+    } else if (this.winIsAbsolute(subpath)) {
       paths = [trimBackslashes(subpath)];
       absolute = true;
     } else {
@@ -180,6 +182,10 @@ exports.join = join;
  * includes "\\\\").
  */
 let winGetDrive = function(path) {
+  if (path == null) {
+    throw new TypeError("path is invalid");
+  }
+
   if (path.startsWith("\\\\")) {
     // UNC path
     if (path.length == 2) {
@@ -259,7 +265,7 @@ let normalize = function(path) {
 
   // Put everything back together
   let result = stack.join("\\");
-  if (absolute) {
+  if (absolute || root) {
     result = "\\" + result;
   }
   if (root) {

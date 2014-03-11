@@ -53,4 +53,12 @@ add_task(function() {
   do_check_true(!!exception);
   do_check_true(exception instanceof OS.File.Error);
   do_check_true(exception.becauseExists);
+
+  // Make a root directory that already exists
+  if (OS.Constants.Win) {
+    yield OS.File.makeDir("C:");
+    yield OS.File.makeDir("C:\\");
+  } else {
+    yield OS.File.makeDir("/");
+  }
 });

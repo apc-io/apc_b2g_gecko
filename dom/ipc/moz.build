@@ -23,6 +23,7 @@ EXPORTS.mozilla.dom += [
     'ContentProcess.h',
     'CrashReporterChild.h',
     'CrashReporterParent.h',
+    'FilePickerParent.h',
     'PermissionMessageUtils.h',
     'StructuredCloneUtils.h',
     'TabChild.h',
@@ -39,10 +40,12 @@ EXPORTS.mozilla += [
 
 UNIFIED_SOURCES += [
     'AppProcessChecker.cpp',
+    'ColorPickerParent.cpp',
     'ContentChild.cpp',
     'ContentParent.cpp',
     'ContentProcess.cpp',
     'CrashReporterParent.cpp',
+    'FilePickerParent.cpp',
     'PermissionMessageUtils.cpp',
     'PreallocatedProcessManager.cpp',
     'ProcessPriorityManager.cpp',
@@ -66,11 +69,13 @@ IPDL_SOURCES += [
     'PBlob.ipdl',
     'PBlobStream.ipdl',
     'PBrowser.ipdl',
+    'PColorPicker.ipdl',
     'PContent.ipdl',
-    'PContentDialog.ipdl',
+    'PContentPermission.ipdlh',
     'PContentPermissionRequest.ipdl',
     'PCrashReporter.ipdl',
     'PDocumentRenderer.ipdl',
+    'PFilePicker.ipdl',
     'PMemoryReportRequest.ipdl',
     'PTabContext.ipdlh',
 ]
@@ -86,13 +91,14 @@ LOCAL_INCLUDES += [
     '../src/storage',
     '/chrome/src',
     '/content/base/src',
-    '/content/events/src',
     '/content/media/webspeech/synth/ipc',
     '/docshell/base',
     '/dom/base',
     '/dom/bluetooth',
     '/dom/bluetooth/ipc',
     '/dom/devicestorage',
+    '/dom/events',
+    '/dom/filesystem',
     '/dom/fmradio/ipc',
     '/dom/indexedDB',
     '/dom/indexedDB/ipc',
@@ -106,6 +112,7 @@ LOCAL_INCLUDES += [
     '/uriloader/exthandler',
     '/widget/xpwidgets',
     '/xpcom/base',
+    '/xpcom/threads',
 ]
 
 DEFINES['BIN_SUFFIX'] = '"%s"' % CONFIG['BIN_SUFFIX']
@@ -117,4 +124,8 @@ for var in ('MOZ_PERMISSIONS', 'MOZ_CHILD_PERMISSIONS'):
     if CONFIG[var]:
         DEFINES[var] = True
 
+if CONFIG['ENABLE_TESTS']:
+    DEFINES['ENABLE_TESTS'] = 1
+
 JAR_MANIFESTS += ['jar.mn']
+

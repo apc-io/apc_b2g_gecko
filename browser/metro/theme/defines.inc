@@ -27,6 +27,8 @@
 %define toolbar_height 69px
 %define labelled_toolbar_height 90px
 %define tabs_height 178px
+%define newtab_button_width 63px
+%define tabs_scrollarrow_width 64px
 %define findbar_height 54px
 
 %define progress_height 5px
@@ -114,3 +116,8 @@
 % bug 895277. Because of that, we have to use 1.39dppx instead of 1.4dppx.
 %define min_res_140pc 1.39dppx
 %define min_res_180pc 1.8dppx
+
+% error page style constants
+%define error_page_background_color #eee
+%define error_page_warning_color #efd400
+%define error_page_error_color #bf0000

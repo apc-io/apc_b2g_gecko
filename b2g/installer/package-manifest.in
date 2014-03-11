@@ -104,12 +104,8 @@
 #endif
 @BINPATH@/application.ini
 @BINPATH@/platform.ini
-#ifndef XP_OS2
 #ifndef MOZ_FOLD_LIBS
 @BINPATH@/@DLL_PREFIX@mozsqlite3@DLL_SUFFIX@
-#endif
-#else
-@BINPATH@/mozsqlt3@DLL_SUFFIX@
 #endif
 @BINPATH@/blocklist.xml
 @BINPATH@/ua-update.json
@@ -166,11 +162,11 @@
 @BINPATH@/components/dom_icc.xpt
 @BINPATH@/components/dom_cellbroadcast.xpt
 @BINPATH@/components/dom_wappush.xpt
+@BINPATH@/components/dom_mobileconnection.xpt
 #endif
 #ifdef MOZ_B2G_BT
 @BINPATH@/components/dom_bluetooth.xpt
 #endif
-@BINPATH@/components/dom_camera.xpt
 @BINPATH@/components/dom_canvas.xpt
 @BINPATH@/components/dom_contacts.xpt
 @BINPATH@/components/dom_alarm.xpt
@@ -343,7 +339,7 @@
 
 ; JavaScript components
 @BINPATH@/components/ConsoleAPI.manifest
-@BINPATH@/components/ConsoleAPI.js
+@BINPATH@/components/ConsoleAPIStorage.js
 @BINPATH@/components/BrowserElementParent.manifest
 @BINPATH@/components/BrowserElementParent.js
 @BINPATH@/components/ContactManager.js
@@ -379,12 +375,12 @@
 @BINPATH@/components/nsLoginInfo.js
 @BINPATH@/components/nsLoginManager.js
 @BINPATH@/components/nsLoginManagerPrompter.js
+@BINPATH@/components/NetworkGeolocationProvider.manifest
+@BINPATH@/components/NetworkGeolocationProvider.js
 #ifdef MOZ_WEBRTC
 @BINPATH@/components/PeerConnection.js
 @BINPATH@/components/PeerConnection.manifest
 #endif
-@BINPATH@/components/HttpDataUsage.manifest
-@BINPATH@/components/HttpDataUsage.js
 @BINPATH@/components/SiteSpecificUserAgent.js
 @BINPATH@/components/SiteSpecificUserAgent.manifest
 @BINPATH@/components/storage-mozStorage.js
@@ -402,6 +398,8 @@
 #ifdef MOZ_WIDGET_GONK
 @BINPATH@/components/DOMWifiManager.js
 @BINPATH@/components/DOMWifiManager.manifest
+@BINPATH@/components/DOMWifiP2pManager.js
+@BINPATH@/components/DOMWifiP2pManager.manifest
 @BINPATH@/components/NetworkInterfaceListService.js
 @BINPATH@/components/NetworkInterfaceListService.manifest
 @BINPATH@/components/NetworkManager.js
@@ -450,11 +448,7 @@
 @BINPATH@/components/nsSessionStore.js
 @BINPATH@/components/nsURLFormatter.manifest
 @BINPATH@/components/nsURLFormatter.js
-#ifndef XP_OS2
 @BINPATH@/components/@DLL_PREFIX@browsercomps@DLL_SUFFIX@
-#else
-@BINPATH@/components/brwsrcmp@DLL_SUFFIX@
-#endif
 @BINPATH@/components/txEXSLTRegExFunctions.manifest
 @BINPATH@/components/txEXSLTRegExFunctions.js
 @BINPATH@/components/toolkitplaces.manifest
@@ -524,8 +518,8 @@
 @BINPATH@/components/CaptivePortalDetectComponents.manifest
 @BINPATH@/components/captivedetect.js
 #endif
-@BINPATH@/components/TelemetryPing.js
-@BINPATH@/components/TelemetryPing.manifest
+@BINPATH@/components/TelemetryStartup.js
+@BINPATH@/components/TelemetryStartup.manifest
 @BINPATH@/components/Webapps.js
 @BINPATH@/components/Webapps.manifest
 @BINPATH@/components/AppsService.js
@@ -561,7 +555,6 @@
 
 @BINPATH@/components/Payment.js
 @BINPATH@/components/PaymentFlowInfo.js
-@BINPATH@/components/PaymentRequestInfo.js
 @BINPATH@/components/Payment.manifest
 
 @BINPATH@/components/DownloadsAPI.js
@@ -570,6 +563,11 @@
 ; InputMethod API
 @BINPATH@/components/MozKeyboard.js
 @BINPATH@/components/InputMethod.manifest
+
+#ifdef MOZ_DEBUG
+@BINPATH@/components/TestInterfaceJS.js
+@BINPATH@/components/TestInterfaceJS.manifest
+#endif
 
 ; Modules
 @BINPATH@/modules/*
@@ -745,11 +743,6 @@ bin/libfreebl_32int64_3.so
 ;
 #ifdef MOZ_ENABLE_GNOMEVFS
 bin/components/@DLL_PREFIX@nkgnomevfs@DLL_SUFFIX@
-#endif
-
-; [OS/2]
-#ifdef XP_OS2
-@BINPATH@/MozSounds.cmd
 #endif
 
 [b2g]

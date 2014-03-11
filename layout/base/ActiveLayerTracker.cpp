@@ -115,7 +115,11 @@ LayerActivityTracker::NotifyExpired(LayerActivity* aObject)
   nsIFrame* f = aObject->mFrame;
   aObject->mFrame = nullptr;
 
-  f->SchedulePaint();
+  // The pres context might have been detached during the delay -
+  // that's fine, just skip the paint.
+  if (f->PresContext()->GetContainerWeak()) {
+    f->SchedulePaint();
+  }
   f->RemoveStateBits(NS_FRAME_HAS_LAYER_ACTIVITY_PROPERTY);
   f->Properties().Delete(LayerActivityProperty());
 }
@@ -208,6 +212,16 @@ ActiveLayerTracker::NotifyInlineStyleRuleModified(nsIFrame* aFrame,
 /* static */ bool
 ActiveLayerTracker::IsStyleAnimated(nsIFrame* aFrame, nsCSSProperty aProperty)
 {
+  // TODO: Add some abuse restrictions
+  if ((aFrame->StyleDisplay()->mWillChangeBitField & NS_STYLE_WILL_CHANGE_TRANSFORM) &&
+      aProperty == eCSSProperty_transform) {
+    return true;
+  }
+  if ((aFrame->StyleDisplay()->mWillChangeBitField & NS_STYLE_WILL_CHANGE_OPACITY) &&
+      aProperty == eCSSProperty_opacity) {
+    return true;
+  }
+
   LayerActivity* layerActivity = GetLayerActivity(aFrame);
   if (layerActivity) {
     if (layerActivity->RestyleCountForProperty(aProperty) >= 2) {

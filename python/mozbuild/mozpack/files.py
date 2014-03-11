@@ -4,10 +4,14 @@
 
 import errno
 import os
+import platform
 import re
 import shutil
 import stat
 import uuid
+import mozbuild.makeutil as makeutil
+from mozbuild.preprocessor import Preprocessor
+from mozbuild.util import FileAvoidWrite
 from mozpack.executables import (
     is_executable,
     may_strip,
@@ -24,6 +28,7 @@ from mozpack.errors import (
 from mozpack.mozjar import JarReader
 import mozpack.path
 from collections import OrderedDict
+from tempfile import mkstemp
 
 
 class Dest(object):
@@ -39,6 +44,10 @@ class Dest(object):
     def __init__(self, path):
         self.path = path
         self.mode = None
+
+    @property
+    def name(self):
+        return self.path
 
     def read(self, length=-1):
         if self.mode != 'r':
@@ -67,6 +76,36 @@ class BaseFile(object):
     their own copy function, or rely on BaseFile.copy using the open() member
     function and/or the path property.
     '''
+    @staticmethod
+    def is_older(first, second):
+        '''
+        Compares the modification time of two files, and returns whether the
+        ``first`` file is older than the ``second`` file.
+        '''
+        # os.path.getmtime returns a result in seconds with precision up to
+        # the microsecond. But microsecond is too precise because
+        # shutil.copystat only copies milliseconds, and seconds is not
+        # enough precision.
+        return int(os.path.getmtime(first) * 1000) \
+                <= int(os.path.getmtime(second) * 1000)
+
+    @staticmethod
+    def any_newer(dest, inputs):
+        '''
+        Compares the modification time of ``dest`` to multiple input files, and
+        returns whether any of the ``inputs`` is newer (has a later mtime) than
+        ``dest``.
+        '''
+        # os.path.getmtime returns a result in seconds with precision up to
+        # the microsecond. But microsecond is too precise because
+        # shutil.copystat only copies milliseconds, and seconds is not
+        # enough precision.
+        dest_mtime = int(os.path.getmtime(dest) * 1000)
+        for input in inputs:
+            if dest_mtime < int(os.path.getmtime(input) * 1000):
+                return True
+        return False
+
     def copy(self, dest, skip_if_older=True):
         '''
         Copy the BaseFile content to the destination given as a string or a
@@ -85,12 +124,7 @@ class BaseFile(object):
         if not dest.exists():
             can_skip_content_check = True
         elif getattr(self, 'path', None) and getattr(dest, 'path', None):
-            # os.path.getmtime returns a result in seconds with precision up to
-            # the microsecond. But microsecond is too precise because
-            # shutil.copystat only copies milliseconds, and seconds is not
-            # enough precision.
-            if skip_if_older and int(os.path.getmtime(self.path) * 1000) \
-                    <= int(os.path.getmtime(dest.path) * 1000):
+            if skip_if_older and BaseFile.is_older(self.path, dest.path):
                 return False
             elif os.path.getsize(self.path) != os.path.getsize(dest.path):
                 can_skip_content_check = True
@@ -132,6 +166,13 @@ class BaseFile(object):
         assert self.path is not None
         return open(self.path, 'rb')
 
+    @property
+    def mode(self):
+        '''
+        Return the file's unix mode, or None if it has no meaning.
+        '''
+        return None
+
 
 class File(BaseFile):
     '''
@@ -140,6 +181,15 @@ class File(BaseFile):
     def __init__(self, path):
         self.path = path
 
+    @property
+    def mode(self):
+        '''
+        Return the file's unix mode, as returned by os.stat().st_mode.
+        '''
+        if platform.system() == 'Windows':
+            return None
+        assert self.path is not None
+        return os.stat(self.path).st_mode
 
 class ExecutableFile(File):
     '''
@@ -147,6 +197,11 @@ class ExecutableFile(File):
     (see mozpack.executables.is_executable documentation).
     '''
     def copy(self, dest, skip_if_older=True):
+        real_dest = dest
+        if not isinstance(dest, basestring):
+            fd, dest = mkstemp()
+            os.close(fd)
+            os.remove(dest)
         assert isinstance(dest, basestring)
         # If File.copy didn't actually copy because dest is newer, check the
         # file sizes. If dest is smaller, it means it is already stripped and
@@ -162,6 +217,12 @@ class ExecutableFile(File):
         except ErrorMessage:
             os.remove(dest)
             raise
+
+        if real_dest != dest:
+            f = File(dest)
+            ret = f.copy(real_dest, skip_if_older)
+            os.remove(dest)
+            return ret
         return True
 
 
@@ -290,6 +351,76 @@ class ExistingFile(BaseFile):
         if not dest.exists():
             errors.fatal("Required existing file doesn't exist: %s" %
                 dest.path)
+
+
+class PreprocessedFile(BaseFile):
+    '''
+    File class for a file that is preprocessed. PreprocessedFile.copy() runs
+    the preprocessor on the file to create the output.
+    '''
+    def __init__(self, path, depfile_path, marker, defines, extra_depends=None):
+        self.path = path
+        self.depfile = depfile_path
+        self.marker = marker
+        self.defines = defines
+        self.extra_depends = list(extra_depends or [])
+
+    def copy(self, dest, skip_if_older=True):
+        '''
+        Invokes the preprocessor to create the destination file.
+        '''
+        if isinstance(dest, basestring):
+            dest = Dest(dest)
+        else:
+            assert isinstance(dest, Dest)
+
+        # We have to account for the case where the destination exists and is a
+        # symlink to something. Since we know the preprocessor is certainly not
+        # going to create a symlink, we can just remove the existing one. If the
+        # destination is not a symlink, we leave it alone, since we're going to
+        # overwrite its contents anyway.
+        # If symlinks aren't supported at all, we can skip this step.
+        if hasattr(os, 'symlink'):
+            if os.path.islink(dest.path):
+                os.remove(dest.path)
+
+        pp_deps = set(self.extra_depends)
+
+        # If a dependency file was specified, and it exists, add any
+        # dependencies from that file to our list.
+        if self.depfile and os.path.exists(self.depfile):
+            target = mozpack.path.normpath(dest.name)
+            with open(self.depfile, 'rb') as fileobj:
+                for rule in makeutil.read_dep_makefile(fileobj):
+                    if target in rule.targets():
+                        pp_deps.update(rule.dependencies())
+
+        skip = False
+        if dest.exists() and skip_if_older:
+            # If a dependency file was specified, and it doesn't exist,
+            # assume that the preprocessor needs to be rerun. That will
+            # regenerate the dependency file.
+            if self.depfile and not os.path.exists(self.depfile):
+                skip = False
+            else:
+                skip = not BaseFile.any_newer(dest.path, pp_deps)
+
+        if skip:
+            return False
+
+        deps_out = None
+        if self.depfile:
+            deps_out = FileAvoidWrite(self.depfile)
+        pp = Preprocessor(defines=self.defines, marker=self.marker)
+
+        with open(self.path, 'rU') as input:
+            pp.processFile(input=input, output=dest, depfile=deps_out)
+
+        dest.close()
+        if self.depfile:
+            deps_out.close()
+
+        return True
 
 
 class GeneratedFile(BaseFile):

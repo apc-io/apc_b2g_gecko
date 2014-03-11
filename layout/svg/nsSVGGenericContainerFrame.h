@@ -31,9 +31,9 @@ public:
   NS_DECL_FRAMEARENA_HELPERS
 
   // nsIFrame:
-  NS_IMETHOD  AttributeChanged(int32_t         aNameSpaceID,
-                               nsIAtom*        aAttribute,
-                               int32_t         aModType) MOZ_OVERRIDE;
+  virtual nsresult  AttributeChanged(int32_t         aNameSpaceID,
+                                     nsIAtom*        aAttribute,
+                                     int32_t         aModType) MOZ_OVERRIDE;
   /**
    * Get the "type" of the frame
    *
@@ -41,8 +41,8 @@ public:
    */
   virtual nsIAtom* GetType() const MOZ_OVERRIDE;
 
-#ifdef DEBUG
-  NS_IMETHOD GetFrameName(nsAString& aResult) const MOZ_OVERRIDE
+#ifdef DEBUG_FRAME_DUMP
+  virtual nsresult GetFrameName(nsAString& aResult) const MOZ_OVERRIDE
   {
     return MakeFrameName(NS_LITERAL_STRING("SVGGenericContainer"), aResult);
   }

@@ -73,8 +73,6 @@ UNIFIED_SOURCES += [
     'src/chrome/common/child_process_host.cc',
     'src/chrome/common/child_process_info.cc',
     'src/chrome/common/child_thread.cc',
-    'src/chrome/common/chrome_counters.cc',
-    'src/chrome/common/chrome_paths.cc',
     'src/chrome/common/chrome_switches.cc',
     'src/chrome/common/debug_flags.cc',
     'src/chrome/common/env_vars.cc',
@@ -96,7 +94,6 @@ if os_win:
         'src/base/debug_util_win.cc',
         'src/base/event_recorder.cc',
         'src/base/file_util_win.cc',
-        'src/base/file_version_info.cc',
         'src/base/idle_timer.cc',
         'src/base/lock_impl_win.cc',
         'src/base/message_pump_win.cc',
@@ -117,8 +114,6 @@ if os_win:
         'src/base/waitable_event_watcher_win.cc',
         'src/base/waitable_event_win.cc',
         'src/base/win_util.cc',
-        'src/chrome/common/chrome_constants.cc',
-        'src/chrome/common/chrome_paths_win.cc',
         'src/chrome/common/ipc_channel_win.cc',
         'src/chrome/common/process_watcher_win.cc',
         'src/chrome/common/transport_dib_win.cc',
@@ -147,6 +142,10 @@ elif not CONFIG['MOZ_NATIVE_LIBEVENT']:
         'src/third_party/libevent/strlcpy.c',
     ]
     DEFINES['HAVE_CONFIG_H'] = True
+    LOCAL_INCLUDES += [
+        'src/third_party/libevent',
+        'src/third_party/libevent/include',
+    ]
 
 if os_posix:
     SOURCES += [
@@ -195,7 +194,6 @@ if os_macosx:
         'src/base/base_paths_mac.mm',
         'src/base/chrome_application_mac.mm',
         'src/base/file_util_mac.mm',
-        'src/base/file_version_info_mac.mm',
         'src/base/mac_util.mm',
         'src/base/message_pump_mac.mm',
         'src/base/platform_thread_mac.mm',
@@ -203,19 +201,18 @@ if os_macosx:
         'src/base/scoped_nsautorelease_pool.mm',
         'src/base/sys_string_conversions_mac.mm',
         'src/base/worker_pool_mac.mm',
-        'src/chrome/common/chrome_paths_mac.mm',
         'src/chrome/common/mach_ipc_mac.mm',
     ]
     if not CONFIG['MOZ_NATIVE_LIBEVENT']:
         UNIFIED_SOURCES += [
             'src/third_party/libevent/kqueue.c',
         ]
+        LOCAL_INCLUDES += ['src/third_party/libevent/mac']
 
 if os_linux:
     SOURCES += [
         'src/base/atomicops_internals_x86_gcc.cc',
         'src/base/base_paths_linux.cc',
-        'src/base/file_version_info_linux.cc',
         'src/base/idle_timer_none.cc',
         'src/base/process_util_linux.cc',
         'src/base/time_posix.cc',
@@ -229,7 +226,7 @@ if os_linux:
             'src/base/message_pump_qt.cc',
         ]
         GENERATED_SOURCES += [
-            'src/base/moc_message_pump_qt.cc',
+            'moc_message_pump_qt.cc',
         ]
     if not CONFIG['MOZ_NATIVE_LIBEVENT']:
         if CONFIG['OS_TARGET'] != 'Android':
@@ -239,6 +236,10 @@ if os_linux:
         SOURCES += [
             'src/third_party/libevent/epoll.c',
         ]
+        if CONFIG['OS_TARGET'] == 'Android':
+            LOCAL_INCLUDES += ['src/third_party/libevent/android']
+        else:
+            LOCAL_INCLUDES += ['src/third_party/libevent/linux']
 
 if os_bsd:
     SOURCES += [
@@ -262,14 +263,13 @@ if os_bsd:
             'src/base/message_pump_qt.cc',
         ]
         GENERATED_SOURCES += [
-            'src/base/moc_message_pump_qt.cc',
+            'moc_message_pump_qt.cc',
         ]
     if not CONFIG['MOZ_NATIVE_LIBEVENT']:
         SOURCES += [
             'src/third_party/libevent/kqueue.c',
         ]
-        if not os_freebsd and not os_dragonfly:
-            DEFINES['_EVENT_HAVE_SENDFILE'] = True
+        LOCAL_INCLUDES += ['src/third_party/libevent/bsd']
 
 if CONFIG['_MSC_VER']:
     SOURCES += [

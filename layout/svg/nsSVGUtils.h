@@ -42,7 +42,6 @@ class nsStyleCoord;
 class nsSVGDisplayContainerFrame;
 class nsSVGElement;
 class nsSVGEnum;
-class nsSVGGeometryFrame;
 class nsSVGLength2;
 class nsSVGOuterSVGFrame;
 class nsSVGPathGeometryFrame;
@@ -65,66 +64,6 @@ namespace gfx {
 class SourceSurface;
 }
 } // namespace mozilla
-
-// SVG Frame state bits
-#define NS_STATE_IS_OUTER_SVG                    NS_FRAME_STATE_BIT(20)
-
-// If this bit is set, we are a <clipPath> element or descendant.
-#define NS_STATE_SVG_CLIPPATH_CHILD              NS_FRAME_STATE_BIT(21)
-
-/**
- * For text, the NS_FRAME_IS_DIRTY and NS_FRAME_HAS_DIRTY_CHILDREN bits indicate
- * that our anonymous block child needs to be reflowed, and that mPositions
- * will likely need to be updated as a consequence. These are set, for
- * example, when the font-family changes. Sometimes we only need to
- * update mPositions though. For example if the x/y attributes change.
- * mPositioningDirty is used to indicate this latter "things are dirty" case
- * to allow us to avoid reflowing the anonymous block when it is not
- * necessary.
- */
-#define NS_STATE_SVG_POSITIONING_DIRTY           NS_FRAME_STATE_BIT(22)
-
-/**
- * For text, whether the values from x/y/dx/dy attributes have any percentage values
- * that are used in determining the positions of glyphs.  The value will
- * be true even if a positioning value is overridden by a descendant element's
- * attribute with a non-percentage length.  For example,
- * NS_STATE_SVG_POSITIONING_MAY_USE_PERCENTAGES would be set for:
- *
- *   <text x="10%"><tspan x="0">abc</tspan></text>
- *
- * Percentage values beyond the number of addressable characters, however, do
- * not influence NS_STATE_SVG_POSITIONING_MAY_USE_PERCENTAGES.  For example,
- * NS_STATE_SVG_POSITIONING_MAY_USE_PERCENTAGES would be false for:
- *
- *   <text x="10 20 30 40%">abc</text>
- *
- * NS_STATE_SVG_POSITIONING_MAY_USE_PERCENTAGES is used to determine whether
- * to recompute mPositions when the viewport size changes.  So although the 
- * first example above shows that NS_STATE_SVG_POSITIONING_MAY_USE_PERCENTAGES
- * can be true even if a viewport size change will not affect mPositions,
- * determining a completley accurate value for
- * NS_STATE_SVG_POSITIONING_MAY_USE_PERCENTAGES would require extra work that is
- * probably not worth it.
- */
-#define NS_STATE_SVG_POSITIONING_MAY_USE_PERCENTAGES NS_FRAME_STATE_BIT(23)
-
-#define NS_STATE_SVG_TEXT_IN_REFLOW              NS_FRAME_STATE_BIT(24)
-
-/**
- * Byte offsets of channels in a native packed gfxColor or cairo image surface.
- */
-#ifdef IS_BIG_ENDIAN
-#define GFX_ARGB32_OFFSET_A 0
-#define GFX_ARGB32_OFFSET_R 1
-#define GFX_ARGB32_OFFSET_G 2
-#define GFX_ARGB32_OFFSET_B 3
-#else
-#define GFX_ARGB32_OFFSET_A 3
-#define GFX_ARGB32_OFFSET_R 2
-#define GFX_ARGB32_OFFSET_G 1
-#define GFX_ARGB32_OFFSET_B 0
-#endif
 
 // maximum dimension of an offscreen surface - choose so that
 // the surface size doesn't overflow a 32-bit signed int using
@@ -204,7 +143,8 @@ public:
     CLIP_MASK 
   };
 
-  SVGAutoRenderState(nsRenderingContext *aContext, RenderMode aMode);
+  SVGAutoRenderState(nsRenderingContext *aContext, RenderMode aMode
+                     MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
   ~SVGAutoRenderState();
 
   void SetPaintingToWindow(bool aPaintingToWindow);
@@ -217,21 +157,22 @@ private:
   void *mOriginalRenderState;
   RenderMode mMode;
   bool mPaintingToWindow;
+  MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
 
-#define NS_ISVGFILTERPROPERTY_IID \
+#define NS_ISVGFILTERREFERENCE_IID \
 { 0x9744ee20, 0x1bcf, 0x4c62, \
  { 0x86, 0x7d, 0xd3, 0x7a, 0x91, 0x60, 0x3e, 0xef } }
 
-class nsISVGFilterProperty : public nsISupports
+class nsISVGFilterReference : public nsISupports
 {
 public:
-  NS_DECLARE_STATIC_IID_ACCESSOR(NS_ISVGFILTERPROPERTY_IID)
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_ISVGFILTERREFERENCE_IID)
   virtual void Invalidate() = 0;
 };
 
-NS_DEFINE_STATIC_IID_ACCESSOR(nsISVGFilterProperty, NS_ISVGFILTERPROPERTY_IID)
+NS_DEFINE_STATIC_IID_ACCESSOR(nsISVGFilterReference, NS_ISVGFILTERREFERENCE_IID)
 
 /**
  * General functions used by all of SVG layout and possibly content code.
@@ -244,55 +185,6 @@ public:
   typedef mozilla::dom::Element Element;
 
   static void Init();
-
-  /*
-   * Converts image data from premultipled to unpremultiplied alpha
-   */
-  static void UnPremultiplyImageDataAlpha(uint8_t *data, 
-                                          int32_t stride, 
-                                          const nsIntRect &rect);
-  /*
-   * Converts image data from unpremultipled to premultiplied alpha
-   */
-  static void PremultiplyImageDataAlpha(uint8_t *data, 
-                                        int32_t stride, 
-                                        const nsIntRect &rect);
-  /*
-   * Converts image data from premultiplied sRGB to Linear RGB
-   */
-  static void ConvertImageDataToLinearRGB(uint8_t *data, 
-                                          int32_t stride, 
-                                          const nsIntRect &rect);
-  /*
-   * Converts image data from LinearRGB to premultiplied sRGB
-   */
-  static void ConvertImageDataFromLinearRGB(uint8_t *data, 
-                                            int32_t stride, 
-                                            const nsIntRect &rect);
-
-  /*
-   * Converts image data from sRGB to luminance
-   */
-  static void ComputesRGBLuminanceMask(uint8_t *aData,
-                                       int32_t aStride,
-                                       const nsIntRect &aRect,
-                                       float aOpacity);
-
-  /*
-   * Converts image data from sRGB to luminance assuming
-   * Linear RGB Interpolation
-   */
-  static void ComputeLinearRGBLuminanceMask(uint8_t *aData,
-                                            int32_t aStride,
-                                            const nsIntRect &aRect,
-                                            float aOpacity);
-  /*
-   * Converts image data to luminance using the value of alpha as luminance
-   */
-  static void ComputeAlphaMask(uint8_t *aData,
-                               int32_t aStride,
-                               const nsIntRect &aRect,
-                               float aOpacity);
 
   /**
    * Gets the nearest nsSVGInnerSVGFrame or nsSVGOuterSVGFrame frame. aFrame
@@ -460,7 +352,7 @@ public:
    * Hit test a given rectangle/matrix.
    */
   static bool
-  HitTestRect(const gfxMatrix &aMatrix,
+  HitTestRect(const mozilla::gfx::Matrix &aMatrix,
               float aRX, float aRY, float aRWidth, float aRHeight,
               float aX, float aY);
 
@@ -476,29 +368,9 @@ public:
   GetClipRectForFrame(nsIFrame *aFrame,
                       float aX, float aY, float aWidth, float aHeight);
 
-  /**
-   * Composites a surface into a context with a given surface offset and an
-   * additional transform. Supports both Thebes and DrawTarget drawing.
-   * If aSurface is null, aSourceSurface will be used instead.
-   */
-  static void CompositeSurfaceMatrix(gfxContext *aContext,
-                                     gfxASurface *aSurface,
-                                     mozilla::gfx::SourceSurface *aSourceSurface,
-                                     const gfxPoint &aSurfaceOffset,
-                                     const gfxMatrix &aCTM);
-
-  static void CompositePatternMatrix(gfxContext *aContext,
-                                     gfxPattern *aPattern,
-                                     const gfxMatrix &aCTM, float aWidth, float aHeight, float aOpacity);
-
   static void SetClipRect(gfxContext *aContext,
                           const gfxMatrix &aCTM,
                           const gfxRect &aRect);
-
-  /**
-   * Restricts aRect to pixels that intersect aGfxRect.
-   */
-  static void ClipToGfxRect(nsIntRect* aRect, const gfxRect& aGfxRect);
 
   /* Using group opacity instead of fill or stroke opacity on a
    * geometry object seems to be a common authoring mistake.  If we're
@@ -578,9 +450,6 @@ public:
    *
    * This should die once bug 478152 is fixed.
    */
-  static gfxRect PathExtentsToMaxStrokeExtents(const gfxRect& aPathExtents,
-                                               nsSVGGeometryFrame* aFrame,
-                                               const gfxMatrix& aMatrix);
   static gfxRect PathExtentsToMaxStrokeExtents(const gfxRect& aPathExtents,
                                                nsTextFrame* aFrame,
                                                const gfxMatrix& aMatrix);

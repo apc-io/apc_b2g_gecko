@@ -15,6 +15,8 @@ using namespace Microsoft::WRL;
 class ToastNotificationHandler {
     typedef ABI::Windows::UI::Notifications::IToastNotification IToastNotification;
     typedef ABI::Windows::UI::Notifications::IToastDismissedEventArgs IToastDismissedEventArgs;
+    typedef ABI::Windows::UI::Notifications::IToastNotificationManagerStatics IToastNotificationManagerStatics;
+    typedef ABI::Windows::UI::Notifications::ToastTemplateType ToastTemplateType;
     typedef ABI::Windows::Data::Xml::Dom::IXmlNode IXmlNode;
     typedef ABI::Windows::Data::Xml::Dom::IXmlDocument IXmlDocument;
 
@@ -23,11 +25,20 @@ class ToastNotificationHandler {
     ToastNotificationHandler() {};
     ~ToastNotificationHandler() {};
 
-    void DisplayNotification(HSTRING title, HSTRING msg, HSTRING imagePath, const nsAString& aCookie);
+    bool DisplayNotification(HSTRING title, HSTRING msg, HSTRING imagePath,
+                             const nsAString& aCookie, const nsAString& aAppId);
+    bool DisplayTextNotification(HSTRING title, HSTRING msg,
+                                 const nsAString& aCookie,
+                                 const nsAString& aAppId);
     HRESULT OnActivate(IToastNotification *notification, IInspectable *inspectable);
     HRESULT OnDismiss(IToastNotification *notification,
                       IToastDismissedEventArgs* aArgs);
 
   private:
     nsString mCookie;
+    ComPtr<IToastNotificationManagerStatics> mToastNotificationManagerStatics;
+
+    bool CreateWindowsNotificationFromXml(IXmlDocument *toastXml,
+                                          const nsAString& aAppId);
+    ComPtr<IXmlDocument> InitializeXmlForTemplate(ToastTemplateType templateType);
 };

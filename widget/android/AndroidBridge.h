@@ -124,7 +124,7 @@ class AndroidBridge MOZ_FINAL : public mozilla::layers::GeckoContentController
 public:
     enum {
         // Values for NotifyIME, in addition to values from the Gecko
-        // NotificationToIME enum; use negative values here to prevent conflict
+        // IMEMessage enum; use negative values here to prevent conflict
         NOTIFY_IME_OPEN_VKB = -2,
         NOTIFY_IME_REPLY_EVENT = -1,
     };
@@ -141,24 +141,49 @@ public:
     }
 
     static JavaVM *GetVM() {
-        if (MOZ_LIKELY(sBridge))
-            return sBridge->mJavaVM;
-        return nullptr;
+        MOZ_ASSERT(sBridge);
+        return sBridge->mJavaVM;
     }
 
-    static JNIEnv *GetJNIEnv() {
-        if (MOZ_LIKELY(sBridge)) {
-            if (!pthread_equal(pthread_self(), sBridge->mThread)) {
-                __android_log_print(ANDROID_LOG_INFO, "AndroidBridge",
-                                    "###!!!!!!! Something's grabbing the JNIEnv from the wrong thread! (thr %p should be %p)",
-                                    (void*)pthread_self(), (void*)sBridge->mThread);
-                MOZ_ASSERT(false, "###!!!!!!! Something's grabbing the JNIEnv from the wrong thread!");
-                return nullptr;
-            }
-            return sBridge->mJNIEnv;
 
+    static JNIEnv *GetJNIEnv() {
+        MOZ_ASSERT(sBridge);
+        if (MOZ_UNLIKELY(!pthread_equal(pthread_self(), sBridge->mThread))) {
+            MOZ_CRASH();
         }
-        return nullptr;
+        MOZ_ASSERT(sBridge->mJNIEnv);
+        return sBridge->mJNIEnv;
+    }
+
+    static bool HasEnv() {
+        return sBridge && sBridge->mJNIEnv;
+    }
+
+    static bool ThrowException(JNIEnv *aEnv, const char *aClass,
+                               const char *aMessage) {
+        MOZ_ASSERT(aEnv, "Invalid thread JNI env");
+        jclass cls = aEnv->FindClass(aClass);
+        MOZ_ASSERT(cls, "Cannot find exception class");
+        bool ret = !aEnv->ThrowNew(cls, aMessage);
+        aEnv->DeleteLocalRef(cls);
+        return ret;
+    }
+
+    static bool ThrowException(JNIEnv *aEnv, const char *aMessage) {
+        return ThrowException(aEnv, "java/lang/Exception", aMessage);
+    }
+
+    static void HandleUncaughtException(JNIEnv *aEnv) {
+        MOZ_ASSERT(aEnv);
+        if (!aEnv->ExceptionCheck()) {
+            return;
+        }
+        jthrowable e = aEnv->ExceptionOccurred();
+        MOZ_ASSERT(e);
+        aEnv->ExceptionClear();
+        GeckoAppShell::HandleUncaughtException(nullptr, e);
+        // Should be dead by now...
+        MOZ_CRASH("Failed to handle uncaught exception");
     }
 
     // The bridge needs to be constructed via ConstructBridge first,
@@ -257,7 +282,7 @@ public:
     bool LockWindow(void *window, unsigned char **bits, int *width, int *height, int *format, int *stride);
     bool UnlockWindow(void *window);
     
-    void HandleGeckoMessage(const nsAString& message, nsAString &aRet);
+    void HandleGeckoMessage(const nsAString& message);
 
     bool InitCamera(const nsCString& contentType, uint32_t camera, uint32_t *width, uint32_t *height, uint32_t *fps);
 
@@ -305,12 +330,12 @@ public:
                             nsACString & aResult);
 
     // Utility methods.
-    static jstring NewJavaString(JNIEnv* env, const PRUnichar* string, uint32_t len);
+    static jstring NewJavaString(JNIEnv* env, const char16_t* string, uint32_t len);
     static jstring NewJavaString(JNIEnv* env, const nsAString& string);
     static jstring NewJavaString(JNIEnv* env, const char* string);
     static jstring NewJavaString(JNIEnv* env, const nsACString& string);
 
-    static jstring NewJavaString(AutoLocalJNIFrame* frame, const PRUnichar* string, uint32_t len);
+    static jstring NewJavaString(AutoLocalJNIFrame* frame, const char16_t* string, uint32_t len);
     static jstring NewJavaString(AutoLocalJNIFrame* frame, const nsAString& string);
     static jstring NewJavaString(AutoLocalJNIFrame* frame, const char* string);
     static jstring NewJavaString(AutoLocalJNIFrame* frame, const nsACString& string);
@@ -406,10 +431,20 @@ public:
     NativePanZoomController* SetNativePanZoomController(jobject obj);
     // GeckoContentController methods
     void RequestContentRepaint(const mozilla::layers::FrameMetrics& aFrameMetrics) MOZ_OVERRIDE;
-    void HandleDoubleTap(const CSSIntPoint& aPoint, int32_t aModifiers) MOZ_OVERRIDE;
-    void HandleSingleTap(const CSSIntPoint& aPoint, int32_t aModifiers) MOZ_OVERRIDE;
-    void HandleLongTap(const CSSIntPoint& aPoint, int32_t aModifiers) MOZ_OVERRIDE;
-    void HandleLongTapUp(const CSSIntPoint& aPoint, int32_t aModifiers) MOZ_OVERRIDE;
+    void AcknowledgeScrollUpdate(const mozilla::layers::FrameMetrics::ViewID& aScrollId,
+                                 const uint32_t& aScrollGeneration) MOZ_OVERRIDE;
+    void HandleDoubleTap(const CSSIntPoint& aPoint,
+                         int32_t aModifiers,
+                         const mozilla::layers::ScrollableLayerGuid& aGuid) MOZ_OVERRIDE;
+    void HandleSingleTap(const CSSIntPoint& aPoint,
+                         int32_t aModifiers,
+                         const mozilla::layers::ScrollableLayerGuid& aGuid) MOZ_OVERRIDE;
+    void HandleLongTap(const CSSIntPoint& aPoint,
+                       int32_t aModifiers,
+                       const mozilla::layers::ScrollableLayerGuid& aGuid) MOZ_OVERRIDE;
+    void HandleLongTapUp(const CSSIntPoint& aPoint,
+                         int32_t aModifiers,
+                         const mozilla::layers::ScrollableLayerGuid& aGuid) MOZ_OVERRIDE;
     void SendAsyncScrollDOMEvent(bool aIsRoot,
                                  const CSSRect& aContentRect,
                                  const CSSSize& aScrollableSize) MOZ_OVERRIDE;

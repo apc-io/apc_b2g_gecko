@@ -69,16 +69,6 @@
 //#define NSCAP_FEATURE_TEST_NONNULL_QUERY_SUCCEEDS
 #endif
 
-  /*
-    |...TEST_DONTQUERY_CASES| and |...DEBUG_PTR_TYPES| introduce some code that is 
-    problematic on a select few of our platforms, e.g., QNX.  Therefore, I'm providing
-    a mechanism by which these features can be explicitly disabled from the command-line.
-  */
-
-#ifdef NSCAP_DISABLE_TEST_DONTQUERY_CASES
-  #undef NSCAP_FEATURE_TEST_DONTQUERY_CASES
-#endif
-
 #ifdef __GNUC__
   // Our use of nsCOMPtr_base::mRawPtr violates the C++ standard's aliasing
   // rules. Mark it with the may_alias attribute so that gcc 3.3 and higher
@@ -99,7 +89,7 @@
     The following three macros (|NSCAP_ADDREF|, |NSCAP_RELEASE|, and |NSCAP_LOG_ASSIGNMENT|)
       allow external clients the ability to add logging or other interesting debug facilities.
       In fact, if you want |nsCOMPtr| to participate in the standard logging facility, you
-      provide (e.g., in "nsTraceRefcnt.h") suitable definitions
+      provide (e.g., in "nsISupportsImpl.h") suitable definitions
 
         #define NSCAP_ADDREF(this, ptr)         NS_ADDREF(ptr)
         #define NSCAP_RELEASE(this, ptr)        NS_RELEASE(ptr)
@@ -146,22 +136,25 @@ struct already_AddRefed
       |nsCOMPtr_helper|.
     */
   {
-#ifdef MOZ_HAVE_CXX11_NULLPTR
-    /* We use decltype(nullptr) instead of std::nullptr_t because the standard
-     * library might be old, and to save including <cstddef>.  All compilers
-     * that support nullptr seem to support decltype. */
-    already_AddRefed(decltype(nullptr) aNullPtr)
+    /*
+     * Prohibit all one-argument overloads but already_AddRefed(T*) and
+     * already_AddRefed(decltype(nullptr)), and funnel the nullptr case through
+     * the T* constructor.
+     */
+    template<typename N>
+    already_AddRefed(N,
+                     typename mozilla::EnableIf<mozilla::IsNullPointer<N>::value,
+                                                int>::Type dummy = 0)
       : mRawPtr(nullptr)
     {
+      // nothing else to do here
     }
 
-    explicit
-#endif
     already_AddRefed( T* aRawPtr )
-        : mRawPtr(aRawPtr)
-      {
-        // nothing else to do here
-      }
+      : mRawPtr(aRawPtr)
+    {
+      // nothing else to do here
+    }
 
     T* get() const { return mRawPtr; }
 

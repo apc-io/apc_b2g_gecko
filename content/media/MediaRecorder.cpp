@@ -86,7 +86,7 @@ class MediaRecorder::Session: public nsIObserver
       if (mSession->IsEncoderError()) {
         recorder->NotifyError(NS_ERROR_UNEXPECTED);
       }
-      nsresult rv = recorder->CreateAndDispatchBlobEvent(mSession);
+      nsresult rv = recorder->CreateAndDispatchBlobEvent(mSession->GetEncodedData());
       if (NS_FAILED(rv)) {
         recorder->NotifyError(rv);
       }
@@ -97,7 +97,7 @@ class MediaRecorder::Session: public nsIObserver
     nsRefPtr<Session> mSession;
   };
 
-  // Record thread task.
+  // Record thread task and it run in Media Encoder thread.
   // Fetch encoded Audio/Video data from MediaEncoder.
   class ExtractRunnable : public nsRunnable
   {
@@ -110,11 +110,19 @@ class MediaRecorder::Session: public nsIObserver
       MOZ_ASSERT(NS_GetCurrentThread() == mSession->mReadThread);
 
       mSession->Extract();
+      if (!mSession->mEncoder->IsShutdown()) {
+        NS_DispatchToCurrentThread(new ExtractRunnable(mSession));
+      } else {
+        // Flush out remainding encoded data.
+        NS_DispatchToMainThread(new PushBlobRunnable(mSession));
+        // Destroy this Session object in main thread.
+        NS_DispatchToMainThread(new DestroyRunnable(already_AddRefed<Session>(mSession)));
+      }
       return NS_OK;
     }
 
   private:
-    nsRefPtr<Session> mSession;
+    Session* mSession;
   };
 
   // For Ensure recorder has tracks to record.
@@ -164,7 +172,8 @@ class MediaRecorder::Session: public nsIObserver
       // We need to switch MediaRecorder to "Stop" state first to make sure
       // MediaRecorder is not associated with this Session anymore, then, it's
       // safe to delete this Session.
-      if (recorder->mState != RecordingState::Inactive) {
+      // Also avoid to run if this session already call stop before
+      if (!mSession->mStopIssued) {
         ErrorResult result;
         recorder->Stop(result);
         NS_DispatchToMainThread(new DestroyRunnable(mSession.forget()));
@@ -174,8 +183,8 @@ class MediaRecorder::Session: public nsIObserver
 
       // Dispatch stop event and clear MIME type.
       recorder->DispatchSimpleEvent(NS_LITERAL_STRING("stop"));
-      recorder->SetMimeType(NS_LITERAL_STRING(""));
-
+      mSession->mMimeType = NS_LITERAL_STRING("");
+      recorder->SetMimeType(mSession->mMimeType);
       return NS_OK;
     }
 
@@ -192,12 +201,14 @@ class MediaRecorder::Session: public nsIObserver
 public:
   Session(MediaRecorder* aRecorder, int32_t aTimeSlice)
     : mRecorder(aRecorder),
-      mTimeSlice(aTimeSlice)
+      mTimeSlice(aTimeSlice),
+      mStopIssued(false)
   {
     MOZ_ASSERT(NS_IsMainThread());
 
     AddRef();
     mEncodedBufferCache = new EncodedBufferCache(MAX_ALLOW_MEMORY_BUFFER);
+    mLastBlobTimeStamp = TimeStamp::Now();
   }
 
   // Only DestroyRunnable is allowed to delete Session object.
@@ -217,30 +228,34 @@ public:
   {
     MOZ_ASSERT(NS_IsMainThread());
 
+    mStopIssued = true;
     CleanupStreams();
     nsContentUtils::UnregisterShutdownObserver(this);
   }
 
-  void Pause()
+  nsresult Pause()
   {
-    MOZ_ASSERT(NS_IsMainThread() && mTrackUnionStream);
+    MOZ_ASSERT(NS_IsMainThread());
 
+    NS_ENSURE_TRUE(mTrackUnionStream, NS_ERROR_FAILURE);
     mTrackUnionStream->ChangeExplicitBlockerCount(-1);
+
+    return NS_OK;
   }
 
-  void Resume()
+  nsresult Resume()
   {
-    MOZ_ASSERT(NS_IsMainThread() && mTrackUnionStream);
+    MOZ_ASSERT(NS_IsMainThread());
 
+    NS_ENSURE_TRUE(mTrackUnionStream, NS_ERROR_FAILURE);
     mTrackUnionStream->ChangeExplicitBlockerCount(1);
+
+    return NS_OK;
   }
 
   already_AddRefed<nsIDOMBlob> GetEncodedData()
   {
-    nsString mimeType;
-    mRecorder->GetMimeType(mimeType);
-
-    return mEncodedBufferCache->ExtractBlob(mimeType);
+    return mEncodedBufferCache->ExtractBlob(mMimeType);
   }
 
   bool IsEncoderError()
@@ -258,36 +273,25 @@ private:
   {
     MOZ_ASSERT(NS_GetCurrentThread() == mReadThread);
 
-    TimeStamp lastBlobTimeStamp = TimeStamp::Now();
     // Whether push encoded data back to onDataAvailable automatically.
     const bool pushBlob = (mTimeSlice > 0) ? true : false;
 
-    do {
-      // Pull encoded media data from MediaEncoder
-      nsTArray<nsTArray<uint8_t> > encodedBuf;
-      nsString mimeType;
-      mEncoder->GetEncodedData(&encodedBuf, mimeType);
+    // Pull encoded media data from MediaEncoder
+    nsTArray<nsTArray<uint8_t> > encodedBuf;
+    mEncoder->GetEncodedData(&encodedBuf, mMimeType);
+    mRecorder->SetMimeType(mMimeType);
 
-      mRecorder->SetMimeType(mimeType);
+    // Append pulled data into cache buffer.
+    for (uint32_t i = 0; i < encodedBuf.Length(); i++) {
+      mEncodedBufferCache->AppendBuffer(encodedBuf[i]);
+    }
 
-      // Append pulled data into cache buffer.
-      for (uint32_t i = 0; i < encodedBuf.Length(); i++) {
-        mEncodedBufferCache->AppendBuffer(encodedBuf[i]);
+    if (pushBlob) {
+      if ((TimeStamp::Now() - mLastBlobTimeStamp).ToMilliseconds() > mTimeSlice) {
+        NS_DispatchToMainThread(new PushBlobRunnable(this));
+        mLastBlobTimeStamp = TimeStamp::Now();
       }
-
-      if (pushBlob) {
-        if ((TimeStamp::Now() - lastBlobTimeStamp).ToMilliseconds() > mTimeSlice) {
-          NS_DispatchToMainThread(new PushBlobRunnable(this));
-          lastBlobTimeStamp = TimeStamp::Now();
-        }
-      }
-    } while (!mEncoder->IsShutdown());
-
-    // Flush out remainding encoded data.
-    NS_DispatchToMainThread(new PushBlobRunnable(this));
-
-    // Destroy this session object in main thread.
-    NS_DispatchToMainThread(new DestroyRunnable(already_AddRefed<Session>(this)));
+    }
   }
 
   // Bind media source with MediaEncoder to receive raw media data.
@@ -323,8 +327,10 @@ private:
       return;
     }
 
-    // media stream is ready but has been issued stop command
-    if (mRecorder->mState == RecordingState::Inactive) {
+    // Media stream is ready but UA issues a stop method follow by start method.
+    // The Session::stop would clean the mTrackUnionStream. If the AfterTracksAdded
+    // comes after stop command, this function would crash.
+    if (!mTrackUnionStream) {
       DoSessionEndTask(NS_OK);
       return;
     }
@@ -370,7 +376,7 @@ private:
     }
   }
 
-  NS_IMETHODIMP Observe(nsISupports *aSubject, const char *aTopic, const PRUnichar *aData)
+  NS_IMETHODIMP Observe(nsISupports *aSubject, const char *aTopic, const char16_t *aData)
   {
     MOZ_ASSERT(NS_IsMainThread());
 
@@ -398,11 +404,17 @@ private:
   nsRefPtr<MediaEncoder> mEncoder;
   // A buffer to cache encoded meda data.
   nsAutoPtr<EncodedBufferCache> mEncodedBufferCache;
+  // Current session mimeType
+  nsString mMimeType;
+  // Timestamp of the last fired dataavailable event.
+  TimeStamp mLastBlobTimeStamp;
   // The interval of passing encoded data from EncodedBufferCache to onDataAvailable
   // handler. "mTimeSlice < 0" means Session object does not push encoded data to
   // onDataAvailable, instead, it passive wait the client side pull encoded data
   // by calling requestData API.
   const int32_t mTimeSlice;
+  // Indicate this session's stop has been called.
+  bool mStopIssued;
 };
 
 NS_IMPL_ISUPPORTS1(MediaRecorder::Session, nsIObserver)
@@ -412,21 +424,15 @@ MediaRecorder::~MediaRecorder()
   MOZ_ASSERT(mSession == nullptr);
 }
 
-void
-MediaRecorder::Init(nsPIDOMWindow* aOwnerWindow)
-{
-  MOZ_ASSERT(aOwnerWindow);
-  MOZ_ASSERT(aOwnerWindow->IsInnerWindow());
-  BindToOwner(aOwnerWindow);
-}
-
-MediaRecorder::MediaRecorder(DOMMediaStream& aStream)
-  : mState(RecordingState::Inactive),
+MediaRecorder::MediaRecorder(DOMMediaStream& aStream, nsPIDOMWindow* aOwnerWindow)
+  : nsDOMEventTargetHelper(aOwnerWindow),
+    mState(RecordingState::Inactive),
     mSession(nullptr),
     mMutex("Session.Data.Mutex")
 {
+  MOZ_ASSERT(aOwnerWindow);
+  MOZ_ASSERT(aOwnerWindow->IsInnerWindow());
   mStream = &aStream;
-  SetIsDOMBinding();
 }
 
 void
@@ -503,11 +509,13 @@ MediaRecorder::Pause(ErrorResult& aResult)
     return;
   }
 
-  mState = RecordingState::Paused;
-
   MOZ_ASSERT(mSession != nullptr);
   if (mSession) {
-    mSession->Pause();
+    nsresult rv = mSession->Pause();
+    if (NS_FAILED(rv)) {
+      NotifyError(rv);
+      return;
+    }
     mState = RecordingState::Paused;
   }
 }
@@ -522,7 +530,11 @@ MediaRecorder::Resume(ErrorResult& aResult)
 
   MOZ_ASSERT(mSession != nullptr);
   if (mSession) {
-    mSession->Resume();
+    nsresult rv = mSession->Resume();
+    if (NS_FAILED(rv)) {
+      NotifyError(rv);
+      return;
+    }
     mState = RecordingState::Recording;
   }
 }
@@ -536,8 +548,8 @@ MediaRecorder::RequestData(ErrorResult& aResult)
   }
 
   NS_DispatchToMainThread(
-    NS_NewRunnableMethodWithArg<Session *>(this,
-                                           &MediaRecorder::CreateAndDispatchBlobEvent, mSession),
+    NS_NewRunnableMethodWithArg<const already_AddRefed<nsIDOMBlob> >(this,
+      &MediaRecorder::CreateAndDispatchBlobEvent, mSession->GetEncodedData()),
     NS_DISPATCH_NORMAL);
 }
 
@@ -563,13 +575,12 @@ MediaRecorder::Constructor(const GlobalObject& aGlobal,
     return nullptr;
   }
 
-  nsRefPtr<MediaRecorder> object = new MediaRecorder(aStream);
-  object->Init(ownerWindow);
+  nsRefPtr<MediaRecorder> object = new MediaRecorder(aStream, ownerWindow);
   return object.forget();
 }
 
 nsresult
-MediaRecorder::CreateAndDispatchBlobEvent(Session *aSession)
+MediaRecorder::CreateAndDispatchBlobEvent(const already_AddRefed<nsIDOMBlob> &aBlob)
 {
   NS_ABORT_IF_FALSE(NS_IsMainThread(), "Not running on main thread");
 
@@ -581,7 +592,7 @@ MediaRecorder::CreateAndDispatchBlobEvent(Session *aSession)
   BlobEventInit init;
   init.mBubbles = false;
   init.mCancelable = false;
-  init.mData = aSession->GetEncodedData();
+  init.mData = aBlob;
   nsRefPtr<BlobEvent> event =
     BlobEvent::Constructor(this,
                            NS_LITERAL_STRING("dataavailable"),

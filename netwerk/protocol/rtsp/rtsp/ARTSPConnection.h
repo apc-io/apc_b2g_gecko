@@ -73,6 +73,7 @@ private:
     };
 
     static const int64_t kSelectTimeoutUs;
+    static const int64_t kSelectTimeoutRetries;
 
     bool mUIDValid;
     uid_t mUID;
@@ -84,6 +85,7 @@ private:
     int32_t mConnectionID;
     int32_t mNextCSeq;
     bool mReceiveResponseEventPending;
+    int64_t mNumSelectTimeoutRetries;
 
     KeyedVector<int32_t, sp<AMessage> > mPendingRequests;
 
@@ -100,10 +102,10 @@ private:
     void onReceiveResponse();
 
     void flushPendingRequests();
-    void postReceiveReponseEvent();
+    void postReceiveResponseEvent();
 
     // Return false iff something went unrecoverably wrong.
-    bool receiveRTSPReponse();
+    bool receiveRTSPResponse();
     status_t receive(void *data, size_t size);
     bool receiveLine(AString *line);
     sp<ABuffer> receiveBinaryData();

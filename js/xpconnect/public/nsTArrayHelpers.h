@@ -17,7 +17,7 @@ nsTArrayToJSArray(JSContext* aCx, const nsTArray<T>& aSourceArray,
   MOZ_ASSERT(aCx);
 
   JS::Rooted<JSObject*> arrayObj(aCx,
-    JS_NewArrayObject(aCx, aSourceArray.Length(), nullptr));
+    JS_NewArrayObject(aCx, aSourceArray.Length()));
   if (!arrayObj) {
     NS_WARNING("JS_NewArrayObject failed!");
     return NS_ERROR_OUT_OF_MEMORY;
@@ -32,11 +32,10 @@ nsTArrayToJSArray(JSContext* aCx, const nsTArray<T>& aSourceArray,
     NS_ENSURE_SUCCESS(rv, rv);
 
     JS::RootedValue wrappedVal(aCx);
-    rv = nsContentUtils::WrapNative(aCx, global, obj, &wrappedVal,
-                                    nullptr, true);
+    rv = nsContentUtils::WrapNative(aCx, global, obj, &wrappedVal);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    if (!JS_SetElement(aCx, arrayObj, index, &wrappedVal)) {
+    if (!JS_SetElement(aCx, arrayObj, index, wrappedVal)) {
       NS_WARNING("JS_SetElement failed!");
       return NS_ERROR_FAILURE;
     }
@@ -60,24 +59,23 @@ nsTArrayToJSArray<nsString>(JSContext* aCx,
   MOZ_ASSERT(aCx);
 
   JS::Rooted<JSObject*> arrayObj(aCx,
-    JS_NewArrayObject(aCx, aSourceArray.Length(), nullptr));
+    JS_NewArrayObject(aCx, aSourceArray.Length()));
   if (!arrayObj) {
     NS_WARNING("JS_NewArrayObject failed!");
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
+  JS::Rooted<JSString*> s(aCx);
   for (uint32_t index = 0; index < aSourceArray.Length(); index++) {
-    JSString* s = JS_NewUCStringCopyN(aCx, aSourceArray[index].BeginReading(),
-                                      aSourceArray[index].Length());
+    s = JS_NewUCStringCopyN(aCx, aSourceArray[index].BeginReading(),
+                            aSourceArray[index].Length());
 
     if(!s) {
       NS_WARNING("Memory allocation error!");
       return NS_ERROR_OUT_OF_MEMORY;
     }
 
-    JS::Rooted<JS::Value> wrappedVal(aCx, STRING_TO_JSVAL(s));
-
-    if (!JS_SetElement(aCx, arrayObj, index, &wrappedVal)) {
+    if (!JS_SetElement(aCx, arrayObj, index, s)) {
       NS_WARNING("JS_SetElement failed!");
       return NS_ERROR_FAILURE;
     }

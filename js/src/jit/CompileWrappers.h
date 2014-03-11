@@ -34,8 +34,8 @@ class CompileRuntime
     // &mainThread.ionTop
     const void *addressOfIonTop();
 
-    // rt->mainThread.ionStackLimit;
-    const void *addressOfIonStackLimit();
+    // rt->mainThread.jitStackLimit;
+    const void *addressOfJitStackLimit();
 
     // &mainThread.ionJSContext
     const void *addressOfJSContext();
@@ -51,6 +51,12 @@ class CompileRuntime
 #endif
 
     const void *addressOfInterrupt();
+
+#ifdef JS_THREADSAFE
+    const void *addressOfInterruptPar();
+#endif
+
+    const void *addressOfThreadPool();
 
     const JitRuntime *jitRuntime();
 
@@ -98,8 +104,6 @@ class CompileCompartment
 {
     JSCompartment *compartment();
 
-    friend class js::AutoLockForCompilation;
-
   public:
     static CompileCompartment *get(JSCompartment *comp);
 
@@ -113,7 +117,30 @@ class CompileCompartment
     const JitCompartment *jitCompartment();
 
     bool hasObjectMetadataCallback();
+
+    // Mirror CompartmentOptions.
+    void setSingletonsAsValues();
 };
+
+class JitCompileOptions
+{
+  public:
+    JitCompileOptions();
+    JitCompileOptions(JSContext *cx);
+
+    bool cloneSingletons() const {
+        return cloneSingletons_;
+    }
+
+    bool spsSlowAssertionsEnabled() const {
+        return spsSlowAssertionsEnabled_;
+    }
+
+  private:
+    bool cloneSingletons_;
+    bool spsSlowAssertionsEnabled_;
+};
+
 
 } // namespace jit
 } // namespace js

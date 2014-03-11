@@ -672,10 +672,10 @@ public:
    * Ensures that aSignalRunnable will be dispatched to aSignalThread
    * when we don't have enough buffered data in the track (which could be
    * immediately). Will dispatch the runnable immediately if the track
-   * does not exist.
+   * does not exist. No op if a runnable is already present for this track.
    */
   void DispatchWhenNotEnoughBuffered(TrackID aID,
-      nsIThread* aSignalThread, nsIRunnable* aSignalRunnable);
+      nsIEventTarget* aSignalThread, nsIRunnable* aSignalRunnable);
   /**
    * Indicate that a track has ended. Do not do any more API calls
    * affecting this track.
@@ -728,13 +728,13 @@ public:
   friend class MediaStreamGraphImpl;
 
   struct ThreadAndRunnable {
-    void Init(nsIThread* aThread, nsIRunnable* aRunnable)
+    void Init(nsIEventTarget* aTarget, nsIRunnable* aRunnable)
     {
-      mThread = aThread;
+      mTarget = aTarget;
       mRunnable = aRunnable;
     }
 
-    nsCOMPtr<nsIThread> mThread;
+    nsCOMPtr<nsIEventTarget> mTarget;
     nsCOMPtr<nsIRunnable> mRunnable;
   };
   enum TrackCommands {
@@ -906,7 +906,7 @@ protected:
 /**
  * This stream processes zero or more input streams in parallel to produce
  * its output. The details of how the output is produced are handled by
- * subclasses overriding the ProduceOutput method.
+ * subclasses overriding the ProcessInput method.
  */
 class ProcessedMediaStream : public MediaStream {
 public:
@@ -958,10 +958,21 @@ public:
    * streams (mBlocked is up to date up to mStateComputedTime).
    * Also, we've produced output for all streams up to this one. If this stream
    * is not in a cycle, then all its source streams have produced data.
-   * Generate output up to mStateComputedTime.
-   * This is called only on streams that have not finished.
+   * Generate output from aFrom to aTo.
+   * This will be called on streams that have finished. Most stream types should
+   * just return immediately if IsFinishedOnGraphThread(), but some may wish to
+   * update internal state (see AudioNodeStream).
+   * ProcessInput is allowed to call FinishOnGraphThread only if ALLOW_FINISH
+   * is in aFlags. (This flag will be set when aTo >= mStateComputedTime, i.e.
+   * when we've producing the last block of data we need to produce.) Otherwise
+   * we can get into a situation where we've determined the stream should not
+   * block before mStateComputedTime, but the stream finishes before
+   * mStateComputedTime, violating the invariant that finished streams are blocked.
    */
-  virtual void ProduceOutput(GraphTime aFrom, GraphTime aTo) = 0;
+  enum {
+    ALLOW_FINISH = 0x01
+  };
+  virtual void ProcessInput(GraphTime aFrom, GraphTime aTo, uint32_t aFlags) = 0;
   void SetAutofinishImpl(bool aAutofinish) { mAutofinish = aAutofinish; }
 
   /**
@@ -1047,14 +1058,14 @@ public:
   /**
    * Start processing non-realtime for a specific number of ticks.
    */
-  void StartNonRealtimeProcessing(uint32_t aTicksToProcess);
+  void StartNonRealtimeProcessing(TrackRate aRate, uint32_t aTicksToProcess);
 
   /**
    * Media graph thread only.
    * Dispatches a runnable that will run on the main thread after all
    * main-thread stream state has been next updated.
    * Should only be called during MediaStreamListener callbacks or during
-   * ProcessedMediaStream::ProduceOutput().
+   * ProcessedMediaStream::ProcessInput().
    */
   void DispatchToMainThreadAfterStreamStateUpdate(already_AddRefed<nsIRunnable> aRunnable)
   {

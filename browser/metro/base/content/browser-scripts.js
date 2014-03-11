@@ -40,11 +40,30 @@ XPCOMUtils.defineLazyModuleGetter(this, "NewTabUtils",
 XPCOMUtils.defineLazyModuleGetter(this, "Promise",
                                   "resource://gre/modules/commonjs/sdk/core/promise.js");
 
+XPCOMUtils.defineLazyModuleGetter(this, "ColorUtils",
+                                  "resource:///modules/colorUtils.jsm");
+
+#ifdef NIGHTLY_BUILD
+XPCOMUtils.defineLazyModuleGetter(this, "ShumwayUtils",
+                                  "resource://shumway/ShumwayUtils.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "PdfJs",
+                                  "resource://pdf.js/PdfJs.jsm");
+#endif
+
 XPCOMUtils.defineLazyModuleGetter(this, "Task",
                                   "resource://gre/modules/Task.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "OS",
                                   "resource://gre/modules/osfile.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "UITelemetry",
+                                  "resource://gre/modules/UITelemetry.jsm");
+
+#ifdef MOZ_UPDATER
+XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
+                                  "resource://gre/modules/AddonManager.jsm");
+#endif
 
 /*
  * Services

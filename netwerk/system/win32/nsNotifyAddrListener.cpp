@@ -26,17 +26,15 @@
 #include <iptypes.h>
 #include <iphlpapi.h>
 
-typedef void (WINAPI *NcFreeNetconPropertiesFunc)(NETCON_PROPERTIES*);
-
 static HMODULE sNetshell;
-static NcFreeNetconPropertiesFunc sNcFreeNetconProperties;
+static decltype(NcFreeNetconProperties)* sNcFreeNetconProperties;
 
 static void InitNetshellLibrary(void)
 {
     if (!sNetshell) {
         sNetshell = LoadLibraryW(L"Netshell.dll");
         if (sNetshell) {
-            sNcFreeNetconProperties = (NcFreeNetconPropertiesFunc)
+            sNcFreeNetconProperties = (decltype(NcFreeNetconProperties)*)
                 GetProcAddress(sNetshell, "NcFreeNetconProperties");
         }
     }
@@ -135,7 +133,7 @@ nsNotifyAddrListener::Run()
 NS_IMETHODIMP
 nsNotifyAddrListener::Observe(nsISupports *subject,
                               const char *topic,
-                              const PRUnichar *data)
+                              const char16_t *data)
 {
     if (!strcmp("xpcom-shutdown-threads", topic))
         Shutdown();

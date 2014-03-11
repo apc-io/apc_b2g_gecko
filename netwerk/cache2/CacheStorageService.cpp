@@ -9,12 +9,13 @@
 
 #include "nsICacheStorageVisitor.h"
 #include "nsIObserverService.h"
-#include "nsICacheService.h" // for old cache preference
 #include "CacheStorage.h"
 #include "AppCacheStorage.h"
 #include "CacheEntry.h"
 
 #include "OldWrappers.h"
+#include "nsCacheService.h"
+#include "nsDeleteDir.h"
 
 #include "nsIFile.h"
 #include "nsIURI.h"
@@ -99,8 +100,6 @@ CacheStorageService::CacheStorageService()
 
   sSelf = this;
   sGlobalEntryTables = new GlobalEntryTables();
-
-  NS_NewNamedThread("Cache Mngmnt", getter_AddRefs(mThread));
 }
 
 CacheStorageService::~CacheStorageService()
@@ -123,9 +122,7 @@ void CacheStorageService::Shutdown()
 
   nsCOMPtr<nsIRunnable> event =
     NS_NewRunnableMethod(this, &CacheStorageService::ShutdownBackground);
-
-  if (mThread)
-    mThread->Dispatch(event, nsIEventTarget::DISPATCH_NORMAL);
+  Dispatch(event);
 
   mozilla::MutexAutoLock lock(mLock);
   sGlobalEntryTables->Clear();
@@ -388,14 +385,55 @@ void CacheStorageService::DropPrivateBrowsingEntries()
     DoomStorageEntries(keys[i], true, nullptr);
 }
 
+// static
+void CacheStorageService::WipeCacheDirectory(uint32_t aVersion)
+{
+  nsCOMPtr<nsIFile> cacheDir;
+  switch (aVersion) {
+  case 0:
+    nsCacheService::GetDiskCacheDirectory(getter_AddRefs(cacheDir));
+    break;
+  case 1:
+    CacheFileIOManager::GetCacheDirectory(getter_AddRefs(cacheDir));
+    break;
+  }
+
+  if (!cacheDir)
+    return;
+
+  nsDeleteDir::DeleteDir(cacheDir, true, 30000);
+}
+
 // Helper methods
+
+// static
+bool CacheStorageService::IsOnManagementThread()
+{
+  nsRefPtr<CacheStorageService> service = Self();
+  if (!service)
+    return false;
+
+  nsCOMPtr<nsIEventTarget> target = service->Thread();
+  if (!target)
+    return false;
+
+  bool currentThread;
+  nsresult rv = target->IsOnCurrentThread(&currentThread);
+  return NS_SUCCEEDED(rv) && currentThread;
+}
+
+already_AddRefed<nsIEventTarget> CacheStorageService::Thread() const
+{
+  return CacheFileIOManager::IOTarget();
+}
 
 nsresult CacheStorageService::Dispatch(nsIRunnable* aEvent)
 {
-  if (!mThread)
+  nsRefPtr<CacheIOThread> cacheIOThread = CacheFileIOManager::IOThread();
+  if (!cacheIOThread)
     return NS_ERROR_NOT_AVAILABLE;
 
-  return mThread->Dispatch(aEvent, nsIThread::DISPATCH_NORMAL);
+  return cacheIOThread->Dispatch(aEvent, CacheIOThread::MANAGEMENT);
 }
 
 // nsICacheStorageService
@@ -427,12 +465,16 @@ NS_IMETHODIMP CacheStorageService::DiskCacheStorage(nsILoadContextInfo *aLoadCon
 
   // TODO save some heap granularity - cache commonly used storages.
 
+  // When disk cache is disabled, still provide a storage, but just keep stuff
+  // in memory.
+  bool useDisk = CacheObserver::UseDiskCache();
+
   nsCOMPtr<nsICacheStorage> storage;
   if (CacheObserver::UseNewCache()) {
-    storage = new CacheStorage(aLoadContextInfo, true, aLookupAppCache);
+    storage = new CacheStorage(aLoadContextInfo, useDisk, aLookupAppCache);
   }
   else {
-    storage = new _OldStorage(aLoadContextInfo, true, aLookupAppCache, false, nullptr);
+    storage = new _OldStorage(aLoadContextInfo, useDisk, aLookupAppCache, false, nullptr);
   }
 
   storage.forget(_retval);
@@ -910,8 +952,8 @@ RemoveExactEntry(CacheEntryTable* aEntries,
   return true;
 }
 
-void
-CacheStorageService::RemoveEntry(CacheEntry* aEntry)
+bool
+CacheStorageService::RemoveEntry(CacheEntry* aEntry, bool aOnlyUnreferenced)
 {
   LOG(("CacheStorageService::RemoveEntry [entry=%p]", aEntry));
 
@@ -919,14 +961,19 @@ CacheStorageService::RemoveEntry(CacheEntry* aEntry)
   nsresult rv = aEntry->HashingKey(entryKey);
   if (NS_FAILED(rv)) {
     NS_ERROR("aEntry->HashingKey() failed?");
-    return;
+    return false;
   }
 
   mozilla::MutexAutoLock lock(mLock);
 
   if (mShutdown) {
     LOG(("  after shutdown"));
-    return;
+    return false;
+  }
+
+  if (aOnlyUnreferenced && aEntry->IsReferenced()) {
+    LOG(("  still referenced, not removing"));
+    return false;
   }
 
   CacheEntryTable* entries;
@@ -938,6 +985,8 @@ CacheStorageService::RemoveEntry(CacheEntry* aEntry)
 
   if (sGlobalEntryTables->Get(memoryStorageID, &entries))
     RemoveExactEntry(entries, entryKey, aEntry, false /* don't overwrite */);
+
+  return true;
 }
 
 void
@@ -1152,7 +1201,7 @@ CacheStorageService::AddStorageEntry(CacheStorage const* aStorage,
                                      const nsACString & aIdExtension,
                                      bool aCreateIfNotExist,
                                      bool aReplace,
-                                     CacheEntry** aResult)
+                                     CacheEntryHandle** aResult)
 {
   NS_ENSURE_FALSE(mShutdown, NS_ERROR_NOT_INITIALIZED);
 
@@ -1173,7 +1222,7 @@ CacheStorageService::AddStorageEntry(nsCSubstring const& aContextKey,
                                      bool aWriteToDisk,
                                      bool aCreateIfNotExist,
                                      bool aReplace,
-                                     CacheEntry** aResult)
+                                     CacheEntryHandle** aResult)
 {
   NS_ENSURE_ARG(aURI);
 
@@ -1187,6 +1236,7 @@ CacheStorageService::AddStorageEntry(nsCSubstring const& aContextKey,
     entryKey.get(), aContextKey.BeginReading()));
 
   nsRefPtr<CacheEntry> entry;
+  nsRefPtr<CacheEntryHandle> handle;
 
   {
     mozilla::MutexAutoLock lock(mLock);
@@ -1245,9 +1295,15 @@ CacheStorageService::AddStorageEntry(nsCSubstring const& aContextKey,
       entries->Put(entryKey, entry);
       LOG(("  new entry %p for %s", entry.get(), entryKey.get()));
     }
+
+    if (entry) {
+      // Here, if this entry was not for a long time referenced by any consumer,
+      // gets again first 'handlers count' reference.
+      handle = entry->NewHandle();
+    }
   }
 
-  entry.forget(aResult);
+  handle.forget(aResult);
   return NS_OK;
 }
 

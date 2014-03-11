@@ -8,7 +8,7 @@
 #include "nsIContent.h"
 #include "nsPresContext.h"
 #include "nsGkAtoms.h"
-#include "nsINameSpaceManager.h"
+#include "nsNameSpaceManager.h"
 #include "nsIDocument.h"
 #include "nsIPresShell.h"
 #include "nsNodeInfoManager.h"
@@ -91,7 +91,7 @@ NS_QUERYFRAME_HEAD(nsMeterFrame)
 NS_QUERYFRAME_TAIL_INHERITING(nsContainerFrame)
 
 
-NS_IMETHODIMP nsMeterFrame::Reflow(nsPresContext*           aPresContext,
+nsresult nsMeterFrame::Reflow(nsPresContext*           aPresContext,
                                    nsHTMLReflowMetrics&     aDesiredSize,
                                    const nsHTMLReflowState& aReflowState,
                                    nsReflowStatus&          aStatus)
@@ -113,10 +113,10 @@ NS_IMETHODIMP nsMeterFrame::Reflow(nsPresContext*           aPresContext,
 
   ReflowBarFrame(barFrame, aPresContext, aReflowState, aStatus);
 
-  aDesiredSize.width = aReflowState.ComputedWidth() +
-                       aReflowState.mComputedBorderPadding.LeftRight();
-  aDesiredSize.height = aReflowState.ComputedHeight() +
-                        aReflowState.mComputedBorderPadding.TopBottom();
+  aDesiredSize.Width() = aReflowState.ComputedWidth() +
+                       aReflowState.ComputedPhysicalBorderPadding().LeftRight();
+  aDesiredSize.Height() = aReflowState.ComputedHeight() +
+                        aReflowState.ComputedPhysicalBorderPadding().TopBottom();
 
   aDesiredSize.SetOverflowAreasToDesiredBounds();
   ConsiderChildOverflow(aDesiredSize.mOverflowAreas, barFrame);
@@ -141,8 +141,8 @@ nsMeterFrame::ReflowBarFrame(nsIFrame*                aBarFrame,
                                        NS_UNCONSTRAINEDSIZE));
   nscoord size = vertical ? aReflowState.ComputedHeight()
                           : aReflowState.ComputedWidth();
-  nscoord xoffset = aReflowState.mComputedBorderPadding.left;
-  nscoord yoffset = aReflowState.mComputedBorderPadding.top;
+  nscoord xoffset = aReflowState.ComputedPhysicalBorderPadding().left;
+  nscoord yoffset = aReflowState.ComputedPhysicalBorderPadding().top;
 
   // NOTE: Introduce a new function getPosition in the content part ?
   HTMLMeterElement* meterElement = static_cast<HTMLMeterElement*>(mContent);
@@ -165,28 +165,28 @@ nsMeterFrame::ReflowBarFrame(nsIFrame*                aBarFrame,
     // We want the bar to begin at the bottom.
     yoffset += aReflowState.ComputedHeight() - size;
 
-    size -= reflowState.mComputedMargin.TopBottom() +
-            reflowState.mComputedBorderPadding.TopBottom();
+    size -= reflowState.ComputedPhysicalMargin().TopBottom() +
+            reflowState.ComputedPhysicalBorderPadding().TopBottom();
     size = std::max(size, 0);
     reflowState.SetComputedHeight(size);
   } else {
-    size -= reflowState.mComputedMargin.LeftRight() +
-            reflowState.mComputedBorderPadding.LeftRight();
+    size -= reflowState.ComputedPhysicalMargin().LeftRight() +
+            reflowState.ComputedPhysicalBorderPadding().LeftRight();
     size = std::max(size, 0);
     reflowState.SetComputedWidth(size);
   }
 
-  xoffset += reflowState.mComputedMargin.left;
-  yoffset += reflowState.mComputedMargin.top;
+  xoffset += reflowState.ComputedPhysicalMargin().left;
+  yoffset += reflowState.ComputedPhysicalMargin().top;
 
-  nsHTMLReflowMetrics barDesiredSize;
+  nsHTMLReflowMetrics barDesiredSize(reflowState);
   ReflowChild(aBarFrame, aPresContext, barDesiredSize, reflowState, xoffset,
               yoffset, 0, aStatus);
-  FinishReflowChild(aBarFrame, aPresContext, &reflowState, barDesiredSize,
+  FinishReflowChild(aBarFrame, aPresContext, barDesiredSize, &reflowState,
                     xoffset, yoffset, 0);
 }
 
-NS_IMETHODIMP
+nsresult
 nsMeterFrame::AttributeChanged(int32_t  aNameSpaceID,
                                nsIAtom* aAttribute,
                                int32_t  aModType)

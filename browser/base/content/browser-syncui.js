@@ -96,22 +96,40 @@ let gSyncUI = {
            firstSync == "notReady";
   },
 
+  _loginFailed: function () {
+    // Referencing Weave.Service will implicitly initialize sync, and we don't
+    // want to force that - so first check if it is ready.
+    let service = Cc["@mozilla.org/weave/service;1"]
+                  .getService(Components.interfaces.nsISupports)
+                  .wrappedJSObject;
+    if (!service.ready) {
+      return false;
+    }
+    return Weave.Status.login == Weave.LOGIN_FAILED_LOGIN_REJECTED;
+  },
+
   updateUI: function SUI_updateUI() {
     let needsSetup = this._needsSetup();
-    document.getElementById("sync-setup-state").hidden = !needsSetup;
-    document.getElementById("sync-syncnow-state").hidden = needsSetup;
+    let loginFailed = this._loginFailed();
+    document.getElementById("sync-setup-state").hidden = loginFailed || !needsSetup;
+    document.getElementById("sync-syncnow-state").hidden = loginFailed || needsSetup;
+    document.getElementById("sync-reauth-state").hidden = !loginFailed;
 
     if (!gBrowser)
       return;
 
-    let button = document.getElementById("sync-button");
-    if (!button)
-      return;
+    let syncButton = document.getElementById("sync-button");
+    let panelHorizontalButton = document.getElementById("PanelUI-fxa-status");
+    [syncButton, panelHorizontalButton].forEach(function(button) {
+      if (!button)
+        return;
+      button.removeAttribute("status");
+    });
 
-    button.removeAttribute("status");
+    if (needsSetup && syncButton)
+      syncButton.removeAttribute("tooltiptext");
+
     this._updateLastSyncTime();
-    if (needsSetup)
-      button.removeAttribute("tooltiptext");
   },
 
 
@@ -120,11 +138,12 @@ let gSyncUI = {
     if (!gBrowser)
       return;
 
-    let button = document.getElementById("sync-button");
-    if (!button)
-      return;
-
-    button.setAttribute("status", "active");
+    ["sync-button", "PanelUI-fxa-status"].forEach(function(id) {
+      let button = document.getElementById(id);
+      if (!button)
+        return;
+      button.setAttribute("status", "active");
+    });
   },
 
   onSyncDelay: function SUI_onSyncDelay() {
@@ -158,6 +177,11 @@ let gSyncUI = {
 
     // if we haven't set up the client, don't show errors
     if (this._needsSetup()) {
+      this.updateUI();
+      return;
+    }
+    // if we are still waiting for the identity manager to initialize, don't show errors
+    if (Weave.Status.login == Weave.LOGIN_FAILED_NOT_READY) {
       this.updateUI();
       return;
     }
@@ -279,13 +303,26 @@ let gSyncUI = {
    */
 
   openSetup: function SUI_openSetup(wizardType) {
-    let win = Services.wm.getMostRecentWindow("Weave:AccountSetup");
-    if (win)
-      win.focus();
-    else {
-      window.openDialog("chrome://browser/content/sync/setup.xul",
-                        "weaveSetup", "centerscreen,chrome,resizable=no",
-                        wizardType);
+    let xps = Components.classes["@mozilla.org/weave/service;1"]
+                                .getService(Components.interfaces.nsISupports)
+                                .wrappedJSObject;
+    if (xps.fxAccountsEnabled) {
+      fxAccounts.getSignedInUser().then(userData => {
+        if (userData) {
+          this.openPrefs();
+        } else {
+          switchToTabHavingURI("about:accounts", true);
+        }
+      });
+    } else {
+      let win = Services.wm.getMostRecentWindow("Weave:AccountSetup");
+      if (win)
+        win.focus();
+      else {
+        window.openDialog("chrome://browser/content/sync/setup.xul",
+                          "weaveSetup", "centerscreen,chrome,resizable=no",
+                          wizardType);
+      }
     }
   },
 
@@ -315,6 +352,9 @@ let gSyncUI = {
     openPreferences("paneSync");
   },
 
+  openSignInAgainPage: function () {
+    switchToTabHavingURI("about:accounts?action=reauth", true);
+  },
 
   // Helpers
   _updateLastSyncTime: function SUI__updateLastSyncTime() {

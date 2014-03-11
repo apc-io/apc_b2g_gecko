@@ -13,6 +13,7 @@
               android:targetSdkVersion="16"/>
 
 #include ../services/manifests/AnnouncementsAndroidManifest_permissions.xml.in
+#include ../services/manifests/FxAccountAndroidManifest_permissions.xml.in
 #include ../services/manifests/HealthReportAndroidManifest_permissions.xml.in
 #include ../services/manifests/SyncAndroidManifest_permissions.xml.in
 
@@ -72,7 +73,7 @@
     <!-- App requires OpenGL ES 2.0 -->
     <uses-feature android:glEsVersion="0x00020000" android:required="true" />
 
-    <application android:label="@MOZ_APP_DISPLAYNAME@"
+    <application android:label="@string/moz_app_displayname"
 		 android:icon="@drawable/icon"
                  android:name="org.mozilla.gecko.GeckoApplication"
 		 android:hardwareAccelerated="true"
@@ -82,8 +83,12 @@
 		 android:debuggable="true">
 #endif
 
+        <!-- If the windowSoftInputMode adjust* flag changes below, the
+             setSoftInputMode call in BrowserSearch#onStop must also be updated. -->
         <activity android:name=".App"
-                  android:label="@MOZ_APP_DISPLAYNAME@"
+                  android:label="@string/moz_app_displayname"
+                  android:taskAffinity="@ANDROID_PACKAGE_NAME@.BROWSER"
+                  android:alwaysRetainTaskState="true"
                   android:configChanges="keyboard|keyboardHidden|mcc|mnc|orientation|screenSize"
                   android:windowSoftInputMode="stateUnspecified|adjustResize"
                   android:launchMode="singleTask"
@@ -155,13 +160,32 @@
             </intent-filter>
         </activity>
 
-        <activity android:name=".WebApp"
+#ifdef MOZ_ANDROID_SYNTHAPKS
+        <activity android:name="org.mozilla.gecko.webapp.Dispatcher"
+            android:noHistory="true" >
+            <intent-filter>
+                <!-- catch links from synthetic apks -->
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/webapp" />
+            </intent-filter>
+        </activity>
+
+        <receiver android:name="org.mozilla.gecko.webapp.UninstallListener" >
+          <intent-filter>
+             <action android:name="android.intent.action.PACKAGE_REMOVED" />
+             <data android:scheme="package" />
+          </intent-filter>
+        </receiver>
+#endif
+
+        <activity android:name=".Webapp"
                   android:label="@string/webapp_generic_name"
                   android:configChanges="keyboard|keyboardHidden|mcc|mnc|orientation|screenSize"
                   android:windowSoftInputMode="stateUnspecified|adjustResize"
                   android:launchMode="singleTask"
                   android:taskAffinity="org.mozilla.gecko.WEBAPP"
-                  android:process=":@ANDROID_PACKAGE_NAME@.WebApp"
+                  android:process=":@ANDROID_PACKAGE_NAME@.Webapp"
                   android:excludeFromRecents="true"
                   android:theme="@style/Gecko.App">
             <intent-filter>
@@ -172,13 +196,13 @@
             </intent-filter>
         </activity>
 
-        <!-- Declare a predefined number of WebApp<num> activities. These are
+        <!-- Declare a predefined number of Webapp<num> activities. These are
              used so that each web app can launch in its own process. Keep
              this number in sync with the total number of web apps handled in
-             WebAppAllocator. -->
+             WebappAllocator. -->
 
-#define FRAGMENT WebAppManifestFragment.xml.frag
-#include WebAppFragmentRepeater.inc
+#define FRAGMENT WebappManifestFragment.xml.frag.in
+#include WebappFragmentRepeater.inc
 
         <!-- Masquerade as the Resolver so that we can be opened from the Marketplace. -->
         <activity-alias
@@ -216,6 +240,7 @@
         </activity>
 
 #include ../services/manifests/AnnouncementsAndroidManifest_activities.xml.in
+#include ../services/manifests/FxAccountAndroidManifest_activities.xml.in
 #include ../services/manifests/SyncAndroidManifest_activities.xml.in
 #include ../services/manifests/HealthReportAndroidManifest_activities.xml.in
 
@@ -224,6 +249,7 @@
             android:label="@string/crash_reporter_title"
             android:icon="@drawable/crash_reporter"
             android:theme="@style/Gecko"
+            android:exported="false"
             android:excludeFromRecents="true">
           <intent-filter>
             <action android:name="org.mozilla.gecko.reportCrash" />
@@ -245,6 +271,11 @@
                   android:configChanges="orientation|screenSize"
                   android:excludeFromRecents="true"/>
 
+        <activity android:name="org.mozilla.gecko.home.HomePanelPicker"
+                  android:theme="@style/Gecko.TitleDialog"
+                  android:label="@string/home_add_panel_title"
+                  android:excludeFromRecents="true" />
+
         <provider android:name="org.mozilla.gecko.db.BrowserProvider"
                   android:authorities="@ANDROID_PACKAGE_NAME@.db.browser"
                   android:permission="@ANDROID_PACKAGE_NAME@.permissions.BROWSER_PROVIDER">
@@ -261,21 +292,28 @@
           Process name is a mangled version to avoid a Talos bug. (Bug 750548.)
           -->
         <provider android:name="org.mozilla.gecko.db.PasswordsProvider"
+                  android:label="@string/sync_configure_engines_title_passwords"
                   android:authorities="@ANDROID_PACKAGE_NAME@.db.passwords"
                   android:permission="@ANDROID_PACKAGE_NAME@.permissions.PASSWORD_PROVIDER"
                   android:process="@MANGLED_ANDROID_PACKAGE_NAME@.PasswordsProvider"/>
 
         <provider android:name="org.mozilla.gecko.db.FormHistoryProvider"
+                  android:label="@string/sync_configure_engines_title_history"
                   android:authorities="@ANDROID_PACKAGE_NAME@.db.formhistory"
                   android:permission="@ANDROID_PACKAGE_NAME@.permissions.FORMHISTORY_PROVIDER"
                   android:protectionLevel="signature"/>
 
         <provider android:name="org.mozilla.gecko.db.TabsProvider"
+                  android:label="@string/sync_configure_engines_title_tabs"
                   android:authorities="@ANDROID_PACKAGE_NAME@.db.tabs"
                   android:permission="@ANDROID_PACKAGE_NAME@.permissions.BROWSER_PROVIDER"/>
 
-        <provider android:name="org.mozilla.gecko.db.HomeListsProvider"
-                  android:authorities="@ANDROID_PACKAGE_NAME@.db.homelists"
+        <provider android:name="org.mozilla.gecko.db.HomeProvider"
+                  android:authorities="@ANDROID_PACKAGE_NAME@.db.home"
+                  android:permission="@ANDROID_PACKAGE_NAME@.permissions.BROWSER_PROVIDER"/>
+
+        <provider android:name="org.mozilla.gecko.db.ReadingListProvider"
+                  android:authorities="@ANDROID_PACKAGE_NAME@.db.readinglist"
                   android:permission="@ANDROID_PACKAGE_NAME@.permissions.BROWSER_PROVIDER"/>
 
         <service
@@ -291,6 +329,7 @@
 
 
 #include ../services/manifests/AnnouncementsAndroidManifest_services.xml.in
+#include ../services/manifests/FxAccountAndroidManifest_services.xml.in
 #include ../services/manifests/HealthReportAndroidManifest_services.xml.in
 #include ../services/manifests/SyncAndroidManifest_services.xml.in
 

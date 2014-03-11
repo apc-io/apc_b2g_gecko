@@ -10,7 +10,7 @@ import org.mozilla.gecko.gfx.Layer;
 import org.mozilla.gecko.gfx.LayerView;
 import org.mozilla.gecko.menu.GeckoMenu;
 import org.mozilla.gecko.menu.GeckoMenuItem;
-import org.mozilla.gecko.util.EventDispatcher;
+import org.mozilla.gecko.EventDispatcher;
 import org.mozilla.gecko.util.FloatUtils;
 import org.mozilla.gecko.util.GeckoEventListener;
 import org.mozilla.gecko.util.ThreadUtils;
@@ -124,6 +124,9 @@ class TextSelection extends Layer implements GeckoEventListener {
                         if (mActionModeTimerTask != null)
                             mActionModeTimerTask.cancel();
                         showActionMode(message.getJSONArray("actions"));
+
+                        if (handles.length() > 1)
+                            GeckoAppShell.performHapticFeedback(true);
                     } else if (event.equals("TextSelection:Update")) {
                         if (mActionModeTimerTask != null)
                             mActionModeTimerTask.cancel();

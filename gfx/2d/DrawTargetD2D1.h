@@ -35,10 +35,11 @@ const int32_t kLayerCacheSize1 = 5;
 class DrawTargetD2D1 : public DrawTarget
 {
 public:
+  MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(DrawTargetD2D1)
   DrawTargetD2D1();
   virtual ~DrawTargetD2D1();
 
-  virtual BackendType GetType() const { return BACKEND_DIRECT2D1_1; }
+  virtual BackendType GetType() const { return BackendType::DIRECT2D1_1; }
   virtual TemporaryRef<SourceSurface> Snapshot();
   virtual IntSize GetSize() { return mSize; }
 
@@ -111,12 +112,12 @@ public:
   virtual TemporaryRef<DrawTarget>
     CreateSimilarDrawTarget(const IntSize &aSize, SurfaceFormat aFormat) const;
 
-  virtual TemporaryRef<PathBuilder> CreatePathBuilder(FillRule aFillRule = FILL_WINDING) const;
+  virtual TemporaryRef<PathBuilder> CreatePathBuilder(FillRule aFillRule = FillRule::FILL_WINDING) const;
 
   virtual TemporaryRef<GradientStops>
     CreateGradientStops(GradientStop *aStops,
                         uint32_t aNumStops,
-                        ExtendMode aExtendMode = EXTEND_CLAMP) const;
+                        ExtendMode aExtendMode = ExtendMode::CLAMP) const;
 
   virtual TemporaryRef<FilterNode> CreateFilter(FilterType aType);
 
@@ -127,6 +128,11 @@ public:
 
   TemporaryRef<ID2D1Image> GetImageForSurface(SourceSurface *aSurface, Matrix &aSourceTransform,
                                               ExtendMode aExtendMode);
+
+  TemporaryRef<ID2D1Image> GetImageForSurface(SourceSurface *aSurface, ExtendMode aExtendMode) {
+    Matrix mat;
+    return GetImageForSurface(aSurface, mat, aExtendMode);
+  }
 
   static ID2D1Factory1 *factory();
   static void CleanupD2D();

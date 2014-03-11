@@ -5,8 +5,6 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 if CONFIG['MOZ_B2G_BT']:
-    PARALLEL_DIRS += ['interfaces']
-
     SOURCES += [
         'BluetoothAdapter.cpp',
         'BluetoothDevice.cpp',
@@ -16,7 +14,6 @@ if CONFIG['MOZ_B2G_BT']:
         'BluetoothPropertyContainer.cpp',
         'BluetoothReplyRunnable.cpp',
         'BluetoothService.cpp',
-        'BluetoothUtils.cpp',
         'BluetoothUuid.cpp',
         'ipc/BluetoothChild.cpp',
         'ipc/BluetoothParent.cpp',
@@ -33,42 +30,55 @@ if CONFIG['MOZ_B2G_BT']:
         if CONFIG['MOZ_B2G_BT_BLUEZ']:
             SOURCES += [
                 'bluez/BluetoothA2dpManager.cpp',
+                'bluez/BluetoothDBusService.cpp',
                 'bluez/BluetoothHfpManager.cpp',
                 'bluez/BluetoothOppManager.cpp',
                 'bluez/BluetoothSocket.cpp',
                 'bluez/BluetoothUnixSocketConnector.cpp',
-                'bluez/gonk/BluetoothGonkService.cpp',
-                'bluez/linux/BluetoothDBusService.cpp',
+                'bluez/BluetoothUtils.cpp',
             ]
             LOCAL_INCLUDES += [
                 'bluez',
-                'bluez/gonk',
-                'bluez/linux',
             ]
             DEFINES['MOZ_B2G_BT_BLUEZ'] = True
         elif CONFIG['MOZ_B2G_BT_BLUEDROID']:
             SOURCES += [
                 'bluedroid/BluetoothA2dpManager.cpp',
-                'bluedroid/BluetoothHfpManager.cpp',
                 'bluedroid/BluetoothOppManager.cpp',
+                'bluedroid/BluetoothServiceBluedroid.cpp',
                 'bluedroid/BluetoothSocket.cpp',
-                'bluedroid/gonk/BluetoothServiceBluedroid.cpp',
+                'bluedroid/BluetoothUtils.cpp',
             ]
             LOCAL_INCLUDES += [
                 'bluedroid',
-                'bluedroid/gonk',
             ]
+
+            if CONFIG['MOZ_B2G_RIL']:
+                SOURCES += [
+                    'bluedroid/hfp/BluetoothHfpManager.cpp',
+                ]
+                LOCAL_INCLUDES += [
+                    'bluedroid/hfp',
+                ]
+            else:
+                SOURCES += [
+                    'bluedroid/hfp-fallback/BluetoothHfpManager.cpp',
+                ]
+                LOCAL_INCLUDES += [
+                    'bluedroid/hfp-fallback',
+                ]
+
             DEFINES['MOZ_B2G_BT_BLUEDROID'] = True
     elif CONFIG['MOZ_ENABLE_DBUS']:
         SOURCES += [
+            'bluez/BluetoothDBusService.cpp',
             'bluez/BluetoothHfpManager.cpp',
-            'bluez/linux/BluetoothDBusService.cpp',
         ]
         LOCAL_INCLUDES += [
             'bluez',
-            'bluez/linux',
         ]
         DEFINES['MOZ_BLUETOOTH_DBUS'] = True
+        DEFINES['HAVE_PTHREADS'] = True
 
     FINAL_LIBRARY = 'gklayout'
 

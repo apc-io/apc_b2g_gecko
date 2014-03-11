@@ -1,4 +1,5 @@
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -82,6 +83,11 @@ ParseMP3Headers(MP3FrameParser *aParser, MediaResource *aResource)
     nsresult rv = aResource->ReadAt(offset, buffer,
                                     MAX_READ_SIZE, &bytesRead);
     NS_ENSURE_SUCCESS(rv, rv);
+
+    if (!bytesRead) {
+      // End of stream.
+      return NS_ERROR_FAILURE;
+    }
 
     aParser->Parse(buffer, bytesRead, offset);
     offset += bytesRead;
@@ -247,6 +253,48 @@ DirectShowReader::Finish(HRESULT aStatus)
   return false;
 }
 
+class DirectShowCopy
+{
+public:
+  DirectShowCopy(uint8_t *aSource, uint32_t aBytesPerSample,
+                 uint32_t aSamples, uint32_t aChannels)
+    : mSource(aSource)
+    , mBytesPerSample(aBytesPerSample)
+    , mSamples(aSamples)
+    , mChannels(aChannels)
+    , mNextSample(0)
+  { }
+
+  uint32_t operator()(AudioDataValue *aBuffer, uint32_t aSamples)
+  {
+    uint32_t maxSamples = std::min(aSamples, mSamples - mNextSample);
+    uint32_t frames = maxSamples / mChannels;
+    size_t byteOffset = mNextSample * mBytesPerSample;
+    if (mBytesPerSample == 1) {
+      for (uint32_t i = 0; i < maxSamples; ++i) {
+        uint8_t *sample = mSource + byteOffset;
+        aBuffer[i] = UnsignedByteToAudioSample(*sample);
+        byteOffset += mBytesPerSample;
+      }
+    } else if (mBytesPerSample == 2) {
+      for (uint32_t i = 0; i < maxSamples; ++i) {
+        int16_t *sample = reinterpret_cast<int16_t *>(mSource + byteOffset);
+        aBuffer[i] = AudioSampleToFloat(*sample);
+        byteOffset += mBytesPerSample;
+      }
+    }
+    mNextSample += maxSamples;
+    return frames;
+  }
+
+private:
+  uint8_t * const mSource;
+  const uint32_t mBytesPerSample;
+  const uint32_t mSamples;
+  const uint32_t mChannels;
+  uint32_t mNextSample;
+};
+
 bool
 DirectShowReader::DecodeAudioData()
 {
@@ -281,26 +329,15 @@ DirectShowReader::DecodeAudioData()
   hr = sample->GetPointer(&data);
   NS_ENSURE_TRUE(SUCCEEDED(hr), Finish(hr));
 
-  nsAutoArrayPtr<AudioDataValue> buffer(new AudioDataValue[numSamples]);
-  AudioDataValue* dst = buffer.get();
-  if (mBytesPerSample == 1) {
-    uint8_t* src = reinterpret_cast<uint8_t*>(data);
-    for (int32_t i = 0; i < numSamples; ++i) {
-      dst[i] = UnsignedByteToAudioSample(src[i]);
-    }
-  } else if (mBytesPerSample == 2) {
-    int16_t* src = reinterpret_cast<int16_t*>(data);
-    for (int32_t i = 0; i < numSamples; ++i) {
-      dst[i] = AudioSampleToFloat(src[i]);
-    }
-  }
-
-  mAudioQueue.Push(new AudioData(mDecoder->GetResource()->Tell(),
-                                 RefTimeToUsecs(start),
-                                 RefTimeToUsecs(end - start),
-                                 numFrames,
-                                 buffer.forget(),
-                                 mNumChannels));
+  mAudioCompactor.Push(mDecoder->GetResource()->Tell(),
+                       RefTimeToUsecs(start),
+                       mInfo.mAudio.mRate,
+                       numFrames,
+                       mNumChannels,
+                       DirectShowCopy(reinterpret_cast<uint8_t *>(data),
+                                      mBytesPerSample,
+                                      numSamples,
+                                      mNumChannels));
   return true;
 }
 

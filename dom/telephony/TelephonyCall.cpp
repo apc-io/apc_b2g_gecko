@@ -21,15 +21,14 @@ using mozilla::dom::telephony::kOutgoingPlaceholderCallIndex;
 already_AddRefed<TelephonyCall>
 TelephonyCall::Create(Telephony* aTelephony, uint32_t aServiceId,
                       const nsAString& aNumber, uint16_t aCallState,
-                      uint32_t aCallIndex, bool aEmergency, bool aIsConference)
+                      uint32_t aCallIndex, bool aEmergency, bool aIsConference,
+                      bool aSwitchable, bool aMergeable)
 {
   NS_ASSERTION(aTelephony, "Null pointer!");
   NS_ASSERTION(!aNumber.IsEmpty(), "Empty number!");
   NS_ASSERTION(aCallIndex >= 1, "Invalid call index!");
 
-  nsRefPtr<TelephonyCall> call = new TelephonyCall();
-
-  call->BindToOwner(aTelephony->GetOwner());
+  nsRefPtr<TelephonyCall> call = new TelephonyCall(aTelephony->GetOwner());
 
   call->mTelephony = aTelephony;
   call->mServiceId = aServiceId;
@@ -38,19 +37,20 @@ TelephonyCall::Create(Telephony* aTelephony, uint32_t aServiceId,
   call->mError = nullptr;
   call->mEmergency = aEmergency;
   call->mGroup = aIsConference ? aTelephony->ConferenceGroup() : nullptr;
+  call->mSwitchable = aSwitchable;
+  call->mMergeable = aMergeable;
 
   call->ChangeStateInternal(aCallState, false);
 
   return call.forget();
 }
 
-TelephonyCall::TelephonyCall()
-  : mCallIndex(kOutgoingPlaceholderCallIndex),
+TelephonyCall::TelephonyCall(nsPIDOMWindow* aOwner)
+  : nsDOMEventTargetHelper(aOwner),
+    mCallIndex(kOutgoingPlaceholderCallIndex),
     mCallState(nsITelephonyProvider::CALL_STATE_UNKNOWN),
-    mLive(false),
-    mOutgoing(false)
+    mLive(false)
 {
-  SetIsDOMBinding();
 }
 
 TelephonyCall::~TelephonyCall()
@@ -106,10 +106,6 @@ TelephonyCall::ChangeStateInternal(uint16_t aCallState, bool aFireEvents)
 
   mState = stateString;
   mCallState = aCallState;
-
-  if (aCallState == nsITelephonyProvider::CALL_STATE_DIALING) {
-    mOutgoing = true;
-  }
 
   if (aCallState == nsITelephonyProvider::CALL_STATE_DISCONNECTED) {
     NS_ASSERTION(mLive, "Should be live!");
@@ -262,6 +258,11 @@ TelephonyCall::Hold(ErrorResult& aRv)
     return;
   }
 
+  if (!mSwitchable) {
+    NS_WARNING("Hold a non-switchable call ignored!");
+    return;
+  }
+
   nsresult rv = mTelephony->Provider()->HoldCall(mServiceId, mCallIndex);
   if (NS_FAILED(rv)) {
     aRv.Throw(rv);
@@ -288,6 +289,11 @@ TelephonyCall::Resume(ErrorResult& aRv)
 
   if (mGroup) {
     NS_WARNING("Resume a call in conference ignored!");
+    return;
+  }
+
+  if (!mSwitchable) {
+    NS_WARNING("Resume a non-switchable call ignored!");
     return;
   }
 

@@ -10,15 +10,14 @@
 #include "RotatedBuffer.h"              // for RotatedContentBuffer, etc
 #include "BasicImplData.h"              // for BasicImplData
 #include "BasicLayers.h"                // for BasicLayerManager
-#include "gfx3DMatrix.h"                // for gfx3DMatrix
 #include "gfxPoint.h"                   // for gfxPoint
 #include "mozilla/RefPtr.h"             // for RefPtr
 #include "mozilla/gfx/BasePoint.h"      // for BasePoint
 #include "mozilla/layers/ContentClient.h"  // for ContentClientBasic
 #include "mozilla/mozalloc.h"           // for operator delete
 #include "nsDebug.h"                    // for NS_ASSERTION
+#include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "nsRegion.h"                   // for nsIntRegion
-#include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
 class gfxContext;
 
 namespace mozilla {
@@ -54,7 +53,6 @@ public:
     NS_ASSERTION(BasicManager()->InConstruction(),
                  "Can only set properties in construction phase");
     mInvalidRegion.Or(mInvalidRegion, aRegion);
-    mInvalidRegion.SimplifyOutward(10);
     mValidRegion.Sub(mValidRegion, mInvalidRegion);
   }
 
@@ -74,13 +72,13 @@ public:
     }
     mValidRegion.SetEmpty();
   }
-  
-  virtual void ComputeEffectiveTransforms(const gfx3DMatrix& aTransformToSurface)
+
+  virtual void ComputeEffectiveTransforms(const gfx::Matrix4x4& aTransformToSurface)
   {
     if (!BasicManager()->IsRetained()) {
       // Don't do any snapping of our transform, since we're just going to
       // draw straight through without intermediate buffers.
-      mEffectiveTransform = GetLocalTransform()*aTransformToSurface;
+      mEffectiveTransform = GetLocalTransform() * aTransformToSurface;
       if (gfxPoint(0,0) != mResidualTranslation) {
         mResidualTranslation = gfxPoint(0,0);
         mValidRegion.SetEmpty();

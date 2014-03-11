@@ -17,6 +17,7 @@ class PathSkia;
 class PathBuilderSkia : public PathBuilder
 {
 public:
+  MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(PathBuilderSkia)
   PathBuilderSkia(const Matrix& aTransform, const SkPath& aPath, FillRule aFillRule);
   PathBuilderSkia(FillRule aFillRule);
 
@@ -46,17 +47,18 @@ private:
 class PathSkia : public Path
 {
 public:
+  MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(PathSkia)
   PathSkia(SkPath& aPath, FillRule aFillRule)
     : mFillRule(aFillRule)
   {
     mPath.swap(aPath);
   }
   
-  virtual BackendType GetBackendType() const { return BACKEND_SKIA; }
+  virtual BackendType GetBackendType() const { return BackendType::SKIA; }
 
-  virtual TemporaryRef<PathBuilder> CopyToBuilder(FillRule aFillRule = FILL_WINDING) const;
+  virtual TemporaryRef<PathBuilder> CopyToBuilder(FillRule aFillRule = FillRule::FILL_WINDING) const;
   virtual TemporaryRef<PathBuilder> TransformedCopyToBuilder(const Matrix &aTransform,
-                                                             FillRule aFillRule = FILL_WINDING) const;
+                                                             FillRule aFillRule = FillRule::FILL_WINDING) const;
 
   virtual bool ContainsPoint(const Point &aPoint, const Matrix &aTransform) const;
   

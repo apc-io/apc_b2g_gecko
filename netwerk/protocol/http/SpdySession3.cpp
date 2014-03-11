@@ -7,6 +7,12 @@
 // HttpLog.h should generally be included first
 #include "HttpLog.h"
 
+// Log on level :5, instead of default :4.
+#undef LOG
+#define LOG(args) LOG5(args)
+#undef LOG_ENABLED
+#define LOG_ENABLED() LOG5_ENABLED()
+
 #include "mozilla/Endian.h"
 #include "mozilla/Telemetry.h"
 #include "nsHttp.h"
@@ -207,7 +213,7 @@ SpdySession3::IdleTime()
   return PR_IntervalNow() - mLastDataReadEpoch;
 }
 
-void
+uint32_t
 SpdySession3::ReadTimeoutTick(PRIntervalTime now)
 {
     MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
@@ -217,13 +223,15 @@ SpdySession3::ReadTimeoutTick(PRIntervalTime now)
          this, PR_IntervalToSeconds(now - mLastReadEpoch)));
 
     if (!mPingThreshold)
-      return;
+      return UINT32_MAX;
 
     if ((now - mLastReadEpoch) < mPingThreshold) {
       // recent activity means ping is not an issue
       if (mPingSentEpoch)
         mPingSentEpoch = 0;
-      return;
+
+      return PR_IntervalToSeconds(mPingThreshold) -
+        PR_IntervalToSeconds(now - mLastReadEpoch);
     }
 
     if (mPingSentEpoch) {
@@ -233,8 +241,9 @@ SpdySession3::ReadTimeoutTick(PRIntervalTime now)
              this));
         mPingSentEpoch = 0;
         Close(NS_ERROR_NET_TIMEOUT);
+        return UINT32_MAX;
       }
-      return;
+      return 1; // run the tick aggressively while ping is outstanding
     }
 
     LOG(("SpdySession3::ReadTimeoutTick %p generating ping 0x%X\n",
@@ -243,7 +252,7 @@ SpdySession3::ReadTimeoutTick(PRIntervalTime now)
     if (mNextPingID == 0xffffffff) {
       LOG(("SpdySession3::ReadTimeoutTick %p cannot form ping - ids exhausted\n",
            this));
-      return;
+      return UINT32_MAX;
     }
 
     mPingSentEpoch = PR_IntervalNow();
@@ -287,6 +296,7 @@ SpdySession3::ReadTimeoutTick(PRIntervalTime now)
            "ping ids exhausted marking goaway\n", this));
       mShouldGoAway = true;
     }
+    return 1; // run the tick aggressively while ping is outstanding
 }
 
 uint32_t
@@ -735,7 +745,7 @@ SpdySession3::GenerateSettings()
   // 2nd entry is bytes 20 to 27
   // 3rd entry is bytes 28 to 35
 
-  if (!gHttpHandler->AllowSpdyPush()) {
+  if (!gHttpHandler->AllowPush()) {
   // announcing that we accept 0 incoming streams is done to
   // disable server push
     packet[15 + 8 * numberOfEntries] = SETTINGS_TYPE_MAX_CONCURRENT;
@@ -837,7 +847,10 @@ SpdySession3::CleanupStream(SpdyStream3 *aStream, nsresult aResult,
 {
   MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
   LOG3(("SpdySession3::CleanupStream %p %p 0x%X %X\n",
-        this, aStream, aStream->StreamID(), aResult));
+        this, aStream, aStream ? aStream->StreamID() : 0, aResult));
+  if (!aStream) {
+    return;
+  }
 
   SpdyPushedStream3 *pushSource = nullptr;
 
@@ -980,7 +993,7 @@ SpdySession3::HandleSynStream(SpdySession3 *self)
     LOG3(("SpdySession3::HandleSynStream %p associated ID of 0 failed.\n", self));
     self->GenerateRstStream(RST_PROTOCOL_ERROR, streamID);
 
-  } else if (!gHttpHandler->AllowSpdyPush()) {
+  } else if (!gHttpHandler->AllowPush()) {
     // MAX_CONCURRENT_STREAMS of 0 in settings should have disabled push,
     // but some servers are buggy about that.. or the config could have
     // been updated after the settings frame was sent. In both cases just
@@ -2016,9 +2029,10 @@ SpdySession3::WriteSegments(nsAHttpSegmentWriter *writer,
 
     mLastDataReadEpoch = mLastReadEpoch;
 
-    if (rv == NS_BASE_STREAM_CLOSED) {
+    if (SoftStreamError(rv)) {
       // This will happen when the transaction figures out it is EOF, generally
-      // due to a content-length match being made
+      // due to a content-length match being made. Return OK from this function
+      // otherwise the whole session would be torn down.
       SpdyStream3 *stream = mInputFrameDataStream;
 
       // if we were doing PROCESSING_COMPLETE_HEADERS need to pop the state
@@ -2029,9 +2043,9 @@ SpdySession3::WriteSegments(nsAHttpSegmentWriter *writer,
         ResetDownstreamState();
       LOG3(("SpdySession3::WriteSegments session=%p stream=%p 0x%X "
             "needscleanup=%p. cleanup stream based on "
-            "stream->writeSegments returning BASE_STREAM_CLOSED\n",
+            "stream->writeSegments returning code %X\n",
             this, stream, stream ? stream->StreamID() : 0,
-            mNeedsCleanup));
+            mNeedsCleanup, rv));
       CleanupStream(stream, NS_OK, RST_CANCEL);
       MOZ_ASSERT(!mNeedsCleanup, "double cleanup out of data frame");
       mNeedsCleanup = nullptr;                     /* just in case */

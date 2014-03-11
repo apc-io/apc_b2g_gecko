@@ -27,17 +27,28 @@
                           accesskey="&newPrivateWindow.accesskey;"
                           command="Tools:PrivateBrowsing"
                           key="key_privatebrowsing"/>
-                <menuitem id="menu_openLocation"
-                          class="show-only-for-keyboard"
-                          label="&openLocationCmd.label;"
-                          command="Browser:OpenLocation"
-                          key="focusURLBar"
-                          accesskey="&openLocationCmd.accesskey;"/>
+                <menuitem id="menu_newRemoteWindow"
+                          label="New e10s Window"
+                          hidden="true"
+                          command="Tools:RemoteWindow"/>
+                <menuitem id="menu_newNonRemoteWindow"
+                          label="New Non-e10s Window"
+                          hidden="true"
+                          command="Tools:NonRemoteWindow"/>
                 <menuitem id="menu_openFile"
                           label="&openFileCmd.label;"
                           command="Browser:OpenFile"
                           key="openFileKb"
                           accesskey="&openFileCmd.accesskey;"/>
+#ifdef HAVE_SHELL_SERVICE
+#ifdef XP_WIN
+#ifdef MOZ_METRO
+                <menuitem id="menu_switchToMetro"
+                          label="&switchToMetroCmd2.label;"
+                          oncommand="SwitchToMetro()"/>
+#endif
+#endif
+#endif
                 <menuitem id="menu_close"
                           class="show-only-for-keyboard"
                           label="&closeCmd.label;"
@@ -368,7 +379,7 @@
                openInTabs="children"
                oncommand="BookmarksEventHandler.onCommand(event, this.parentNode._placesView);"
                onclick="BookmarksEventHandler.onClick(event, this.parentNode._placesView);"
-               onpopupshowing="PlacesCommandHook.updateBookmarkAllTabsCommand();
+               onpopupshowing="BookmarkingUI.onMainMenuPopupShowing(event);
                                if (!this.parentNode._placesView)
                                  new PlacesMenu(event, 'place:folder=BOOKMARKS_MENU');"
                tooltip="bhTooltip" popupsinherittooltip="true">
@@ -378,8 +389,8 @@
                 key="manBookmarkKb"/>
       <menuseparator id="organizeBookmarksSeparator"/>
       <menuitem id="menu_bookmarkThisPage"
-                label="&bookmarkThisPageCmd.label;"
                 command="Browser:AddBookmarkAs"
+                observes="bookmarkThisPageBroadcaster"
                 key="addBookmarkAsKb"/>
       <menuitem id="subscribeToPageMenuitem"
 #ifndef XP_MACOSX
@@ -458,6 +469,11 @@
                         accesskey="&syncSyncNowItem.accesskey;"
                         observes="sync-syncnow-state"
                         oncommand="gSyncUI.doSync(event);"/>
+              <menuitem id="sync-reauthitem"
+                        label="&syncReAuthItem.label;"
+                        accesskey="&syncReAuthItem.accesskey;"
+                        observes="sync-reauth-state"
+                        oncommand="gSyncUI.openSignInAgainPage();"/>
 #endif
               <menuseparator id="devToolsSeparator"/>
               <menu id="webDeveloperMenu"

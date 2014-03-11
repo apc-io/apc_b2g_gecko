@@ -274,7 +274,7 @@ public:
    * requested.)
    *
    * This method returns a change hint (see nsChangeHint.h).  All change
-   * hints apply to the frame and its later continuations or special
+   * hints apply to the frame and its later continuations or ib-split
    * siblings.  Most (all of those except the "NotHandledForDescendants"
    * hints) also apply to all descendants.  The caller must pass in any
    * non-inherited hints that resulted from the parent style context's
@@ -340,6 +340,7 @@ public:
 
 #ifdef DEBUG
   void List(FILE* out, int32_t aIndent);
+  static void AssertStyleStructMaxDifferenceValid();
 #endif
 
 protected:

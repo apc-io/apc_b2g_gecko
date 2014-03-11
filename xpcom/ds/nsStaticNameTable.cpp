@@ -10,7 +10,7 @@
 
 #include "nscore.h"
 #include "mozilla/HashFunctions.h"
-#include "nsTraceRefcnt.h"
+#include "nsISupportsImpl.h"
 
 #define PL_ARENA_CONST_ALIGN_MASK 3
 #include "nsStaticNameTable.h"
@@ -78,7 +78,7 @@ caseInsensitiveStringHashKey(PLDHashTable *table, const void *key)
     PLDHashNumber h = 0;
     const NameTableKey* tableKey = static_cast<const NameTableKey*>(key);
     if (tableKey->mIsUnichar) {
-        for (const PRUnichar* s = tableKey->mKeyStr.m2b->get();
+        for (const char16_t* s = tableKey->mKeyStr.m2b->get();
              *s != '\0';
              s++)
             h = AddToHash(h, *s & ~0x20);
@@ -138,9 +138,9 @@ nsStaticCaseInsensitiveNameTable::Init(const char* const aNames[], int32_t Count
     if (!mNameArray)
         return false;
 
-    if (!PL_DHashTableInit(&mNameTable,
-                           &nametable_CaseInsensitiveHashTableOps,
-                           nullptr, sizeof(NameTableEntry), Count)) {
+    if (!PL_DHashTableInit(&mNameTable, &nametable_CaseInsensitiveHashTableOps,
+                           nullptr, sizeof(NameTableEntry), Count,
+                           fallible_t())) {
         mNameTable.ops = nullptr;
         return false;
     }

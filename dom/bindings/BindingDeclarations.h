@@ -36,6 +36,9 @@ namespace dom {
 // so we can use IsBaseOf to detect dictionary template arguments.
 struct DictionaryBase
 {
+protected:
+  bool ParseJSON(JSContext* aCx, const nsAString& aJSON,
+                 JS::MutableHandle<JS::Value> aVal);
 };
 
 // Struct that serves as a base class for all typed arrays and array buffers and
@@ -44,13 +47,6 @@ struct DictionaryBase
 struct AllTypedArraysBase {
 };
 
-
-struct MainThreadDictionaryBase : public DictionaryBase
-{
-protected:
-  bool ParseJSON(JSContext *aCx, const nsAString& aJSON,
-                 JS::MutableHandle<JS::Value> aVal);
-};
 
 struct EnumEntry {
   const char* value;
@@ -245,32 +241,14 @@ public:
   }
 };
 
-// A specialization of Optional for JS::Value to make sure that when someone
-// calls Construct() on it we will pre-initialized the JS::Value to
-// JS::UndefinedValue() so it can be traced safely.
+// A specialization of Optional for JS::Value to make sure no one ever uses it.
 template<>
-class Optional<JS::Value> : public Optional_base<JS::Value, JS::Value>
+class Optional<JS::Value>
 {
-public:
-  Optional() :
-    Optional_base<JS::Value, JS::Value>()
-  {}
+private:
+  Optional() MOZ_DELETE;
 
-  explicit Optional(JS::Value aValue) :
-    Optional_base<JS::Value, JS::Value>(aValue)
-  {}
-
-  // Don't allow us to have an uninitialized JS::Value
-  void Construct()
-  {
-    Optional_base<JS::Value, JS::Value>::Construct(JS::UndefinedValue());
-  }
-
-  template <class T1>
-  void Construct(const T1& t1)
-  {
-    Optional_base<JS::Value, JS::Value>::Construct(t1);
-  }
+  explicit Optional(JS::Value aValue) MOZ_DELETE;
 };
 
 // A specialization of Optional for NonNull that lets us get a T& from Value()
@@ -322,7 +300,9 @@ public:
 // internal strings.  So we just have to forward-declare it and reimplement its
 // ToAStringPtr.
 
+namespace binding_detail {
 struct FakeDependentString;
+} // namespace binding_detail
 
 template<>
 class Optional<nsAString>
@@ -344,7 +324,7 @@ public:
 
   // If this code ever goes away, remove the comment pointing to it in the
   // FakeDependentString class in BindingUtils.h.
-  void operator=(const FakeDependentString* str)
+  void operator=(const binding_detail::FakeDependentString* str)
   {
     MOZ_ASSERT(str);
     mStr = reinterpret_cast<const nsDependentString*>(str);
@@ -386,6 +366,12 @@ public:
     MOZ_ASSERT(inited);
     MOZ_ASSERT(ptr, "NonNull<T> was set to null");
     return *ptr;
+  }
+
+  operator T*() {
+    MOZ_ASSERT(inited);
+    MOZ_ASSERT(ptr, "NonNull<T> was set to null");
+    return ptr;
   }
 
   void operator=(T* t) {

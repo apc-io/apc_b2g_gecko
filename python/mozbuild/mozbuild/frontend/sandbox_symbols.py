@@ -20,6 +20,7 @@ from __future__ import unicode_literals
 from collections import OrderedDict
 from mozbuild.util import (
     HierarchicalStringList,
+    HierarchicalStringListWithFlagsFactory,
     StrictOrderingOnAppendList,
     StrictOrderingOnAppendListWithFlagsFactory,
 )
@@ -76,7 +77,14 @@ VARIABLES = {
         directory and merge into an APK file.
         """, 'export'),
 
-    'SOURCES': (StrictOrderingOnAppendListWithFlagsFactory({'no_pgo': bool}), list,
+    'ANDROID_ECLIPSE_PROJECT_TARGETS': (dict, dict,
+        """Defines Android Eclipse project targets.
+
+        This variable should not be populated directly. Instead, it should
+        populated by calling add_android_eclipse{_library}_project().
+        """, 'export'),
+
+    'SOURCES': (StrictOrderingOnAppendListWithFlagsFactory({'no_pgo': bool, 'flags': list}), list,
         """Source code files.
 
         This variable contains a list of source code files to compile.
@@ -149,6 +157,13 @@ VARIABLES = {
            })
         """, None),
 
+    'DELAYLOAD_DLLS': (list, list,
+        """Delay-loaded DLLs.
+
+        This variable contains a list of DLL files which the module being linked
+        should load lazily.  This only has an effect when building with MSVC.
+        """, 'binaries'),
+
     'DIRS': (list, list,
         """Child directories to descend into looking for build frontend files.
 
@@ -162,6 +177,11 @@ VARIABLES = {
         above or below. Use ``..`` for parent directories and ``/`` for path
         delimiters.
         """, None),
+
+    'DISABLE_STL_WRAPPING': (bool, bool,
+        """Disable the wrappers for STL which allow it to work with C++ exceptions
+        disabled.
+        """, 'binaries'),
 
     'EXPORT_LIBRARY': (bool, bool,
         """Install the library to the static libraries folder.
@@ -222,6 +242,13 @@ VARIABLES = {
 
     'FORCE_STATIC_LIB': (bool, bool,
         """Whether the library in this directory is a static library.
+        """, None),
+
+    'USE_STATIC_LIBS': (bool, bool,
+        """Whether the code in this directory is a built against the static
+        runtime library.
+
+        This variable only has an effect when building with MSVC.
         """, None),
 
     'GENERATED_INCLUDES' : (StrictOrderingOnAppendList, list,
@@ -290,7 +317,8 @@ VARIABLES = {
     'LIBXUL_LIBRARY': (bool, bool,
         """Whether the library in this directory is linked into libxul.
 
-        Implies ``MOZILLA_INTERNAL_API`` and ``FORCE_STATIC_LIB``.
+        Implies ``FORCE_STATIC_LIB`` and the ``MOZILLA_INTERNAL_API``
+        preprocessor macro.
         """, None),
 
     'LOCAL_INCLUDES': (StrictOrderingOnAppendList, list,
@@ -313,6 +341,51 @@ VARIABLES = {
         """System link libraries.
 
         This variable contains a list of system libaries to link against.
+        """, None),
+    'RCFILE': (unicode, unicode,
+        """The program .rc file.
+
+        This variable can only be used on Windows.
+        """, None),
+
+    'RESFILE': (unicode, unicode,
+        """The program .res file.
+
+        This variable can only be used on Windows.
+        """, None),
+
+    'RCINCLUDE': (unicode, unicode,
+        """The resource script file to be included in the default .res file.
+
+        This variable can only be used on Windows.
+        """, None),
+
+    'DEFFILE': (unicode, unicode,
+        """The program .def (module definition) file.
+
+        This variable can only be used on Windows.
+        """, None),
+
+    'RESOURCE_FILES': (HierarchicalStringListWithFlagsFactory({'preprocess': bool}), list,
+        """List of resources to be exported, and in which subdirectories.
+
+        ``RESOURCE_FILES`` is used to list the resource files to be exported to
+        ``dist/bin/res``, but it can be used for other files as well. This variable
+        behaves as a list when appending filenames for resources in the top-level
+        directory. Files can also be appended to a field to indicate which
+        subdirectory they should be exported to. For example, to export
+        ``foo.res`` to the top-level directory, and ``bar.res`` to ``fonts/``,
+        append to ``RESOURCE_FILES`` like so::
+
+           RESOURCE_FILES += ['foo.res']
+           RESOURCE_FILES.fonts += ['bar.res']
+
+        Added files also have a 'preprocess' attribute, which will cause the
+        affected file to be run through the preprocessor, using any ``DEFINES``
+        set. It is used like this::
+
+           RESOURCE_FILES.fonts += ['baz.res.in']
+           RESOURCE_FILES.fonts['baz.res.in'].preprocess = True
         """, None),
 
     'SDK_LIBRARY': (StrictOrderingOnAppendList, list,
@@ -581,6 +654,7 @@ VARIABLES = {
             'variables': dict,
             'input': unicode,
             'sandbox_vars': dict,
+            'non_unified_sources': StrictOrderingOnAppendList,
         }), list,
         """Defines a list of object directories handled by gyp configurations.
 
@@ -595,6 +669,9 @@ VARIABLES = {
             - sandbox_vars, a dictionary containing variables and values to
               pass to the mozbuild processor on top of those derived from gyp
               configuration.
+            - non_unified_sources, a list containing sources files, relative to
+              the current moz.build, that should be excluded from source file
+              unification.
 
         Typical use looks like:
             GYP_DIRS += ['foo', 'bar']
@@ -617,6 +694,62 @@ VARIABLES = {
     'SPHINX_PYTHON_PACKAGE_DIRS': (StrictOrderingOnAppendList, list,
         """Directories containing Python packages that Sphinx documents.
         """, None),
+
+    'CFLAGS': (list, list,
+        """Flags passed to the C compiler for all of the C source files
+           declared in this directory.
+
+           Note that the ordering of flags matters here, these flags will be
+           added to the compiler's command line in the same order as they
+           appear in the moz.build file.
+        """, 'binaries'),
+
+    'CXXFLAGS': (list, list,
+        """Flags passed to the C++ compiler for all of the C++ source files
+           declared in this directory.
+
+           Note that the ordering of flags matters here; these flags will be
+           added to the compiler's command line in the same order as they
+           appear in the moz.build file.
+        """, 'binaries'),
+
+    'CMFLAGS': (list, list,
+        """Flags passed to the Objective-C compiler for all of the Objective-C
+           source files declared in this directory.
+
+           Note that the ordering of flags matters here; these flags will be
+           added to the compiler's command line in the same order as they
+           appear in the moz.build file.
+        """, 'binaries'),
+
+    'CMMFLAGS': (list, list,
+        """Flags passed to the Objective-C++ compiler for all of the
+           Objective-C++ source files declared in this directory.
+
+           Note that the ordering of flags matters here; these flags will be
+           added to the compiler's command line in the same order as they
+           appear in the moz.build file.
+        """, 'binaries'),
+
+    'LDFLAGS': (list, list,
+        """Flags passed to the linker when linking all of the libraries and
+           executables declared in this directory.
+
+           Note that the ordering of flags matters here; these flags will be
+           added to the linker's command line in the same order as they
+           appear in the moz.build file.
+        """, 'libs'),
+
+    'WIN32_EXE_LDFLAGS': (list, list,
+        """Flags passed to the linker when linking a Windows .exe executable
+           declared in this directory.
+
+           Note that the ordering of flags matter here, these flags will be
+           added to the linker's command line in the same order as they
+           appear in the moz.build file.
+
+           This variable only has an effect on Windows.
+        """, 'libs'),
 }
 
 # The set of functions exposed to the sandbox.
@@ -666,6 +799,33 @@ FUNCTIONS = {
 
         This returns a rich Java JAR type, described at
         :py:class:`mozbuild.frontend.data.JavaJarData`.
+        """),
+
+    'add_android_eclipse_project': ('_add_android_eclipse_project', (str, str),
+        """Declare an Android Eclipse project.
+
+        This is one of the supported ways to populate the
+        ANDROID_ECLIPSE_PROJECT_TARGETS variable.
+
+        The parameters are:
+        * name - project name.
+        * manifest - path to AndroidManifest.xml.
+
+        This returns a rich Android Eclipse project type, described at
+        :py:class:`mozbuild.frontend.data.AndroidEclipseProjectData`.
+        """),
+
+    'add_android_eclipse_library_project': ('_add_android_eclipse_library_project', (str,),
+        """Declare an Android Eclipse library project.
+
+        This is one of the supported ways to populate the
+        ANDROID_ECLIPSE_PROJECT_TARGETS variable.
+
+        The parameters are:
+        * name - project name.
+
+        This returns a rich Android Eclipse project type, described at
+        :py:class:`mozbuild.frontend.data.AndroidEclipseProjectData`.
         """),
 
     'add_tier_dir': ('_add_tier_directory', (str, [str, list], bool, bool),

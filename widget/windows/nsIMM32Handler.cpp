@@ -138,6 +138,13 @@ nsIMM32Handler::GetKeyboardCodePage()
   return sCodePage;
 }
 
+/* static */
+nsIMEUpdatePreference
+nsIMM32Handler::GetIMEUpdatePreference()
+{
+  return nsIMEUpdatePreference(nsIMEUpdatePreference::NOTIFY_POSITION_CHANGE);
+}
+
 // used for checking the lParam of WM_IME_COMPOSITION
 #define IS_COMPOSING_LPARAM(lParam) \
   ((lParam) & (GCS_COMPSTR | GCS_COMPATTR | GCS_COMPCLAUSE | GCS_CURSORPOS))
@@ -239,6 +246,21 @@ nsIMM32Handler::CancelComposition(nsWindow* aWindow, bool aForce)
     IMEContext.Disassociate();
   }
 }
+
+// static
+void
+nsIMM32Handler::OnUpdateComposition(nsWindow* aWindow)
+{
+  NS_ENSURE_TRUE_VOID(gIMM32Handler);
+ 
+  if (aWindow->PluginHasFocus()) {
+    return;
+  }
+
+  nsIMEContext IMEContext(aWindow->GetWindowHandle());
+  gIMM32Handler->SetIMERelatedWindowsPos(aWindow, IMEContext);
+}
+
 
 /* static */ bool
 nsIMM32Handler::ProcessInputLangChangeMessage(nsWindow* aWindow,
@@ -948,8 +970,6 @@ nsIMM32Handler::HandleStartComposition(nsWindow* aWindow,
   aWindow->InitEvent(event, &point);
   aWindow->DispatchWindowEvent(&event);
 
-  SetIMERelatedWindowsPos(aWindow, aIMEContext);
-
   mIsComposing = true;
   mComposingWindow = aWindow;
 
@@ -1236,7 +1256,7 @@ DumpReconvertString(RECONVERTSTRING* aReconv)
   PR_LOG(gIMM32Log, PR_LOG_ALWAYS,
     ("  result str=\"%s\"\n",
      NS_ConvertUTF16toUTF8(
-       nsAutoString((PRUnichar*)((char*)(aReconv) + aReconv->dwStrOffset),
+       nsAutoString((char16_t*)((char*)(aReconv) + aReconv->dwStrOffset),
                     aReconv->dwStrLen)).get()));
 }
 
@@ -1597,31 +1617,30 @@ nsIMM32Handler::DispatchTextEvent(nsWindow* aWindow,
 
   aWindow->InitEvent(event, &point);
 
-  nsAutoTArray<TextRange, 4> textRanges;
-
   if (aCheckAttr) {
-    SetTextRangeList(textRanges);
+    event.mRanges = CreateTextRangeArray();
   }
-
-  event.rangeCount = textRanges.Length();
-  event.rangeArray = textRanges.Elements();
 
   event.theText = mCompositionString.get();
 
   aWindow->DispatchWindowEvent(&event);
 
-  SetIMERelatedWindowsPos(aWindow, aIMEContext);
+  // Calling SetIMERelatedWindowsPos will be failure on e10s at this point.
+  // text event will notify NOTIFY_IME_OF_COMPOSITION_UPDATE, then
+  // it will call SetIMERelatedWindowsPos.
 }
 
-void
-nsIMM32Handler::SetTextRangeList(nsTArray<TextRange> &aTextRangeList)
+already_AddRefed<TextRangeArray>
+nsIMM32Handler::CreateTextRangeArray()
 {
   // Sogou (Simplified Chinese IME) returns contradictory values: The cursor
   // position is actual cursor position. However, other values (composition
   // string and attributes) are empty. So, if you want to remove following
   // assertion, be careful.
   NS_ASSERTION(ShouldDrawCompositionStringOurselves(),
-    "SetTextRangeList is called when we don't need to fire text event");
+    "CreateTextRangeArray is called when we don't need to fire text event");
+
+  nsRefPtr<TextRangeArray> textRangeArray = new TextRangeArray();
 
   TextRange range;
   if (mClauseArray.Length() == 0) {
@@ -1630,10 +1649,10 @@ nsIMM32Handler::SetTextRangeList(nsTArray<TextRange> &aTextRangeList)
     range.mStartOffset = 0;
     range.mEndOffset = mCompositionString.Length();
     range.mRangeType = NS_TEXTRANGE_RAWINPUT;
-    aTextRangeList.AppendElement(range);
+    textRangeArray->AppendElement(range);
 
     PR_LOG(gIMM32Log, PR_LOG_ALWAYS,
-      ("IMM32: SetTextRangeList, mClauseLength=0\n"));
+      ("IMM32: CreateTextRangeArray, mClauseLength=0\n"));
   } else {
     // iterate over the attributes
     uint32_t lastOffset = 0;
@@ -1641,7 +1660,8 @@ nsIMM32Handler::SetTextRangeList(nsTArray<TextRange> &aTextRangeList)
       uint32_t current = mClauseArray[i + 1];
       if (current > mCompositionString.Length()) {
         PR_LOG(gIMM32Log, PR_LOG_ALWAYS,
-          ("IMM32: SetTextRangeList, mClauseArray[%ld]=%lu. This is larger than mCompositionString.Length()=%lu\n",
+          ("IMM32: CreateTextRangeArray, mClauseArray[%ld]=%lu. "
+           "This is larger than mCompositionString.Length()=%lu\n",
            i + 1, current, mCompositionString.Length()));
         current = int32_t(mCompositionString.Length());
       }
@@ -1649,12 +1669,12 @@ nsIMM32Handler::SetTextRangeList(nsTArray<TextRange> &aTextRangeList)
       range.mRangeType = PlatformToNSAttr(mAttributeArray[lastOffset]);
       range.mStartOffset = lastOffset;
       range.mEndOffset = current;
-      aTextRangeList.AppendElement(range);
+      textRangeArray->AppendElement(range);
 
       lastOffset = current;
 
       PR_LOG(gIMM32Log, PR_LOG_ALWAYS,
-        ("IMM32: SetTextRangeList, index=%ld, rangeType=%s, range=[%lu-%lu]\n",
+        ("IMM32: CreateTextRangeArray, index=%ld, rangeType=%s, range=[%lu-%lu]\n",
          i, GetRangeTypeName(range.mRangeType), range.mStartOffset,
          range.mEndOffset));
     }
@@ -1662,25 +1682,28 @@ nsIMM32Handler::SetTextRangeList(nsTArray<TextRange> &aTextRangeList)
 
   if (mCursorPosition == NO_IME_CARET) {
     PR_LOG(gIMM32Log, PR_LOG_ALWAYS,
-      ("IMM32: GetTextRangeList, no caret\n"));
-    return;
+      ("IMM32: CreateTextRangeArray, no caret\n"));
+    return textRangeArray.forget();
   }
 
   int32_t cursor = mCursorPosition;
   if (uint32_t(cursor) > mCompositionString.Length()) {
     PR_LOG(gIMM32Log, PR_LOG_ALWAYS,
-      ("IMM32: SetTextRangeList, mCursorPosition=%ld. This is larger than mCompositionString.Length()=%lu\n",
+      ("IMM32: CreateTextRangeArray, mCursorPosition=%ld. "
+       "This is larger than mCompositionString.Length()=%lu\n",
        mCursorPosition, mCompositionString.Length()));
     cursor = mCompositionString.Length();
   }
 
   range.mStartOffset = range.mEndOffset = cursor;
   range.mRangeType = NS_TEXTRANGE_CARETPOSITION;
-  aTextRangeList.AppendElement(range);
+  textRangeArray->AppendElement(range);
 
   PR_LOG(gIMM32Log, PR_LOG_ALWAYS,
-    ("IMM32: SetTextRangeList, caret position=%ld\n",
+    ("IMM32: CreateTextRangeArray, caret position=%ld\n",
      range.mStartOffset));
+
+  return textRangeArray.forget();
 }
 
 void

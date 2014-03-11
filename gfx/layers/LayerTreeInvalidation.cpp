@@ -11,11 +11,11 @@
 #include "gfx3DMatrix.h"                // for gfx3DMatrix
 #include "gfxColor.h"                   // for gfxRGBA
 #include "GraphicsFilter.h"             // for GraphicsFilter
-#include "gfxPoint.h"                   // for gfxIntSize
 #include "gfxPoint3D.h"                 // for gfxPoint3D
 #include "gfxRect.h"                    // for gfxRect
 #include "gfxUtils.h"                   // for gfxUtils
 #include "mozilla/gfx/BaseSize.h"       // for BaseSize
+#include "mozilla/gfx/Point.h"          // for IntSize
 #include "mozilla/mozalloc.h"           // for operator new, etc
 #include "nsAutoPtr.h"                  // for nsRefPtr, nsAutoPtr, etc
 #include "nsDataHashtable.h"            // for nsDataHashtable
@@ -25,7 +25,6 @@
 #include "nsPoint.h"                    // for nsIntPoint
 #include "nsRect.h"                     // for nsIntRect
 #include "nsTArray.h"                   // for nsAutoTArray, nsTArray_Impl
-#include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
 
 namespace mozilla {
 namespace layers {
@@ -60,14 +59,12 @@ AddTransformedRegion(nsIntRegion& aDest, const nsIntRegion& aSource, const gfx3D
   while ((r = iter.Next())) {
     aDest.Or(aDest, TransformRect(*r, aTransform));
   }
-  aDest.SimplifyOutward(4);
 }
 
 static void
 AddRegion(nsIntRegion& aDest, const nsIntRegion& aSource)
 {
   aDest.Or(aDest, aSource);
-  aDest.SimplifyOutward(4);
 }
 
 static nsIntRegion
@@ -111,7 +108,6 @@ struct LayerPropertiesBase : public LayerProperties
     , mMaskLayer(nullptr)
     , mVisibleRegion(aLayer->GetVisibleRegion())
     , mInvalidRegion(aLayer->GetInvalidRegion())
-    , mTransform(aLayer->GetTransform())
     , mOpacity(aLayer->GetOpacity())
     , mUseClipRect(!!aLayer->GetClipRect())
   {
@@ -122,6 +118,7 @@ struct LayerPropertiesBase : public LayerProperties
     if (mUseClipRect) {
       mClipRect = *aLayer->GetClipRect();
     }
+    gfx::To3DMatrix(aLayer->GetTransform(), mTransform);
   }
   LayerPropertiesBase()
     : mLayer(nullptr)
@@ -141,7 +138,9 @@ struct LayerPropertiesBase : public LayerProperties
 
   nsIntRegion ComputeChange(NotifySubDocInvalidationFunc aCallback)
   {
-    bool transformChanged = !mTransform.FuzzyEqual(mLayer->GetTransform());
+    gfx3DMatrix transform;
+    gfx::To3DMatrix(mLayer->GetTransform(), transform);
+    bool transformChanged = !mTransform.FuzzyEqual(transform);
     Layer* otherMask = mLayer->GetMaskLayer();
     const nsIntRect* otherClip = mLayer->GetClipRect();
     nsIntRegion result;
@@ -189,7 +188,9 @@ struct LayerPropertiesBase : public LayerProperties
 
   nsIntRect NewTransformedBounds()
   {
-    return TransformRect(mLayer->GetVisibleRegion().GetBounds(), mLayer->GetTransform());
+    gfx3DMatrix transform;
+    gfx::To3DMatrix(mLayer->GetTransform(), transform);
+    return TransformRect(mLayer->GetVisibleRegion().GetBounds(), transform);
   }
 
   nsIntRect OldTransformedBounds()
@@ -271,7 +272,9 @@ struct ContainerLayerProperties : public LayerPropertiesBase
         invalidateChildsCurrentArea = true;
       }
       if (invalidateChildsCurrentArea) {
-        AddTransformedRegion(result, child->GetVisibleRegion(), child->GetTransform());
+        gfx3DMatrix transform;
+        gfx::To3DMatrix(child->GetTransform(), transform);
+        AddTransformedRegion(result, child->GetVisibleRegion(), transform);
         if (aCallback) {
           NotifySubdocumentInvalidationRecursive(child, aCallback);
         } else {
@@ -290,7 +293,9 @@ struct ContainerLayerProperties : public LayerPropertiesBase
       aCallback(container, result);
     }
 
-    return TransformRegion(result, mLayer->GetTransform());
+    gfx3DMatrix transform;
+    gfx::To3DMatrix(mLayer->GetTransform(), transform);
+    return TransformRegion(result, transform);
   }
 
   // The old list of children:
@@ -351,7 +356,7 @@ struct ImageLayerProperties : public LayerPropertiesBase
 
   nsRefPtr<ImageContainer> mContainer;
   GraphicsFilter mFilter;
-  gfxIntSize mScaleToSize;
+  gfx::IntSize mScaleToSize;
   ScaleMode mScaleMode;
 };
 
@@ -363,10 +368,15 @@ CloneLayerTreePropertiesInternal(Layer* aRoot)
   }
 
   switch (aRoot->GetType()) {
-    case Layer::TYPE_CONTAINER:  return new ContainerLayerProperties(aRoot->AsContainerLayer());
-    case Layer::TYPE_COLOR:  return new ColorLayerProperties(static_cast<ColorLayer*>(aRoot));
-    case Layer::TYPE_IMAGE:  return new ImageLayerProperties(static_cast<ImageLayer*>(aRoot));
-    default: return new LayerPropertiesBase(aRoot);
+    case Layer::TYPE_CONTAINER:
+    case Layer::TYPE_REF:
+      return new ContainerLayerProperties(aRoot->AsContainerLayer());
+    case Layer::TYPE_COLOR:
+      return new ColorLayerProperties(static_cast<ColorLayer*>(aRoot));
+    case Layer::TYPE_IMAGE:
+      return new ImageLayerProperties(static_cast<ImageLayer*>(aRoot));
+    default:
+      return new LayerPropertiesBase(aRoot);
   }
 
   return nullptr;
@@ -406,7 +416,9 @@ LayerPropertiesBase::ComputeDifferences(Layer* aRoot, NotifySubDocInvalidationFu
     } else {
       ClearInvalidations(aRoot);
     }
-    nsIntRect result = TransformRect(aRoot->GetVisibleRegion().GetBounds(), aRoot->GetTransform());
+    gfx3DMatrix transform;
+    gfx::To3DMatrix(aRoot->GetTransform(), transform);
+    nsIntRect result = TransformRect(aRoot->GetVisibleRegion().GetBounds(), transform);
     result = result.Union(OldTransformedBounds());
     return result;
   } else {

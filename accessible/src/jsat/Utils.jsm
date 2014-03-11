@@ -19,8 +19,10 @@ XPCOMUtils.defineLazyModuleGetter(this, 'Events',
   'resource://gre/modules/accessibility/Constants.jsm');
 XPCOMUtils.defineLazyModuleGetter(this, 'Relations',
   'resource://gre/modules/accessibility/Constants.jsm');
+XPCOMUtils.defineLazyModuleGetter(this, 'States',
+  'resource://gre/modules/accessibility/Constants.jsm');
 
-this.EXPORTED_SYMBOLS = ['Utils', 'Logger', 'PivotContext', 'PrefCache'];
+this.EXPORTED_SYMBOLS = ['Utils', 'Logger', 'PivotContext', 'PrefCache', 'SettingCache'];
 
 this.Utils = {
   _buildAppMap: {
@@ -167,6 +169,13 @@ this.Utils = {
     return this.isContentProcess;
   },
 
+  get stringBundle() {
+    delete this.stringBundle;
+    this.stringBundle = Services.strings.createBundle(
+      'chrome://global/locale/AccessFu.properties');
+    return this.stringBundle;
+  },
+
   getMessageManager: function getMessageManager(aBrowser) {
     try {
       return aBrowser.QueryInterface(Ci.nsIFrameLoaderOwner).
@@ -186,14 +195,17 @@ this.Utils = {
     }
   },
 
-  getStates: function getStates(aAccessible) {
-    if (!aAccessible)
-      return [0, 0];
-
-    let state = {};
-    let extState = {};
-    aAccessible.getState(state, extState);
-    return [state.value, extState.value];
+  getState: function getState(aAccessibleOrEvent) {
+    if (aAccessibleOrEvent instanceof Ci.nsIAccessibleStateChangeEvent) {
+      return new State(
+        aAccessibleOrEvent.isExtraState ? 0 : aAccessibleOrEvent.state,
+        aAccessibleOrEvent.isExtraState ? aAccessibleOrEvent.state : 0);
+    } else {
+      let state = {};
+      let extState = {};
+      aAccessibleOrEvent.getState(state, extState);
+      return new State(state.value, extState.value);
+    }
   },
 
   getAttributes: function getAttributes(aAccessible) {
@@ -235,6 +247,24 @@ this.Utils = {
       return new Rect(objX.value, objY.value, objW.value, objH.value);
   },
 
+  isInSubtree: function isInSubtree(aAccessible, aSubTreeRoot) {
+    let acc = aAccessible;
+    while (acc) {
+      if (acc == aSubTreeRoot) {
+        return true;
+      }
+
+      try {
+        acc = acc.parent;
+      } catch (x) {
+        Logger.debug('Failed to get parent:', x);
+        acc = null;
+      }
+    }
+
+    return false;
+  },
+
   inHiddenSubtree: function inHiddenSubtree(aAccessible) {
     for (let acc=aAccessible; acc; acc=acc.parent) {
       let hidden = Utils.getAttributes(acc).hidden;
@@ -245,17 +275,15 @@ this.Utils = {
     return false;
   },
 
-  isAliveAndVisible: function isAliveAndVisible(aAccessible) {
+  isAliveAndVisible: function isAliveAndVisible(aAccessible, aIsOnScreen) {
     if (!aAccessible) {
       return false;
     }
 
     try {
-      let extstate = {};
-      let state = {};
-      aAccessible.getState(state, extstate);
-      if (extstate.value & Ci.nsIAccessibleStates.EXT_STATE_DEFUNCT ||
-          state.value & Ci.nsIAccessibleStates.STATE_INVISIBLE ||
+      let state = this.getState(aAccessible);
+      if (state.contains(States.DEFUNCT) || state.contains(States.INVISIBLE) ||
+          (aIsOnScreen && state.contains(States.OFFSCREEN)) ||
           Utils.inHiddenSubtree(aAccessible)) {
         return false;
       }
@@ -308,6 +336,31 @@ this.Utils = {
   }
 };
 
+/**
+ * State object used internally to process accessible's states.
+ * @param {Number} aBase     Base state.
+ * @param {Number} aExtended Extended state.
+ */
+function State(aBase, aExtended) {
+  this.base = aBase;
+  this.extended = aExtended;
+}
+
+State.prototype = {
+  contains: function State_contains(other) {
+    return !!(this.base & other.base || this.extended & other.extended);
+  },
+  toString: function State_toString() {
+    let stateStrings = Utils.AccRetrieval.
+      getStringStates(this.base, this.extended);
+    let statesArray = new Array(stateStrings.length);
+    for (let i = 0; i < statesArray.length; i++) {
+      statesArray[i] = stateStrings.item(i);
+    }
+    return '[' + statesArray.join(', ') + ']';
+  }
+};
+
 this.Logger = {
   DEBUG: 0,
   INFO: 1,
@@ -323,7 +376,8 @@ this.Logger = {
     if (aLogLevel < this.logLevel)
       return;
 
-    let message = Array.prototype.slice.call(arguments, 1).join(' ');
+    let args = Array.prototype.slice.call(arguments, 1);
+    let message = (typeof(args[0]) === 'function' ? args[0]() : args).join(' ');
     message = '[' + Utils.ScriptName + '] ' + this._LEVEL_NAMES[aLogLevel] +
       ' ' + message + '\n';
     dump(message);
@@ -405,16 +459,20 @@ this.Logger = {
       str += ' (' + stateStrings.item(0) + ')';
     }
 
+    if (aEvent.eventType == Events.VIRTUALCURSOR_CHANGED) {
+      let event = aEvent.QueryInterface(
+        Ci.nsIAccessibleVirtualCursorChangeEvent);
+      let pivot = aEvent.accessible.QueryInterface(
+        Ci.nsIAccessibleDocument).virtualCursor;
+      str += ' (' + this.accessibleToString(event.oldAccessible) + ' -> ' +
+	this.accessibleToString(pivot.position) + ')';
+    }
+
     return str;
   },
 
   statesToString: function statesToString(aAccessible) {
-    let [state, extState] = Utils.getStates(aAccessible);
-    let stringArray = [];
-    let stateStrings = Utils.AccRetrieval.getStringStates(state, extState);
-    for (var i=0; i < stateStrings.length; i++)
-      stringArray.push(stateStrings.item(i));
-    return stringArray.join(' ');
+    return Utils.getState(aAccessible).toString();
   },
 
   dumpTree: function dumpTree(aLogLevel, aRootAccessible) {
@@ -525,8 +583,13 @@ PivotContext.prototype = {
   _getAncestry: function _getAncestry(aAccessible) {
     let ancestry = [];
     let parent = aAccessible;
-    while (parent && (parent = parent.parent)) {
-      ancestry.push(parent);
+    try {
+      while (parent && (parent = parent.parent)) {
+       ancestry.push(parent);
+      }
+    } catch (e) {
+      // A defunct accessible will raise an exception geting parent.
+      Logger.debug('Failed to get parent:', x);
     }
     return ancestry.reverse();
   },
@@ -587,8 +650,7 @@ PivotContext.prototype = {
       if (this._includeInvisible) {
         include = true;
       } else {
-        let [state,] = Utils.getStates(child);
-        include = !(state & Ci.nsIAccessibleStates.STATE_INVISIBLE);
+        include = !(Utils.getState(child).contains(States.INVISIBLE));
       }
       if (include) {
         if (aPreorder) {
@@ -716,9 +778,7 @@ PivotContext.prototype = {
 
   _isDefunct: function _isDefunct(aAccessible) {
     try {
-      let extstate = {};
-      aAccessible.getState({}, extstate);
-      return !!(extstate.value & Ci.nsIAccessibleStates.EXT_STATE_DEFUNCT);
+      return Utils.getState(aAccessible).contains(States.DEFUNCT);
     } catch (x) {
       return true;
     }
@@ -745,18 +805,23 @@ this.PrefCache = function PrefCache(aName, aCallback, aRunCallbackNow) {
 
 PrefCache.prototype = {
   _getValue: function _getValue(aBranch) {
-    if (!this.type) {
-      this.type = aBranch.getPrefType(this.name);
-    }
-    switch (this.type) {
-      case Ci.nsIPrefBranch.PREF_STRING:
-        return aBranch.getCharPref(this.name);
-      case Ci.nsIPrefBranch.PREF_INT:
-        return aBranch.getIntPref(this.name);
-      case Ci.nsIPrefBranch.PREF_BOOL:
-        return aBranch.getBoolPref(this.name);
-      default:
-        return null;
+    try {
+      if (!this.type) {
+        this.type = aBranch.getPrefType(this.name);
+      }
+      switch (this.type) {
+        case Ci.nsIPrefBranch.PREF_STRING:
+          return aBranch.getCharPref(this.name);
+        case Ci.nsIPrefBranch.PREF_INT:
+          return aBranch.getIntPref(this.name);
+        case Ci.nsIPrefBranch.PREF_BOOL:
+          return aBranch.getBoolPref(this.name);
+        default:
+          return null;
+      }
+    } catch (x) {
+      // Pref does not exist.
+      return null;
     }
   },
 
@@ -773,4 +838,41 @@ PrefCache.prototype = {
 
   QueryInterface : XPCOMUtils.generateQI([Ci.nsIObserver,
                                           Ci.nsISupportsWeakReference])
+};
+
+this.SettingCache = function SettingCache(aName, aCallback, aOptions = {}) {
+  this.value = aOptions.defaultValue;
+  let runCallback = () => {
+    if (aCallback) {
+      aCallback(aName, this.value);
+      if (aOptions.callbackOnce) {
+        runCallback = () => {};
+      }
+    }
+  };
+
+  let settings = Utils.win.navigator.mozSettings;
+  if (!settings) {
+    if (aOptions.callbackNow) {
+      runCallback();
+    }
+    return;
+  }
+
+
+  let lock = settings.createLock();
+  let req = lock.get(aName);
+
+  req.addEventListener('success', () => {
+    this.value = req.result[aName] == undefined ? aOptions.defaultValue : req.result[aName];
+    if (aOptions.callbackNow) {
+      runCallback();
+    }
+  });
+
+  settings.addObserver(aName,
+                       (evt) => {
+                         this.value = evt.settingValue;
+                         runCallback();
+                       });
 };

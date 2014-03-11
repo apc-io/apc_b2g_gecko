@@ -23,6 +23,7 @@ class APZController :
 {
   typedef mozilla::layers::FrameMetrics FrameMetrics;
   typedef mozilla::layers::ScrollableLayerGuid ScrollableLayerGuid;
+  typedef mozilla::layers::ZoomConstraints ZoomConstraints;
 
 public:
   APZController() :
@@ -32,12 +33,22 @@ public:
 
   // GeckoContentController interface
   virtual void RequestContentRepaint(const FrameMetrics& aFrameMetrics);
-  virtual void HandleDoubleTap(const mozilla::CSSIntPoint& aPoint, int32_t aModifiers);
-  virtual void HandleSingleTap(const mozilla::CSSIntPoint& aPoint, int32_t aModifiers);
-  virtual void HandleLongTap(const mozilla::CSSIntPoint& aPoint, int32_t aModifiers);
-  virtual void HandleLongTapUp(const mozilla::CSSIntPoint& aPoint, int32_t aModifiers);
+  virtual void AcknowledgeScrollUpdate(const FrameMetrics::ViewID& aScrollId, const uint32_t& aScrollGeneration);
+  virtual void HandleDoubleTap(const mozilla::CSSIntPoint& aPoint,
+                               int32_t aModifiers,
+                               const mozilla::layers::ScrollableLayerGuid& aGuid);
+  virtual void HandleSingleTap(const mozilla::CSSIntPoint& aPoint,
+                               int32_t aModifiers,
+                               const mozilla::layers::ScrollableLayerGuid& aGuid);
+  virtual void HandleLongTap(const mozilla::CSSIntPoint& aPoint,
+                             int32_t aModifiers,
+                             const mozilla::layers::ScrollableLayerGuid& aGuid);
+  virtual void HandleLongTapUp(const mozilla::CSSIntPoint& aPoint,
+                               int32_t aModifiers,
+                               const mozilla::layers::ScrollableLayerGuid& aGuid);
   virtual void SendAsyncScrollDOMEvent(bool aIsRoot, const mozilla::CSSRect &aContentRect, const mozilla::CSSSize &aScrollableSize);
   virtual void PostDelayedTask(Task* aTask, int aDelayMs);
+  virtual bool GetRootZoomConstraints(ZoomConstraints* aOutConstraints);
   virtual void NotifyTransformBegin(const ScrollableLayerGuid& aGuid);
   virtual void NotifyTransformEnd(const ScrollableLayerGuid& aGuid);
   

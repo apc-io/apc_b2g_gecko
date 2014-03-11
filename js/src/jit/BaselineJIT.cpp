@@ -12,6 +12,7 @@
 #include "jit/BaselineIC.h"
 #include "jit/CompileInfo.h"
 #include "jit/IonSpewer.h"
+#include "jit/JitCommon.h"
 #include "vm/Interpreter.h"
 
 #include "jsgcinlines.h"
@@ -107,7 +108,6 @@ EnterBaseline(JSContext *cx, EnterJitData &data)
     data.result.setInt32(data.numActualArgs);
     {
         AssertCompartmentUnchanged pcc(cx);
-        IonContext ictx(cx, nullptr);
         JitActivation activation(cx, data.constructing);
         JSAutoResolveFlags rf(cx, RESOLVE_INFER);
         AutoFlushInhibitor afi(cx->runtime()->jitRuntime());
@@ -118,8 +118,8 @@ EnterBaseline(JSContext *cx, EnterJitData &data)
         JS_ASSERT_IF(data.osrFrame, !IsJSDEnabled(cx));
 
         // Single transition point from Interpreter to Baseline.
-        enter(data.jitcode, data.maxArgc, data.maxArgv, data.osrFrame, data.calleeToken,
-              data.scopeChain, data.osrNumStackValues, data.result.address());
+        CALL_GENERATED_CODE(enter, data.jitcode, data.maxArgc, data.maxArgv, data.osrFrame, data.calleeToken,
+                            data.scopeChain.get(), data.osrNumStackValues, data.result.address());
 
         if (data.osrFrame)
             data.osrFrame->clearRunningInJit();
@@ -217,8 +217,10 @@ jit::BaselineCompile(JSContext *cx, HandleScript script)
 {
     JS_ASSERT(!script->hasBaselineScript());
     JS_ASSERT(script->canBaselineCompile());
-
+    JS_ASSERT(IsBaselineEnabled(cx));
     LifoAlloc alloc(BASELINE_LIFO_ALLOC_PRIMARY_CHUNK_SIZE);
+
+    script->ensureNonLazyCanonicalFunction(cx);
 
     TempAllocator *temp = alloc.new_<TempAllocator>(&alloc);
     if (!temp)
@@ -245,10 +247,6 @@ jit::BaselineCompile(JSContext *cx, HandleScript script)
 static MethodStatus
 CanEnterBaselineJIT(JSContext *cx, HandleScript script, bool osr)
 {
-    // Limit the locals on a given script so that stack check on baseline frames        
-    // doesn't overflow a uint32_t value.
-    JS_ASSERT(script->nslots() <= UINT16_MAX);
-
     JS_ASSERT(jit::IsBaselineEnabled(cx));
 
     // Skip if the script has been disabled.
@@ -256,6 +254,9 @@ CanEnterBaselineJIT(JSContext *cx, HandleScript script, bool osr)
         return Method_Skipped;
 
     if (script->length() > BaselineScript::MAX_JSSCRIPT_LENGTH)
+        return Method_CantCompile;
+
+    if (script->nslots() > BaselineScript::MAX_JSSCRIPT_SLOTS)
         return Method_CantCompile;
 
     if (!cx->compartment()->ensureJitCompartmentExists(cx))
@@ -273,7 +274,7 @@ CanEnterBaselineJIT(JSContext *cx, HandleScript script, bool osr)
     // parallel execution. We want to avoid the situation of OSRing during
     // warmup and only gathering type information for the loop, and not the
     // rest of the function.
-    if (IsJSDEnabled(cx) || cx->runtime()->parallelWarmup > 0) {
+    if (IsJSDEnabled(cx) || cx->runtime()->forkJoinWarmup > 0) {
         if (osr)
             return Method_Skipped;
     } else if (script->incUseCount() <= js_JitOptions.baselineUsesBeforeCompile) {
@@ -283,7 +284,7 @@ CanEnterBaselineJIT(JSContext *cx, HandleScript script, bool osr)
     if (script->isCallsiteClone()) {
         // Ensure the original function is compiled too, so that bailouts from
         // Ion code have a BaselineScript to resume into.
-        RootedScript original(cx, script->originalFunction()->nonLazyScript());
+        RootedScript original(cx, script->donorFunction()->nonLazyScript());
         JS_ASSERT(original != script);
 
         if (!original->canBaselineCompile())

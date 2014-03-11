@@ -31,6 +31,7 @@
 typedef int16_t DownloadState;
 typedef int16_t DownloadType;
 
+class nsIArray;
 class nsDownload;
 
 #ifdef DOWNLOAD_SCANNER
@@ -188,10 +189,10 @@ protected:
 
   void ConfirmCancelDownloads(int32_t aCount,
                               nsISupportsPRBool *aCancelDownloads,
-                              const PRUnichar *aTitle,
-                              const PRUnichar *aCancelMessageMultiple,
-                              const PRUnichar *aCancelMessageSingle,
-                              const PRUnichar *aDontCancelButton);
+                              const char16_t *aTitle,
+                              const char16_t *aCancelMessageMultiple,
+                              const char16_t *aCancelMessageSingle,
+                              const char16_t *aDontCancelButton);
 
   int32_t GetRetentionBehavior();
 
@@ -362,7 +363,7 @@ protected:
    * Fail a download because of a failure status and prompt the provided
    * message or use a generic download failure message if nullptr.
    */
-  nsresult FailDownload(nsresult aStatus, const PRUnichar *aMessage);
+  nsresult FailDownload(nsresult aStatus, const char16_t *aMessage);
 
   /**
    * Opens the downloaded file with the appropriate application, which is
@@ -426,6 +427,12 @@ private:
    * Stores the SHA-256 hash associated with the downloaded file.
    */
   nsAutoCString mHash;
+
+  /**
+   * Stores the certificate chains in an nsIArray of nsIX509CertList of
+   * nsIX509Cert, if this binary is signed.
+   */
+  nsCOMPtr<nsIArray> mSignatureInfo;
 
   friend class nsDownloadManager;
 };

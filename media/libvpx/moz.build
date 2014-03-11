@@ -82,3 +82,20 @@ if CONFIG['OS_TARGET'] == 'Android':
     # Older versions of the Android NDK don't pre-define anything to indicate
     # the OS they're on, so do it for them.
     DEFINES['__linux__'] = True
+
+    if not CONFIG['MOZ_WEBRTC']:
+        SOURCES += [
+            '%s/sources/android/cpufeatures/cpu-features.c' % CONFIG['ANDROID_NDK'],
+        ]
+elif CONFIG['OS_TARGET'] == 'Darwin':
+    CFLAGS += ['-Wno-sign-compare']
+
+if not CONFIG['_MSC_VER']:
+    for f in SOURCES:
+        if f.endswith('.c'):
+            if 'sse2' in f:
+                SOURCES[f].flags += ['-msse2']
+            if 'ssse3' in f:
+                SOURCES[f].flags += ['-mssse3']
+            if 'avx2' in f:
+                SOURCES[f].flags += ['-mavx2']

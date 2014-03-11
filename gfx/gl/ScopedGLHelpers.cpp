@@ -29,6 +29,13 @@ ScopedGLState::ScopedGLState(GLContext* aGL, GLenum aCapability, bool aNewState)
     }
 }
 
+ScopedGLState::ScopedGLState(GLContext* aGL, GLenum aCapability)
+    : ScopedGLWrapper<ScopedGLState>(aGL)
+    , mCapability(aCapability)
+{
+    mOldState = mGL->fIsEnabled(mCapability);
+}
+
 void
 ScopedGLState::UnwrapImpl()
 {
@@ -117,6 +124,7 @@ ScopedBindTexture::Init(GLenum aTarget)
     GLenum bindingTarget = (aTarget == LOCAL_GL_TEXTURE_2D) ? LOCAL_GL_TEXTURE_BINDING_2D
                          : (aTarget == LOCAL_GL_TEXTURE_RECTANGLE_ARB) ? LOCAL_GL_TEXTURE_BINDING_RECTANGLE_ARB
                          : (aTarget == LOCAL_GL_TEXTURE_CUBE_MAP) ? LOCAL_GL_TEXTURE_BINDING_CUBE_MAP
+                         : (aTarget == LOCAL_GL_TEXTURE_EXTERNAL) ? LOCAL_GL_TEXTURE_BINDING_EXTERNAL
                          : LOCAL_GL_NONE;
     MOZ_ASSERT(bindingTarget != LOCAL_GL_NONE);
     mGL->GetUIntegerv(bindingTarget, &mOldTex);
@@ -238,6 +246,50 @@ ScopedFramebufferForRenderbuffer::UnwrapImpl()
 
     mGL->fDeleteFramebuffers(1, &mFB);
     mFB = 0;
+}
+
+/* ScopedViewportRect *********************************************************/
+
+ScopedViewportRect::ScopedViewportRect(GLContext* aGL,
+                                       GLint x, GLint y,
+                                       GLsizei width, GLsizei height)
+  : ScopedGLWrapper<ScopedViewportRect>(aGL)
+{
+  mGL->fGetIntegerv(LOCAL_GL_VIEWPORT, mSavedViewportRect);
+  mGL->fViewport(x, y, width, height);
+}
+
+void ScopedViewportRect::UnwrapImpl()
+{
+  mGL->fViewport(mSavedViewportRect[0],
+                 mSavedViewportRect[1],
+                 mSavedViewportRect[2],
+                 mSavedViewportRect[3]);
+}
+
+/* ScopedScissorRect **********************************************************/
+
+ScopedScissorRect::ScopedScissorRect(GLContext* aGL,
+                                     GLint x, GLint y,
+                                     GLsizei width, GLsizei height)
+  : ScopedGLWrapper<ScopedScissorRect>(aGL)
+{
+  mGL->fGetIntegerv(LOCAL_GL_SCISSOR_BOX, mSavedScissorRect);
+  mGL->fScissor(x, y, width, height);
+}
+
+ScopedScissorRect::ScopedScissorRect(GLContext* aGL)
+  : ScopedGLWrapper<ScopedScissorRect>(aGL)
+{
+  mGL->fGetIntegerv(LOCAL_GL_SCISSOR_BOX, mSavedScissorRect);
+}
+
+void ScopedScissorRect::UnwrapImpl()
+{
+  mGL->fScissor(mSavedScissorRect[0],
+                mSavedScissorRect[1],
+                mSavedScissorRect[2],
+                mSavedScissorRect[3]);
 }
 
 } /* namespace gl */

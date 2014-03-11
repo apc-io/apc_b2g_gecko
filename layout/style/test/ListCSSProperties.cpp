@@ -144,10 +144,12 @@ const char *gInaccessibleProperties[] = {
     "padding-left-rtl-source",
     "padding-right-ltr-source",
     "padding-right-rtl-source",
+    "-moz-control-character-visibility",
     "-moz-script-level", // parsed by UA sheets only
     "-moz-script-size-multiplier",
     "-moz-script-min-size",
-    "-moz-math-variant"
+    "-moz-math-variant",
+    "-moz-math-display" // parsed by UA sheets only
 };
 
 inline int

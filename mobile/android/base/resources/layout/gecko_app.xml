@@ -8,17 +8,17 @@
                 android:layout_width="fill_parent"
                 android:layout_height="fill_parent">
 
-    <org.mozilla.gecko.TabsPanel android:id="@+id/tabs_panel"
-                                 android:layout_width="fill_parent"
-                                 android:layout_height="fill_parent"
-                                 android:background="@color/background_tabs"
-                                 android:visibility="invisible"/>
+    <ViewStub android:id="@+id/tabs_panel"
+              android:layout="@layout/tabs_panel_view"
+              android:layout_width="fill_parent"
+              android:layout_height="fill_parent"/>
 
    <view class="org.mozilla.gecko.GeckoApp$MainLayout"
          android:id="@+id/main_layout"
          android:layout_width="fill_parent"
          android:layout_height="fill_parent"
-         android:background="@android:color/transparent">
+         android:background="@android:color/transparent"
+         android:clipChildren="false">
 
         <RelativeLayout android:id="@+id/gecko_layout"
                         android:layout_width="fill_parent"
@@ -29,13 +29,25 @@
 
             <FrameLayout android:id="@+id/home_pager_container"
                          android:layout_width="fill_parent"
-                         android:layout_height="fill_parent">
+                         android:layout_height="fill_parent"
+                         android:visibility="gone">
 
                 <ViewStub android:id="@+id/home_pager_stub"
                           android:layout="@layout/home_pager"
                           android:layout_width="fill_parent"
                           android:layout_height="fill_parent"/>
 
+                <org.mozilla.gecko.home.HomeBanner android:id="@+id/home_banner"
+                                                   style="@style/Widget.HomeBanner"
+                                                   android:layout_width="fill_parent"
+                                                   android:layout_height="@dimen/home_banner_height"
+                                                   android:background="@drawable/home_banner"
+                                                   android:layout_gravity="bottom"
+                                                   android:gravity="center_vertical"
+                                                   android:visibility="gone"
+                                                   android:clickable="true"
+                                                   android:focusable="true"
+                                                   android:translationY="@dimen/home_banner_height"/>
 
             </FrameLayout>
 
@@ -47,6 +59,13 @@
                                          android:layout_alignParentBottom="true"
                                          style="@style/FindBar"
                                          android:visibility="gone"/>
+
+        <org.mozilla.gecko.MediaCastingBar android:id="@+id/media_casting"
+                                           android:layout_width="fill_parent"
+                                           android:layout_height="wrap_content"
+                                           android:layout_alignParentBottom="true"
+                                           style="@style/FindBar"
+                                           android:visibility="gone"/>
 
         <RelativeLayout android:id="@+id/camera_layout"
                         android:layout_height="wrap_content"
@@ -68,12 +87,17 @@
              the root view, BrowserToolbar should be specified as low in the
              view hierarchy as possible. -->
 
-        <ViewFlipper android:id="@id/browser_actionbar"
+        <org.mozilla.gecko.widget.GeckoViewFlipper android:id="@id/browser_actionbar"
                 android:layout_width="fill_parent"
                 android:layout_height="@dimen/browser_toolbar_height"
                 android:clickable="true"
+                android:clipChildren="false"
                 android:focusable="true">
 
+            <!-- clipChildren="false" allows the child ToolbarProgressView to be drawn
+                 outside of BrowserToolbar's boundaries. Likewise, we need this property
+                 on BrowserToolbar's parent ViewFlipper, then on its parent MainLayout
+                 to allow the progress to overlap the content LayerView. -->
             <org.mozilla.gecko.toolbar.BrowserToolbar
                 android:id="@+id/browser_toolbar"
                 style="@style/BrowserToolbar"
@@ -81,6 +105,7 @@
                 android:layout_height="@dimen/browser_toolbar_height"
                 android:clickable="true"
                 android:focusable="true"
+                android:clipChildren="false"
                 android:background="@drawable/url_bar_bg"/>
 
             <org.mozilla.gecko.ActionModeCompatView android:id="@+id/actionbar"
@@ -88,22 +113,12 @@
                                                     android:layout_width="fill_parent"
                                                     style="@style/GeckoActionBar"/>
 
-        </ViewFlipper>
+        </org.mozilla.gecko.widget.GeckoViewFlipper>
 
     </view>
 
-    <LinearLayout android:id="@+id/toast"
-                  style="@style/Toast">
-
-        <TextView android:id="@+id/toast_message"
-                  style="@style/ToastMessage" />
-
-        <ImageView android:id="@+id/toast_divider"
-                   style="@style/ToastDivider" />
-
-        <Button android:id="@+id/toast_button"
-                style="@style/ToastButton" />
-
-    </LinearLayout>
+    <ViewStub android:id="@+id/toast_stub"
+              android:layout="@layout/button_toast"
+              style="@style/Toast"/>
 
 </RelativeLayout>

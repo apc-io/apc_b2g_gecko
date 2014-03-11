@@ -8,14 +8,15 @@
 #include "ClientLayerManager.h"         // for ClientLayerManager, etc
 #include "gfx3DMatrix.h"                // for gfx3DMatrix
 #include "gfxPlatform.h"                // for gfxPlatform
+#include "gfxPrefs.h"                   // for gfxPrefs
 #include "gfxRect.h"                    // for gfxRect
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
 #include "mozilla/gfx/BaseSize.h"       // for BaseSize
 #include "mozilla/gfx/Rect.h"           // for Rect, RectTyped
 #include "mozilla/layers/LayersMessages.h"
 #include "mozilla/mozalloc.h"           // for operator delete, etc
+#include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "nsRect.h"                     // for nsIntRect
-#include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
 
 namespace mozilla {
 namespace layers {
@@ -34,6 +35,14 @@ ClientTiledThebesLayer::ClientTiledThebesLayer(ClientLayerManager* const aManage
 ClientTiledThebesLayer::~ClientTiledThebesLayer()
 {
   MOZ_COUNT_DTOR(ClientTiledThebesLayer);
+}
+
+void
+ClientTiledThebesLayer::ClearCachedResources()
+{
+  if (mContentClient) {
+    mContentClient->ClearCachedResources();
+  }
 }
 
 void
@@ -82,12 +91,14 @@ ClientTiledThebesLayer::BeginPaint()
 
   // Calculate the transform required to convert screen space into transformed
   // layout device space.
-  gfx3DMatrix layoutToScreen = GetEffectiveTransform();
+  gfx::Matrix4x4 effectiveTransform = GetEffectiveTransform();
   for (ContainerLayer* parent = GetParent(); parent; parent = parent->GetParent()) {
     if (parent->UseIntermediateSurface()) {
-      layoutToScreen *= parent->GetEffectiveTransform();
+      effectiveTransform = effectiveTransform * parent->GetEffectiveTransform();
     }
   }
+  gfx3DMatrix layoutToScreen;
+  gfx::To3DMatrix(effectiveTransform, layoutToScreen);
   layoutToScreen.ScalePost(metrics.mCumulativeResolution.scale,
                            metrics.mCumulativeResolution.scale,
                            1.f);
@@ -174,8 +185,8 @@ ClientTiledThebesLayer::RenderLayer()
   // Fast path for no progressive updates, no low-precision updates and no
   // critical display-port set, or no display-port set.
   const FrameMetrics& parentMetrics = GetParent()->GetFrameMetrics();
-  if ((!gfxPlatform::UseProgressiveTilePainting() &&
-       !gfxPlatform::UseLowPrecisionBuffer() &&
+  if ((!gfxPrefs::UseProgressiveTilePainting() &&
+       !gfxPrefs::UseLowPrecisionBuffer() &&
        parentMetrics.mCriticalDisplayPort.IsEmpty()) ||
        parentMetrics.mDisplayPort.IsEmpty()) {
     mValidRegion = mVisibleRegion;
@@ -186,7 +197,7 @@ ClientTiledThebesLayer::RenderLayer()
                                              callback, data);
 
     ClientManager()->Hold(this);
-    mContentClient->LockCopyAndWrite(TiledContentClient::TILED_BUFFER);
+    mContentClient->UseTiledLayerBuffer(TiledContentClient::TILED_BUFFER);
 
     return;
   }
@@ -210,7 +221,7 @@ ClientTiledThebesLayer::RenderLayer()
 
   nsIntRegion lowPrecisionInvalidRegion;
   if (!mPaintData.mLayoutCriticalDisplayPort.IsEmpty()) {
-    if (gfxPlatform::UseLowPrecisionBuffer()) {
+    if (gfxPrefs::UseLowPrecisionBuffer()) {
       // Calculate the invalid region for the low precision buffer
       lowPrecisionInvalidRegion.Sub(mVisibleRegion, mLowPrecisionValidRegion);
 
@@ -230,7 +241,7 @@ ClientTiledThebesLayer::RenderLayer()
   if (!invalidRegion.IsEmpty() && mPaintData.mLowPrecisionPaintCount == 0) {
     bool updatedBuffer = false;
     // Only draw progressively when the resolution is unchanged.
-    if (gfxPlatform::UseProgressiveTilePainting() &&
+    if (gfxPrefs::UseProgressiveTilePainting() &&
         !ClientManager()->HasShadowTarget() &&
         mContentClient->mTiledBuffer.GetFrameResolution() == mPaintData.mResolution) {
       // Store the old valid region, then clear it before painting.
@@ -259,7 +270,7 @@ ClientTiledThebesLayer::RenderLayer()
 
     if (updatedBuffer) {
       ClientManager()->Hold(this);
-      mContentClient->LockCopyAndWrite(TiledContentClient::TILED_BUFFER);
+      mContentClient->UseTiledLayerBuffer(TiledContentClient::TILED_BUFFER);
 
       // If there are low precision updates, mark the paint as unfinished and
       // request a repeat transaction.
@@ -328,7 +339,7 @@ ClientTiledThebesLayer::RenderLayer()
   // and the associated resources can be freed.
   if (updatedLowPrecision) {
     ClientManager()->Hold(this);
-    mContentClient->LockCopyAndWrite(TiledContentClient::LOW_PRECISION_TILED_BUFFER);
+    mContentClient->UseTiledLayerBuffer(TiledContentClient::LOW_PRECISION_TILED_BUFFER);
   }
 
   EndPaint(false);

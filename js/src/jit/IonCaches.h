@@ -7,7 +7,7 @@
 #ifndef jit_IonCaches_h
 #define jit_IonCaches_h
 
-#ifdef JS_CPU_ARM
+#ifdef JS_CODEGEN_ARM
 # include "jit/arm/Assembler-arm.h"
 #endif
 #include "jit/Registers.h"
@@ -347,7 +347,7 @@ class RepatchIonCache : public IonCache
     CodeLocationJump lastJump_;
 
     // Offset from the initial jump to the rejoin label.
-#ifdef JS_CPU_ARM
+#ifdef JS_CODEGEN_ARM
     static const size_t REJOIN_LABEL_OFFSET = 4;
 #else
     static const size_t REJOIN_LABEL_OFFSET = 0;
@@ -355,7 +355,7 @@ class RepatchIonCache : public IonCache
 
     CodeLocationLabel rejoinLabel() const {
         uint8_t *ptr = initialJump_.raw();
-#ifdef JS_CPU_ARM
+#ifdef JS_CODEGEN_ARM
         uint32_t i = 0;
         while (i < REJOIN_LABEL_OFFSET)
             ptr = Assembler::nextInstruction(ptr, &i);
@@ -530,7 +530,7 @@ class GetPropertyIC : public RepatchIonCache
     size_t locationsIndex_;
     size_t numLocations_;
 
-    bool allowGetters_ : 1;
+    bool monitoredResult_ : 1;
     bool hasTypedArrayLengthStub_ : 1;
     bool hasStrictArgumentsLengthStub_ : 1;
     bool hasNormalArgumentsLengthStub_ : 1;
@@ -540,14 +540,14 @@ class GetPropertyIC : public RepatchIonCache
     GetPropertyIC(RegisterSet liveRegs,
                   Register object, PropertyName *name,
                   TypedOrValueRegister output,
-                  bool allowGetters)
+                  bool monitoredResult)
       : liveRegs_(liveRegs),
         object_(object),
         name_(name),
         output_(output),
         locationsIndex_(0),
         numLocations_(0),
-        allowGetters_(allowGetters),
+        monitoredResult_(monitoredResult),
         hasTypedArrayLengthStub_(false),
         hasStrictArgumentsLengthStub_(false),
         hasNormalArgumentsLengthStub_(false),
@@ -568,8 +568,8 @@ class GetPropertyIC : public RepatchIonCache
     TypedOrValueRegister output() const {
         return output_;
     }
-    bool allowGetters() const {
-        return allowGetters_ && !idempotent();
+    bool monitoredResult() const {
+        return monitoredResult_;
     }
     bool hasTypedArrayLengthStub() const {
         return hasTypedArrayLengthStub_;
@@ -604,6 +604,9 @@ class GetPropertyIC : public RepatchIonCache
     // Helpers for CanAttachNativeGetProp
     typedef JSContext * Context;
     bool allowArrayLength(Context cx, HandleObject obj) const;
+    bool allowGetters() const {
+        return monitoredResult() && !idempotent();
+    }
 
     // Attach the proper stub, if possible
     bool tryAttachStub(JSContext *cx, IonScript *ion, HandleObject obj,
@@ -712,6 +715,7 @@ class GetElementIC : public RepatchIonCache
     TypedOrValueRegister output_;
 
     bool monitoredResult_ : 1;
+    bool allowDoubleResult_ : 1;
     bool hasDenseStub_ : 1;
     bool hasStrictArgumentsStub_ : 1;
     bool hasNormalArgumentsStub_ : 1;
@@ -722,12 +726,13 @@ class GetElementIC : public RepatchIonCache
 
   public:
     GetElementIC(RegisterSet liveRegs, Register object, ConstantOrRegister index,
-                 TypedOrValueRegister output, bool monitoredResult)
+                 TypedOrValueRegister output, bool monitoredResult, bool allowDoubleResult)
       : liveRegs_(liveRegs),
         object_(object),
         index_(index),
         output_(output),
         monitoredResult_(monitoredResult),
+        allowDoubleResult_(allowDoubleResult),
         hasDenseStub_(false),
         hasStrictArgumentsStub_(false),
         hasNormalArgumentsStub_(false),
@@ -750,6 +755,9 @@ class GetElementIC : public RepatchIonCache
     }
     bool monitoredResult() const {
         return monitoredResult_;
+    }
+    bool allowDoubleResult() const {
+        return allowDoubleResult_;
     }
     bool hasDenseStub() const {
         return hasDenseStub_;
@@ -1032,7 +1040,7 @@ class GetPropertyParIC : public ParallelIonCache
 
     CACHE_HEADER(GetPropertyPar)
 
-#ifdef JS_CPU_X86
+#ifdef JS_CODEGEN_X86
     // x86 lacks a general purpose scratch register for dispatch caches and
     // must be given one manually.
     void initializeAddCacheState(LInstruction *ins, AddCacheState *addState);
@@ -1064,7 +1072,7 @@ class GetPropertyParIC : public ParallelIonCache
     bool attachArrayLength(LockedJSContext &cx, IonScript *ion, JSObject *obj);
     bool attachTypedArrayLength(LockedJSContext &cx, IonScript *ion, JSObject *obj);
 
-    static bool update(ForkJoinSlice *slice, size_t cacheIndex, HandleObject obj,
+    static bool update(ForkJoinContext *cx, size_t cacheIndex, HandleObject obj,
                        MutableHandleValue vp);
 };
 
@@ -1076,20 +1084,22 @@ class GetElementParIC : public ParallelIonCache
     TypedOrValueRegister output_;
 
     bool monitoredResult_ : 1;
+    bool allowDoubleResult_ : 1;
 
   public:
     GetElementParIC(Register object, ConstantOrRegister index,
-                    TypedOrValueRegister output, bool monitoredResult)
+                    TypedOrValueRegister output, bool monitoredResult, bool allowDoubleResult)
       : object_(object),
         index_(index),
         output_(output),
-        monitoredResult_(monitoredResult)
+        monitoredResult_(monitoredResult),
+        allowDoubleResult_(allowDoubleResult)
     {
     }
 
     CACHE_HEADER(GetElementPar)
 
-#ifdef JS_CPU_X86
+#ifdef JS_CODEGEN_X86
     // x86 lacks a general purpose scratch register for dispatch caches and
     // must be given one manually.
     void initializeAddCacheState(LInstruction *ins, AddCacheState *addState);
@@ -1107,6 +1117,9 @@ class GetElementParIC : public ParallelIonCache
     bool monitoredResult() const {
         return monitoredResult_;
     }
+    bool allowDoubleResult() const {
+        return allowDoubleResult_;
+    }
 
     // CanAttachNativeGetProp Helpers
     typedef LockedJSContext & Context;
@@ -1120,7 +1133,7 @@ class GetElementParIC : public ParallelIonCache
     bool attachTypedArrayElement(LockedJSContext &cx, IonScript *ion, TypedArrayObject *tarr,
                                  const Value &idval);
 
-    static bool update(ForkJoinSlice *slice, size_t cacheIndex, HandleObject obj, HandleValue idval,
+    static bool update(ForkJoinContext *cx, size_t cacheIndex, HandleObject obj, HandleValue idval,
                        MutableHandleValue vp);
 
 };
@@ -1147,7 +1160,7 @@ class SetPropertyParIC : public ParallelIonCache
 
     CACHE_HEADER(SetPropertyPar)
 
-#ifdef JS_CPU_X86
+#ifdef JS_CODEGEN_X86
     // x86 lacks a general purpose scratch register for dispatch caches and
     // must be given one manually.
     void initializeAddCacheState(LInstruction *ins, AddCacheState *addState);
@@ -1174,7 +1187,7 @@ class SetPropertyParIC : public ParallelIonCache
     bool attachAddSlot(LockedJSContext &cx, IonScript *ion, JSObject *obj, Shape *oldShape,
                        bool checkTypeset);
 
-    static bool update(ForkJoinSlice *slice, size_t cacheIndex, HandleObject obj,
+    static bool update(ForkJoinContext *cx, size_t cacheIndex, HandleObject obj,
                        HandleValue value);
 };
 
@@ -1207,7 +1220,7 @@ class SetElementParIC : public ParallelIonCache
 
     CACHE_HEADER(SetElementPar)
 
-#ifdef JS_CPU_X86
+#ifdef JS_CODEGEN_X86
     // x86 lacks a general purpose scratch register for dispatch caches and
     // must be given one manually.
     void initializeAddCacheState(LInstruction *ins, AddCacheState *addState);
@@ -1241,7 +1254,7 @@ class SetElementParIC : public ParallelIonCache
     bool attachDenseElement(LockedJSContext &cx, IonScript *ion, JSObject *obj, const Value &idval);
     bool attachTypedArrayElement(LockedJSContext &cx, IonScript *ion, TypedArrayObject *tarr);
 
-    static bool update(ForkJoinSlice *slice, size_t cacheIndex, HandleObject obj,
+    static bool update(ForkJoinContext *cx, size_t cacheIndex, HandleObject obj,
                        HandleValue idval, HandleValue value);
 };
 

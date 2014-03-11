@@ -16,9 +16,10 @@
 #include "mozilla/Monitor.h"            // for Monitor
 #include "nsAutoPtr.h"                  // for nsRefPtr
 #include "nsCOMPtr.h"                   // for already_AddRefed
-#include "nsISupportsImpl.h"
-#include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
+#include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "mozilla/Vector.h"             // for mozilla::Vector
+#include "nsTArray.h"                   // for nsTArray, nsTArray_Impl, etc
+#include "mozilla/gfx/Logging.h"        // for gfx::TreeLog
 
 class gfx3DMatrix;
 template <class E> class nsTArray;
@@ -27,6 +28,14 @@ namespace mozilla {
 class InputData;
 
 namespace layers {
+
+enum AllowedTouchBehavior {
+  NONE =               0,
+  VERTICAL_PAN =       1 << 0,
+  HORIZONTAL_PAN =     1 << 1,
+  ZOOM =               1 << 2,
+  UNKNOWN =            1 << 3
+};
 
 class Layer;
 class AsyncPanZoomController;
@@ -56,6 +65,9 @@ class CompositorParent;
  */
 class APZCTreeManager {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(APZCTreeManager)
+
+  typedef mozilla::layers::AllowedTouchBehavior AllowedTouchBehavior;
+  typedef uint32_t TouchBehaviorFlags;
 
 public:
   APZCTreeManager();
@@ -153,13 +165,9 @@ public:
 
   /**
    * Updates any zoom constraints contained in the <meta name="viewport"> tag.
-   * We try to obey everything it asks us elsewhere, but here we only handle
-   * minimum-scale, maximum-scale, and user-scalable.
    */
   void UpdateZoomConstraints(const ScrollableLayerGuid& aGuid,
-                             bool aAllowZoom,
-                             const CSSToScreenScale& aMinScale,
-                             const CSSToScreenScale& aMaxScale);
+                             const ZoomConstraints& aConstraints);
 
   /**
    * Cancels any currently running animation. Note that all this does is set the
@@ -192,6 +200,22 @@ public:
    * Returns the current dpi value in use.
    */
   static float GetDPI() { return sDPI; }
+
+  /**
+   * Returns values of allowed touch-behavior for the touches of aEvent via out parameter.
+   * Internally performs asks appropriate AsyncPanZoomController to perform
+   * hit testing on its own.
+   */
+  void GetAllowedTouchBehavior(WidgetInputEvent* aEvent,
+                               nsTArray<TouchBehaviorFlags>& aOutValues);
+
+  /**
+   * Sets allowed touch behavior values for current touch-session for specific apzc (determined by guid).
+   * Should be invoked by the widget. Each value of the aValues arrays corresponds to the different
+   * touch point that is currently active.
+   */
+  void SetAllowedTouchBehavior(const ScrollableLayerGuid& aGuid,
+                               const nsTArray<TouchBehaviorFlags>& aValues);
 
   /**
    * This is a callback for AsyncPanZoomController to call when it wants to
@@ -232,6 +256,8 @@ public:
   void DispatchScroll(AsyncPanZoomController* aAPZC, ScreenPoint aStartPoint, ScreenPoint aEndPoint,
                       uint32_t aOverscrollHandoffChainIndex);
 
+  bool FlushRepaintsForOverscrollHandoffChain();
+
 protected:
   /**
    * Debug-build assertion that can be called to ensure code is running on the
@@ -260,14 +286,12 @@ private:
   AsyncPanZoomController* GetAPZCAtPoint(AsyncPanZoomController* aApzc, const gfxPoint& aHitTestPoint);
   already_AddRefed<AsyncPanZoomController> CommonAncestor(AsyncPanZoomController* aApzc1, AsyncPanZoomController* aApzc2);
   already_AddRefed<AsyncPanZoomController> RootAPZCForLayersId(AsyncPanZoomController* aApzc);
-  already_AddRefed<AsyncPanZoomController> GetTouchInputBlockAPZC(const WidgetTouchEvent& aEvent, ScreenPoint aPoint);
+  already_AddRefed<AsyncPanZoomController> GetTouchInputBlockAPZC(const WidgetTouchEvent& aEvent);
   nsEventStatus ProcessTouchEvent(const WidgetTouchEvent& touchEvent, ScrollableLayerGuid* aOutTargetGuid, WidgetTouchEvent* aOutEvent);
   nsEventStatus ProcessMouseEvent(const WidgetMouseEvent& mouseEvent, ScrollableLayerGuid* aOutTargetGuid, WidgetMouseEvent* aOutEvent);
   nsEventStatus ProcessEvent(const WidgetInputEvent& inputEvent, ScrollableLayerGuid* aOutTargetGuid, WidgetInputEvent* aOutEvent);
   void UpdateZoomConstraintsRecursively(AsyncPanZoomController* aApzc,
-                                        bool aAllowZoom,
-                                        const CSSToScreenScale& aMinScale,
-                                        const CSSToScreenScale& aMaxScale);
+                                        const ZoomConstraints& aConstraints);
 
   /**
    * Recursive helper function to build the APZC tree. The tree of APZC instances has
@@ -317,6 +341,9 @@ private:
    * the next APZC in the chain.
    */
   Vector< nsRefPtr<AsyncPanZoomController> > mOverscrollHandoffChain;
+  /* For logging the APZC tree for debugging (enabled by the apz.printtree
+   * pref). */
+  gfx::TreeLog mApzcTreeLog;
 
   static float sDPI;
 };

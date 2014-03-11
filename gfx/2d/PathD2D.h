@@ -18,6 +18,7 @@ class PathD2D;
 class PathBuilderD2D : public PathBuilder
 {
 public:
+  MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(PathBuilderD2D)
   PathBuilderD2D(ID2D1GeometrySink *aSink, ID2D1PathGeometry *aGeom, FillRule aFillRule)
     : mSink(aSink)
     , mGeometry(aGeom)
@@ -60,6 +61,7 @@ private:
 class PathD2D : public Path
 {
 public:
+  MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(PathD2D)
   PathD2D(ID2D1PathGeometry *aGeometry, bool aEndedActive,
           const Point &aEndPoint, FillRule aFillRule)
     : mGeometry(aGeometry)
@@ -68,11 +70,11 @@ public:
     , mFillRule(aFillRule)
   {}
   
-  virtual BackendType GetBackendType() const { return BACKEND_DIRECT2D; }
+  virtual BackendType GetBackendType() const { return BackendType::DIRECT2D; }
 
-  virtual TemporaryRef<PathBuilder> CopyToBuilder(FillRule aFillRule = FILL_WINDING) const;
+  virtual TemporaryRef<PathBuilder> CopyToBuilder(FillRule aFillRule = FillRule::FILL_WINDING) const;
   virtual TemporaryRef<PathBuilder> TransformedCopyToBuilder(const Matrix &aTransform,
-                                                             FillRule aFillRule = FILL_WINDING) const;
+                                                             FillRule aFillRule = FillRule::FILL_WINDING) const;
 
   virtual bool ContainsPoint(const Point &aPoint, const Matrix &aTransform) const;
 

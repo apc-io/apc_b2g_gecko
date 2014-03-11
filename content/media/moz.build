@@ -7,15 +7,13 @@
 PARALLEL_DIRS += [
   'encoder',
   'mediasource',
+  'ogg',
   'webaudio',
   'webvtt'
 ]
 
 if CONFIG['MOZ_RAW']:
     PARALLEL_DIRS += ['raw']
-
-if CONFIG['MOZ_OGG']:
-    PARALLEL_DIRS += ['ogg']
 
 if CONFIG['MOZ_WAVE']:
     PARALLEL_DIRS += ['wave']
@@ -49,12 +47,16 @@ if CONFIG['MOZ_OMX_DECODER']:
 
 PARALLEL_DIRS += ['webspeech']
 
-TEST_DIRS += ['test']
+TEST_DIRS += [
+    'test',
+    'gtest',
+]
 
 EXPORTS += [
     'AbstractMediaDecoder.h',
     'AudioAvailableEventManager.h',
     'AudioChannelFormat.h',
+    'AudioCompactor.h',
     'AudioEventTimeline.h',
     'AudioNodeEngine.h',
     'AudioNodeExternalInputStream.h',
@@ -70,18 +72,23 @@ EXPORTS += [
     'FileBlockCache.h',
     'Latency.h',
     'MediaCache.h',
+    'MediaData.h',
     'MediaDecoder.h',
     'MediaDecoderOwner.h',
     'MediaDecoderReader.h',
     'MediaDecoderStateMachine.h',
+    'MediaInfo.h',
     'MediaMetadataManager.h',
+    'MediaQueue.h',
     'MediaRecorder.h',
     'MediaResource.h',
     'MediaSegment.h',
     'MediaStreamGraph.h',
+    'MediaTaskQueue.h',
     'MP3FrameParser.h',
     'RtspMediaResource.h',
     'SharedBuffer.h',
+    'SharedThreadPool.h',
     'StreamBuffer.h',
     'TimeVarying.h',
     'TrackUnionStream.h',
@@ -107,6 +114,7 @@ EXPORTS.mozilla.dom += [
 UNIFIED_SOURCES += [
     'AudioAvailableEventManager.cpp',
     'AudioChannelFormat.cpp',
+    'AudioCompactor.cpp',
     'AudioNodeEngine.cpp',
     'AudioNodeExternalInputStream.cpp',
     'AudioNodeStream.cpp',
@@ -118,6 +126,7 @@ UNIFIED_SOURCES += [
     'EncodedBufferCache.cpp',
     'FileBlockCache.cpp',
     'MediaCache.cpp',
+    'MediaData.cpp',
     'MediaDecoder.cpp',
     'MediaDecoderReader.cpp',
     'MediaDecoderStateMachine.cpp',
@@ -126,8 +135,10 @@ UNIFIED_SOURCES += [
     'MediaShutdownManager.cpp',
     'MediaStreamGraph.cpp',
     'MediaStreamTrack.cpp',
+    'MediaTaskQueue.cpp',
     'MP3FrameParser.cpp',
     'RtspMediaResource.cpp',
+    'SharedThreadPool.cpp',
     'StreamBuffer.cpp',
     'TextTrack.cpp',
     'TextTrackCue.cpp',
@@ -153,9 +164,8 @@ SOURCES += [
 FAIL_ON_WARNINGS = True
 
 if CONFIG['CPU_ARCH'] == 'arm' and CONFIG['BUILD_ARM_NEON']:
-    SOURCES += [
-        'AudioNodeEngineNEON.cpp',
-    ]
+    SOURCES += ['AudioNodeEngineNEON.cpp']
+    SOURCES['AudioNodeEngineNEON.cpp'].flags += ['-mfpu=neon']
 
 MSVC_ENABLE_PGO = True
 

@@ -187,7 +187,7 @@ class AutoSetHandlingSignal
     }
 };
 
-#if defined(JS_CPU_X64)
+#if defined(JS_CODEGEN_X64)
 template <class T>
 static void
 SetXMMRegToNaN(bool isFloat32, T *xmm_reg)
@@ -250,7 +250,7 @@ LookupHeapAccess(const AsmJSModule &module, uint8_t *pc)
 # include <sys/ucontext.h> // for ucontext_t, mcontext_t
 #endif
 
-#if defined(JS_CPU_X64)
+#if defined(JS_CODEGEN_X64)
 # if defined(__DragonFly__)
 #  include <machine/npx.h> // for union savefpu
 # elif defined(__FreeBSD__) || defined(__FreeBSD_kernel__) || \
@@ -332,6 +332,29 @@ static bool IsSignalHandlingBroken() { return false; }
 # define PC_sig(p) R15_sig(p)
 #endif
 
+static bool
+HandleSimulatorInterrupt(JSRuntime *rt, AsmJSActivation *activation, void *faultingAddress)
+{
+    // If the ARM simulator is enabled, the pc is in the simulator C++ code and
+    // not in the generated code, so we check the simulator's pc manually. Also
+    // note that we can't simply use simulator->set_pc() here because the
+    // simulator could be in the middle of an instruction. On ARM, the signal
+    // handlers are currently only used for Odin code, see bug 964258.
+
+#ifdef JS_ARM_SIMULATOR
+    const AsmJSModule &module = activation->module();
+    if (module.containsPC((void *)rt->mainThread.simulator()->get_pc()) &&
+        module.containsPC(faultingAddress))
+    {
+        activation->setResumePC(nullptr);
+        int32_t nextpc = int32_t(module.operationCallbackExit());
+        rt->mainThread.simulator()->set_resume_pc(nextpc);
+        return true;
+    }
+#endif
+    return false;
+}
+
 #if !defined(XP_MACOSX)
 static uint8_t **
 ContextToPC(CONTEXT *context)
@@ -340,7 +363,7 @@ ContextToPC(CONTEXT *context)
     return reinterpret_cast<uint8_t**>(&PC_sig(context));
 }
 
-# if defined(JS_CPU_X64)
+# if defined(JS_CODEGEN_X64)
 static void
 SetRegisterToCoercedUndefined(CONTEXT *context, bool isFloat32, AnyRegister reg)
 {
@@ -386,7 +409,7 @@ SetRegisterToCoercedUndefined(CONTEXT *context, bool isFloat32, AnyRegister reg)
         }
     }
 }
-# endif  // JS_CPU_X64
+# endif  // JS_CODEGEN_X64
 #endif   // !XP_MACOSX
 
 #if defined(XP_WIN)
@@ -435,13 +458,13 @@ HandleException(PEXCEPTION_POINTERS exception)
     if (module.containsPC(faultingAddress)) {
         activation->setResumePC(pc);
         *ppc = module.operationCallbackExit();
-        DWORD oldProtect;
-        if (!VirtualProtect(module.codeBase(), module.functionBytes(), PAGE_EXECUTE, &oldProtect))
-            MOZ_CRASH();
+
+        JSRuntime::AutoLockForOperationCallback lock(rt);
+        module.unprotectCode(rt);
         return true;
     }
 
-# if defined(JS_CPU_X64)
+# if defined(JS_CODEGEN_X64)
     // These checks aren't necessary, but, since we can, check anyway to make
     // sure we aren't covering up a real bug.
     if (!module.maybeHeap() ||
@@ -490,7 +513,7 @@ AsmJSExceptionHandler(LPEXCEPTION_POINTERS exception)
 static uint8_t **
 ContextToPC(x86_thread_state_t &state)
 {
-# if defined(JS_CPU_X64)
+# if defined(JS_CODEGEN_X64)
     JS_STATIC_ASSERT(sizeof(state.uts.ts64.__rip) == sizeof(void*));
     return reinterpret_cast<uint8_t**>(&state.uts.ts64.__rip);
 # else
@@ -499,7 +522,7 @@ ContextToPC(x86_thread_state_t &state)
 # endif
 }
 
-# if defined(JS_CPU_X64)
+# if defined(JS_CODEGEN_X64)
 static bool
 SetRegisterToCoercedUndefined(mach_port_t rtThread, x86_thread_state64_t &state,
                               const AsmJSHeapAccess &heapAccess)
@@ -621,6 +644,12 @@ HandleMachException(JSRuntime *rt, const ExceptionRequest &request)
         return false;
 
     const AsmJSModule &module = activation->module();
+    if (HandleSimulatorInterrupt(rt, activation, faultingAddress)) {
+        JSRuntime::AutoLockForOperationCallback lock(rt);
+        module.unprotectCode(rt);
+        return true;
+    }
+
     if (!module.containsPC(pc))
         return false;
 
@@ -632,14 +661,16 @@ HandleMachException(JSRuntime *rt, const ExceptionRequest &request)
     if (module.containsPC(faultingAddress)) {
         activation->setResumePC(pc);
         *ppc = module.operationCallbackExit();
-        mprotect(module.codeBase(), module.functionBytes(), PROT_EXEC);
+
+        JSRuntime::AutoLockForOperationCallback lock(rt);
+        module.unprotectCode(rt);
 
         // Update the thread state with the new pc.
         kret = thread_set_state(rtThread, x86_THREAD_STATE, (thread_state_t)&state, x86_THREAD_STATE_COUNT);
         return kret == KERN_SUCCESS;
     }
 
-# if defined(JS_CPU_X64)
+# if defined(JS_CODEGEN_X64)
     // These checks aren't necessary, but, since we can, check anyway to make
     // sure we aren't covering up a real bug.
     if (!module.maybeHeap() ||
@@ -863,6 +894,12 @@ HandleSignal(int signum, siginfo_t *info, void *ctx)
         return false;
 
     const AsmJSModule &module = activation->module();
+    if (HandleSimulatorInterrupt(rt, activation, faultingAddress)) {
+        JSRuntime::AutoLockForOperationCallback lock(rt);
+        module.unprotectCode(rt);
+        return true;
+    }
+
     if (!module.containsPC(pc))
         return false;
 
@@ -874,11 +911,13 @@ HandleSignal(int signum, siginfo_t *info, void *ctx)
     if (module.containsPC(faultingAddress)) {
         activation->setResumePC(pc);
         *ppc = module.operationCallbackExit();
-        mprotect(module.codeBase(), module.functionBytes(), PROT_EXEC);
+
+        JSRuntime::AutoLockForOperationCallback lock(rt);
+        module.unprotectCode(rt);
         return true;
     }
 
-# if defined(JS_CPU_X64)
+# if defined(JS_CODEGEN_X64)
     // These checks aren't necessary, but, since we can, check anyway to make
     // sure we aren't covering up a real bug.
     if (!module.maybeHeap() ||
@@ -994,16 +1033,7 @@ js::TriggerOperationCallbackForAsmJSCode(JSRuntime *rt)
     if (!activation)
         return;
 
-    const AsmJSModule &module = activation->module();
-
-#if defined(XP_WIN)
-    DWORD oldProtect;
-    if (!VirtualProtect(module.codeBase(), module.functionBytes(), PAGE_NOACCESS, &oldProtect))
-        MOZ_CRASH();
-#else  // assume Unix
-    if (mprotect(module.codeBase(), module.functionBytes(), PROT_NONE))
-        MOZ_CRASH();
-#endif
+    activation->module().protectCode(rt);
 }
 
 #if defined(MOZ_ASAN) && defined(JS_STANDALONE)

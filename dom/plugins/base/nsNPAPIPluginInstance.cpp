@@ -140,9 +140,9 @@ public:
 
     SharedTextureHandle handle =
       gl::CreateSharedHandle(sPluginContext,
-                             gl::SameProcess,
+                             gl::SharedTextureShareType::SameProcess,
                              (void*)mTextureInfo.mTexture,
-                             gl::TextureID);
+                             gl::SharedTextureBufferType::TextureID);
 
     // We want forget about this now, so delete the texture. Assigning it to zero
     // ensures that we create a new one in Lock()
@@ -562,7 +562,7 @@ nsresult nsNPAPIPluginInstance::SetWindow(NPWindow* window)
   if (!window || RUNNING != mRunning)
     return NS_OK;
 
-#if (MOZ_WIDGET_GTK == 2)
+#if MOZ_WIDGET_GTK
   // bug 108347, flash plugin on linux doesn't like window->width <=
   // 0, but Java needs wants this call.
   if (!nsPluginHost::IsJavaMIMEType(mMIMEType) && window->type == NPWindowTypeWindow &&
@@ -698,7 +698,7 @@ nsresult nsNPAPIPluginInstance::HandleEvent(void* event, int16_t* result,
 
   if (pluginFunctions->event) {
     mCurrentPluginEvent = event;
-#if defined(XP_WIN) || defined(XP_OS2)
+#if defined(XP_WIN)
     NS_TRY_SAFE_CALL_RETURN(tmpResult, (*pluginFunctions->event)(&mNPP, event), this,
                             aSafeToReenterGecko);
 #else
@@ -1021,9 +1021,9 @@ SharedTextureHandle nsNPAPIPluginInstance::CreateSharedHandle()
   } else if (mContentSurface) {
     EnsureGLContext();
     return gl::CreateSharedHandle(sPluginContext,
-                                  gl::SameProcess,
+                                  gl::SharedTextureShareType::SameProcess,
                                   mContentSurface,
-                                  gl::SurfaceTexture);
+                                  gl::SharedTextureBufferType::SurfaceTexture);
   } else return 0;
 }
 

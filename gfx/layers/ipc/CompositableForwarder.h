@@ -13,6 +13,7 @@
 #include "mozilla/layers/CompositorTypes.h"
 #include "mozilla/layers/ISurfaceAllocator.h"  // for ISurfaceAllocator
 #include "mozilla/layers/LayersTypes.h"  // for LayersBackend
+#include "mozilla/layers/TextureClient.h"  // for TextureClient
 #include "nsRegion.h"                   // for nsIntRegion
 
 struct nsIntPoint;
@@ -27,10 +28,8 @@ class SurfaceDescriptor;
 class SurfaceDescriptorTiles;
 class ThebesBufferData;
 class DeprecatedTextureClient;
-class TextureClient;
-class BasicTiledLayerBuffer;
+class ClientTiledLayerBuffer;
 class PTextureChild;
-class TextureClientData;
 
 /**
  * A transaction is a set of changes that happenned on the content side, that
@@ -49,7 +48,7 @@ class CompositableForwarder : public ISurfaceAllocator
 public:
 
   CompositableForwarder()
-    : mMultiProcess(false)
+    : mSerial(++sSerialCounter)
   {}
 
   /**
@@ -92,16 +91,17 @@ public:
    */
   virtual void DestroyThebesBuffer(CompositableClient* aCompositable) = 0;
 
-  virtual void PaintedTiledLayerBuffer(CompositableClient* aCompositable,
-                                       const SurfaceDescriptorTiles& aTiledDescriptor) = 0;
+  /**
+   * Tell the CompositableHost on the compositor side what TiledLayerBuffer to
+   * use for the next composition.
+   */
+  virtual void UseTiledLayerBuffer(CompositableClient* aCompositable,
+                                   const SurfaceDescriptorTiles& aTiledDescriptor) = 0;
 
   /**
-   * Create an unitialized TextureChild.
-   *
-   * This does not trigger the the creation of a TextureHost on the compositor
-   * side (see PTexture::Init).
+   * Create a TextureChild/Parent pair as as well as the TextureHost on the parent side.
    */
-  virtual PTextureChild* CreateEmptyTextureChild() = 0;
+  virtual PTextureChild* CreateTexture(const SurfaceDescriptor& aSharedData, TextureFlags aFlags) = 0;
 
   /**
    * Communicate to the compositor that the texture identified by aCompositable
@@ -160,10 +160,38 @@ public:
   virtual void DestroyedThebesBuffer(const SurfaceDescriptor& aBackBufferToDestroy) = 0;
 
   /**
+   * Tell the CompositableHost on the compositor side to remove the texture.
+   * This function does not delete the TextureHost corresponding to the
+   * TextureClient passed in parameter.
+   */
+  virtual void RemoveTextureFromCompositable(CompositableClient* aCompositable,
+                                             TextureClient* aTexture) = 0;
+
+  /**
    * Tell the compositor side to delete the TextureHost corresponding to the
    * TextureClient passed in parameter.
    */
   virtual void RemoveTexture(TextureClient* aTexture) = 0;
+
+  /**
+   * Holds a reference to a TextureClient until after the next
+   * compositor transaction, and then drops it.
+   */
+  virtual void HoldUntilTransaction(TextureClient* aClient)
+  {
+    if (aClient) {
+      mTexturesToRemove.AppendElement(aClient);
+    }
+  }
+
+  /**
+   * Forcibly remove texture data from TextureClient
+   * This function needs to be called after a tansaction with Compositor.
+   */
+  virtual void RemoveTexturesIfNecessary()
+  {
+    mTexturesToRemove.Clear();
+  }
 
   /**
    * Tell the CompositableHost on the compositor side what texture to use for
@@ -171,6 +199,9 @@ public:
    */
   virtual void UseTexture(CompositableClient* aCompositable,
                           TextureClient* aClient) = 0;
+  virtual void UseComponentAlphaTextures(CompositableClient* aCompositable,
+                                         TextureClient* aClientOnBlack,
+                                         TextureClient* aClientOnWhite) = 0;
 
   /**
    * Tell the compositor side that the shared data has been modified so that
@@ -194,7 +225,7 @@ public:
    * We only don't allow changing the backend type at runtime so this value can
    * be queried once and will not change until Gecko is restarted.
    */
-  LayersBackend GetCompositorBackendType() const
+  virtual LayersBackend GetCompositorBackendType() const MOZ_OVERRIDE
   {
     return mTextureFactoryIdentifier.mParentBackend;
   }
@@ -209,19 +240,18 @@ public:
     return mTextureFactoryIdentifier.mSupportsPartialUploads;
   }
 
-  bool ForwardsToDifferentProcess() const
-  {
-    return mMultiProcess;
-  }
-
   const TextureFactoryIdentifier& GetTextureFactoryIdentifier() const
   {
     return mTextureFactoryIdentifier;
   }
 
+  int32_t GetSerial() { return mSerial; }
+
 protected:
   TextureFactoryIdentifier mTextureFactoryIdentifier;
-  bool mMultiProcess;
+  nsTArray<RefPtr<TextureClient> > mTexturesToRemove;
+  const int32_t mSerial;
+  static mozilla::Atomic<int32_t> sSerialCounter;
 };
 
 } // namespace

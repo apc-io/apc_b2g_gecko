@@ -19,6 +19,7 @@ class nsIInputStream;
 
 BEGIN_FILE_NAMESPACE
 
+class DOMFileRequest;
 class FileHandle;
 class FileRequest;
 class MetadataHelper;
@@ -97,11 +98,11 @@ private:
   void
   OnRequestFinished();
 
-  inline already_AddRefed<FileRequest>
+  inline already_AddRefed<DOMFileRequest>
   GenerateFileRequest();
 
   nsresult
-  WriteOrAppend(const jsval& aValue, JSContext* aCx,
+  WriteOrAppend(JS::Handle<JS::Value> aValue, JSContext* aCx,
                 nsISupports** _retval, bool aAppend);
 
   nsresult

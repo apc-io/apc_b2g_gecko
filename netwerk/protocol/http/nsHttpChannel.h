@@ -23,12 +23,9 @@
 #include "nsWeakReference.h"
 #include "TimingStruct.h"
 #include "AutoClose.h"
-#include "mozilla/Telemetry.h"
 
-class nsAHttpConnection;
 class nsIPrincipal;
 class nsDNSPrefetch;
-class nsHttpTransaction;
 class nsICacheEntryDescriptor;
 class nsICancelable;
 class nsIHttpChannelAuthProvider;
@@ -398,14 +395,16 @@ private:
     uint32_t                          mConcurentCacheAccess : 1;
     // whether the request is setup be byte-range
     uint32_t                          mIsPartialRequest : 1;
+    // true iff there is AutoRedirectVetoNotifier on the stack
+    uint32_t                          mHasAutoRedirectVetoNotifier : 1;
 
     nsTArray<nsContinueRedirectionFunc> mRedirectFuncStack;
 
     PRTime                            mChannelCreationTime;
-    mozilla::TimeStamp                mChannelCreationTimestamp;
-    mozilla::TimeStamp                mAsyncOpenTime;
-    mozilla::TimeStamp                mCacheReadStart;
-    mozilla::TimeStamp                mCacheReadEnd;
+    TimeStamp                         mChannelCreationTimestamp;
+    TimeStamp                         mAsyncOpenTime;
+    TimeStamp                         mCacheReadStart;
+    TimeStamp                         mCacheReadEnd;
     // copied from the transaction before we null out mTransaction
     // so that the timing can still be queried from OnStopRequest
     TimingStruct                      mTransactionTimings;

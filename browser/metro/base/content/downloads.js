@@ -4,7 +4,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const URI_GENERIC_ICON_DOWNLOAD = "chrome://browser/skin/images/alert-downloads-30.png";
-const TOAST_URI_GENERIC_ICON_DOWNLOAD = "ms-appx:///metro/chrome/chrome/skin/images/alert-downloads-30.png"
 
 var MetroDownloadsView = {
   /**
@@ -222,17 +221,14 @@ var MetroDownloadsView = {
       BrowserUI.addAndShowTab(uri, Browser.selectedTab);
   },
 
-  showAlert: function dh_showAlert(aName, aMessage, aTitle, aIcon, aObserver) {
+  showAlert: function dh_showAlert(aName, aMessage, aTitle, aObserver) {
     var notifier = Cc["@mozilla.org/alerts-service;1"]
                      .getService(Ci.nsIAlertsService);
 
     if (!aTitle)
       aTitle = Strings.browser.GetStringFromName("alertDownloads");
 
-    if (!aIcon)
-      aIcon = TOAST_URI_GENERIC_ICON_DOWNLOAD;
-
-    notifier.showAlertNotification(aIcon, aTitle, aMessage, true, "", aObserver, aName);
+    notifier.showAlertNotification("", aTitle, aMessage, true, "", aObserver, aName);
   },
 
   showNotification: function dh_showNotification(title, msg, buttons, priority) {
@@ -355,7 +351,7 @@ var MetroDownloadsView = {
         }
       }
     }
-    this.showAlert(name, msg, title, null, observer);
+    this.showAlert(name, msg, title, observer);
   },
 
   _resetCompletedDownloads: function () {
@@ -536,7 +532,11 @@ var MetroDownloadsView = {
           let notn = this._progressNotification;
           if (notn)
             this._notificationBox.removeNotification(notn);
+
+          ContextUI.displayNavbar();
         }
+
+        this._downloadProgressIndicator.notify();
         break;
       case "dl-failed":
         download = aSubject.QueryInterface(Ci.nsIDownload);
@@ -549,12 +549,27 @@ var MetroDownloadsView = {
     switch (aEvent.type) {
       case 'TabClose': {
         let browser = aEvent.originalTarget.linkedBrowser;
-        dump("DownloadNotificationsView handleEvent, got TabClose event for browser: "+browser+"\n");
-        let notn = this._getNotificationWithValue("download-progress");
-        if (notn && notn.defaultView == browser.contentWindow) {
-          let nextTab = Browser.getNextTab(aEvent.originalTarget);
-          let box = Browser.getNotificationBox(nextTab.linkedBrowser);
-          box.insertBefore(notn, box.firstChild);
+        let tab = Browser.getTabForBrowser(browser);
+        let notificationBox = Browser.getNotificationBox(browser);
+
+        // move any download-related notification before the tab and its notificationBox goes away
+        // The 3 possible values should be mutually exclusive
+        for(let name of ["download-progress",
+                        "save-download",
+                        "download-complete"]) {
+          let notn = notificationBox.getNotificationWithValue(name);
+          if (!notn) {
+            continue;
+          }
+
+          let nextTab = Browser.getNextTab(tab);
+          let nextBox = nextTab && Browser.getNotificationBox(nextTab.browser);
+          if (nextBox) {
+            // move notification to the next tab
+            nextBox.adoptNotification(notn);
+          } else {
+            // Alas, no browser to move the notifications to.
+          }
         }
         break;
       }

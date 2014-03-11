@@ -45,8 +45,11 @@ public:
                                   unsigned int& NTPLow,
                                   unsigned int& timestamp,
                                   unsigned int& playoutTimestamp,
+                                  unsigned int& sendPacketCount,
+                                  unsigned int& sendOctetCount,
                                   unsigned int* jitter = NULL,
-                                  unsigned short* fractionLost = NULL);
+                                  unsigned short* fractionLost = NULL,
+                                  unsigned int* cumulativeLost = NULL);
 
     virtual int SendApplicationDefinedRTCPPacket(
         int channel,
@@ -78,7 +81,8 @@ public:
     virtual int GetRTPStatistics(int channel,
                                  unsigned int& averageJitterMs,
                                  unsigned int& maxJitterMs,
-                                 unsigned int& discardedPackets);
+                                 unsigned int& discardedPackets,
+                                 unsigned int& cumulativeLost);
 
     virtual int GetRTCPStatistics(int channel, CallStatistics& stats);
 

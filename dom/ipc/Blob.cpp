@@ -1,4 +1,4 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set sw=4 ts=8 et tw=80 : */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -955,6 +955,8 @@ private:
       MOZ_ASSERT(!mSlice);
       MOZ_ASSERT(!mDone);
 
+      NS_ENSURE_TRUE_VOID(mActor->Manager());
+
       NormalBlobConstructorParams normalParams;
       normalParams.contentType() = mContentType;
       normalParams.length() = mLength;
@@ -1053,16 +1055,17 @@ public:
   }
 
   NS_IMETHOD
-  GetLastModifiedDate(JSContext* cx, JS::Value* aLastModifiedDate) MOZ_OVERRIDE
+  GetLastModifiedDate(JSContext* cx,
+                      JS::MutableHandle<JS::Value> aLastModifiedDate) MOZ_OVERRIDE
   {
     if (IsDateUnknown()) {
-      aLastModifiedDate->setNull();
+      aLastModifiedDate.setNull();
     } else {
       JSObject* date = JS_NewDateObjectMsec(cx, mLastModificationDate);
       if (!date) {
         return NS_ERROR_OUT_OF_MEMORY;
       }
-      aLastModifiedDate->setObject(*date);
+      aLastModifiedDate.setObject(*date);
     }
     return NS_OK;
   }
@@ -1076,10 +1079,6 @@ RemoteBlob<Parent>::MaybeSetInputStream(const ConstructorParamsType& aParams)
       OptionalInputStreamParams::TInputStreamParams) {
     mInputStreamParams =
       aParams.optionalInputStreamParams().get_InputStreamParams();
-  }
-  else {
-    MOZ_ASSERT(aParams.blobParams().type() ==
-               ChildBlobConstructorParams::TMysteryBlobConstructorParams);
   }
 }
 
@@ -1351,6 +1350,8 @@ Blob<ActorFlavor>::ActorDestroy(ActorDestroyReason aWhy)
   if (mBlob && mOwnsBlob) {
     mBlob->Release();
   }
+
+  mManager = nullptr;
 }
 
 template <ActorFlavorEnum ActorFlavor>

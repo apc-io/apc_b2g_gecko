@@ -221,7 +221,6 @@ cairo-atsui.h
 cairo-beos.h
 cairo-ft.h
 cairo-glitz.h
-cairo-os2.h
 cairo-pdf.h
 cairo-ps.h
 cairo-tee.h
@@ -231,6 +230,7 @@ cairo-xlib.h
 cairo-xlib-xrender.h
 cairo-directfb.h
 cairo-qpainter.h
+cairo-qt.h
 #endif
 dfiff.h
 exception
@@ -690,7 +690,6 @@ oleidl.h
 OpenGL/OpenGL.h
 OpenTptInternet.h
 OpenTransport.h
-os2.h
 OS.h
 osreldate.h
 ostream
@@ -1145,3 +1144,4 @@ unicode/ustring.h
 unicode/utypes.h
 #endif
 libutil.h
+unwind.h

@@ -49,12 +49,11 @@ using namespace JS;
 
 using mozilla::dom::indexedDB::IndexedDatabaseManager;
 
-NS_IMPL_ISUPPORTS5(nsXPConnect,
+NS_IMPL_ISUPPORTS4(nsXPConnect,
                    nsIXPConnect,
                    nsISupportsWeakReference,
                    nsIThreadObserver,
-                   nsIJSRuntimeService,
-                   nsIJSEngineTelemetryStats)
+                   nsIJSRuntimeService)
 
 nsXPConnect* nsXPConnect::gSelf = nullptr;
 bool         nsXPConnect::gOnceAliveNowDead = false;
@@ -79,7 +78,6 @@ const char XPC_XPCONNECT_CONTRACTID[]     = "@mozilla.org/js/xpc/XPConnect;1";
 
 nsXPConnect::nsXPConnect()
     :   mRuntime(nullptr),
-        mDefaultSecurityManager(nullptr),
         mShuttingDown(false),
         mEventDepth(0)
 {
@@ -113,7 +111,7 @@ nsXPConnect::~nsXPConnect()
     // maps that our finalize callback depends on.
     JS_GC(mRuntime->Runtime());
 
-    NS_IF_RELEASE(mDefaultSecurityManager);
+    mDefaultSecurityManager = nullptr;
     gScriptSecurityManager = nullptr;
 
     // shutdown the logging system
@@ -161,25 +159,6 @@ nsXPConnect::ReleaseXPConnectSingleton()
     if (xpc) {
         nsThread::SetMainThreadObserver(nullptr);
 
-#ifdef DEBUG
-        // force a dump of the JavaScript gc heap if JS is still alive
-        // if requested through XPC_SHUTDOWN_HEAP_DUMP environment variable
-        {
-            const char* dumpName = getenv("XPC_SHUTDOWN_HEAP_DUMP");
-            if (dumpName) {
-                FILE* dumpFile = (*dumpName == '\0' ||
-                                  strcmp(dumpName, "stdout") == 0)
-                                 ? stdout
-                                 : fopen(dumpName, "w");
-                if (dumpFile) {
-                    JS_DumpHeap(xpc->GetRuntime()->Runtime(), dumpFile, nullptr,
-                                JSTRACE_OBJECT, nullptr, static_cast<size_t>(-1), nullptr);
-                    if (dumpFile != stdout)
-                        fclose(dumpFile);
-                }
-            }
-        }
-#endif
         nsrefcnt cnt;
         NS_RELEASE2(xpc, cnt);
     }
@@ -206,7 +185,7 @@ nsXPConnect::IsISupportsDescendant(nsIInterfaceInfo* info)
 void
 xpc::SystemErrorReporter(JSContext *cx, const char *message, JSErrorReport *rep)
 {
-    // It would be nice to assert !JS_DescribeScriptedCaller here, to be sure
+    // It would be nice to assert !DescribeScriptedCaller here, to be sure
     // that there isn't any script running that could catch the exception. But
     // the JS engine invokes the error reporter directly if someone reports an
     // ErrorReport that it doesn't know how to turn into an exception. Arguably
@@ -230,10 +209,10 @@ xpc::SystemErrorReporter(JSContext *cx, const char *message, JSErrorReport *rep)
     if (consoleService && errorObject) {
         uint32_t column = rep->uctokenptr - rep->uclinebuf;
 
-        const PRUnichar* ucmessage =
-            static_cast<const PRUnichar*>(rep->ucmessage);
-        const PRUnichar* uclinebuf =
-            static_cast<const PRUnichar*>(rep->uclinebuf);
+        const char16_t* ucmessage =
+            static_cast<const char16_t*>(rep->ucmessage);
+        const char16_t* uclinebuf =
+            static_cast<const char16_t*>(rep->uclinebuf);
 
         rv = errorObject->Init(
               ucmessage ? nsDependentString(ucmessage) : EmptyString(),
@@ -252,13 +231,6 @@ xpc::SystemErrorReporter(JSContext *cx, const char *message, JSErrorReport *rep)
                 message ? message : "<no message>");
     }
 
-}
-
-NS_EXPORT_(void)
-xpc::SystemErrorReporterExternal(JSContext *cx, const char *message,
-                                 JSErrorReport *rep)
-{
-    return SystemErrorReporter(cx, message, rep);
 }
 
 
@@ -382,56 +354,12 @@ TraceXPCGlobal(JSTracer *trc, JSObject *obj)
         mozilla::dom::TraceProtoAndIfaceCache(trc, obj);
 }
 
-#ifdef DEBUG
-#include "mozilla/Preferences.h"
-#include "nsIXULRuntime.h"
-static void
-CheckTypeInference(JSContext *cx, const JSClass *clasp, nsIPrincipal *principal)
-{
-    // Check that the global class isn't whitelisted.
-    if (strcmp(clasp->name, "Sandbox") ||
-        strcmp(clasp->name, "nsXBLPrototypeScript compilation scope") ||
-        strcmp(clasp->name, "nsXULPrototypeScript compilation scope"))
-        return;
-
-    // Check that the pref is on.
-    if (!mozilla::Preferences::GetBool("javascript.options.typeinference"))
-        return;
-
-    // Check that we're not chrome.
-    bool isSystem;
-    nsIScriptSecurityManager* ssm;
-    ssm = XPCWrapper::GetSecurityManager();
-    if (NS_FAILED(ssm->IsSystemPrincipal(principal, &isSystem)) || !isSystem)
-        return;
-
-    // Check that safe mode isn't on.
-    bool safeMode;
-    nsCOMPtr<nsIXULRuntime> xr = do_GetService("@mozilla.org/xre/runtime;1");
-    if (!xr) {
-        NS_WARNING("Couldn't get XUL runtime!");
-        return;
-    }
-    if (NS_FAILED(xr->GetInSafeMode(&safeMode)) || safeMode)
-        return;
-
-    // Finally, do the damn assert.
-    MOZ_ASSERT(ContextOptionsRef(cx).typeInference());
-}
-#else
-#define CheckTypeInference(cx, clasp, principal) {}
-#endif
-
 namespace xpc {
 
 JSObject*
 CreateGlobalObject(JSContext *cx, const JSClass *clasp, nsIPrincipal *principal,
                    JS::CompartmentOptions& aOptions)
 {
-    // Make sure that Type Inference is enabled for everything non-chrome.
-    // Sandboxes and compilation scopes are exceptions. See bug 744034.
-    CheckTypeInference(cx, clasp, principal);
-
     MOZ_ASSERT(NS_IsMainThread(), "using a principal off the main thread?");
     MOZ_ASSERT(principal);
 
@@ -441,6 +369,7 @@ CreateGlobalObject(JSContext *cx, const JSClass *clasp, nsIPrincipal *principal,
     if (!global)
         return nullptr;
     JSAutoCompartment ac(cx, global);
+
     // The constructor automatically attaches the scope to the compartment private
     // of |global|.
     (void) new XPCWrappedNativeScope(cx, global);
@@ -492,6 +421,7 @@ nsXPConnect::InitClassesWithNewWrappedGlobal(JSContext * aJSContext,
     nsresult rv =
         XPCWrappedNative::WrapNewGlobal(helper, aPrincipal,
                                         aFlags & nsIXPConnect::INIT_JS_STANDARD_CLASSES,
+                                        !(aFlags & nsIXPConnect::DONT_FIRE_ONNEWGLOBALHOOK),
                                         aOptions, getter_AddRefs(wrappedGlobal));
     NS_ENSURE_SUCCESS(rv, rv);
 
@@ -502,7 +432,7 @@ nsXPConnect::InitClassesWithNewWrappedGlobal(JSContext * aJSContext,
 
     if (!(aFlags & nsIXPConnect::OMIT_COMPONENTS_OBJECT)) {
         // XPCCallContext gives us an active request needed to save/restore.
-        if (!nsXPCComponents::AttachComponentsObject(aJSContext, wrappedGlobal->GetScope()))
+        if (!wrappedGlobal->GetScope()->AttachComponentsObject(aJSContext))
             return UnexpectedFailure(NS_ERROR_FAILURE);
 
         if (!XPCNativeWrapper::AttachNewConstructorObject(aJSContext, global))
@@ -568,34 +498,26 @@ nsXPConnect::WrapNative(JSContext * aJSContext,
     RootedObject aScope(aJSContext, aScopeArg);
     RootedValue v(aJSContext);
     return NativeInterface2JSObject(aScope, aCOMObj, nullptr, &aIID,
-                                    false, &v, aHolder);
+                                    true, &v, aHolder);
 }
 
 /* void wrapNativeToJSVal (in JSContextPtr aJSContext, in JSObjectPtr aScope, in nsISupports aCOMObj, in nsIIDPtr aIID, out jsval aVal, out nsIXPConnectJSObjectHolder aHolder); */
 NS_IMETHODIMP
-nsXPConnect::WrapNativeToJSVal(JSContext * aJSContext,
-                               JSObject * aScopeArg,
+nsXPConnect::WrapNativeToJSVal(JSContext *aJSContext,
+                               JSObject *aScopeArg,
                                nsISupports *aCOMObj,
                                nsWrapperCache *aCache,
-                               const nsIID * aIID,
+                               const nsIID *aIID,
                                bool aAllowWrapping,
-                               jsval *aVal,
-                               nsIXPConnectJSObjectHolder **aHolder)
+                               MutableHandleValue aVal)
 {
     MOZ_ASSERT(aJSContext, "bad param");
     MOZ_ASSERT(aScopeArg, "bad param");
     MOZ_ASSERT(aCOMObj, "bad param");
 
-    if (aHolder)
-        *aHolder = nullptr;
-
     RootedObject aScope(aJSContext, aScopeArg);
-
-    RootedValue rval(aJSContext);
-    nsresult rv = NativeInterface2JSObject(aScope, aCOMObj, aCache, aIID,
-                                           aAllowWrapping, &rval, aHolder);
-    *aVal = rval;
-    return rv;
+    return NativeInterface2JSObject(aScope, aCOMObj, aCache, aIID,
+                                    aAllowWrapping, aVal, nullptr);
 }
 
 /* void wrapJS (in JSContextPtr aJSContext, in JSObjectPtr aJSObj, in nsIIDRef aIID, [iid_is (aIID), retval] out nsQIResult result); */
@@ -623,13 +545,13 @@ nsXPConnect::WrapJS(JSContext * aJSContext,
 
 NS_IMETHODIMP
 nsXPConnect::JSValToVariant(JSContext *cx,
-                            jsval *aJSVal,
-                            nsIVariant ** aResult)
+                            HandleValue aJSVal,
+                            nsIVariant **aResult)
 {
-    NS_PRECONDITION(aJSVal, "bad param");
     NS_PRECONDITION(aResult, "bad param");
 
-    *aResult = XPCVariant::newVariant(cx, *aJSVal);
+    nsRefPtr<XPCVariant> variant = XPCVariant::newVariant(cx, aJSVal);
+    variant.forget(aResult);
     NS_ENSURE_TRUE(*aResult, NS_ERROR_OUT_OF_MEMORY);
 
     return NS_OK;
@@ -638,10 +560,10 @@ nsXPConnect::JSValToVariant(JSContext *cx,
 /* void wrapJSAggregatedToNative (in nsISupports aOuter, in JSContextPtr aJSContext, in JSObjectPtr aJSObj, in nsIIDRef aIID, [iid_is (aIID), retval] out nsQIResult result); */
 NS_IMETHODIMP
 nsXPConnect::WrapJSAggregatedToNative(nsISupports *aOuter,
-                                      JSContext * aJSContext,
-                                      JSObject * aJSObjArg,
-                                      const nsIID & aIID,
-                                      void * *result)
+                                      JSContext *aJSContext,
+                                      JSObject *aJSObjArg,
+                                      const nsIID &aIID,
+                                      void **result)
 {
     MOZ_ASSERT(aOuter, "bad param");
     MOZ_ASSERT(aJSContext, "bad param");
@@ -670,20 +592,20 @@ nsXPConnect::GetWrappedNativeOfJSObject(JSContext * aJSContext,
 
     RootedObject aJSObj(aJSContext, aJSObjArg);
     aJSObj = js::CheckedUnwrap(aJSObj, /* stopAtOuter = */ false);
-    if (aJSObj && IS_WN_REFLECTOR(aJSObj)) {
-        NS_IF_ADDREF(*_retval = XPCWrappedNative::Get(aJSObj));
-        return NS_OK;
+    if (!aJSObj || !IS_WN_REFLECTOR(aJSObj)) {
+        *_retval = nullptr;
+        return NS_ERROR_FAILURE;
     }
 
-    // else...
-    *_retval = nullptr;
-    return NS_ERROR_FAILURE;
+    nsRefPtr<XPCWrappedNative> temp = XPCWrappedNative::Get(aJSObj);
+    temp.forget(_retval);
+    return NS_OK;
 }
 
 /* nsISupports getNativeOfWrapper(in JSContextPtr aJSContext, in JSObjectPtr  aJSObj); */
 NS_IMETHODIMP_(nsISupports*)
-nsXPConnect::GetNativeOfWrapper(JSContext * aJSContext,
-                                JSObject * aJSObj)
+nsXPConnect::GetNativeOfWrapper(JSContext *aJSContext,
+                                JSObject *aJSObj)
 {
     MOZ_ASSERT(aJSContext, "bad param");
     MOZ_ASSERT(aJSObj, "bad param");
@@ -808,8 +730,6 @@ nsXPConnect::RescueOrphansInScope(JSContext *aJSContext, JSObject *aScopeArg)
 NS_IMETHODIMP
 nsXPConnect::SetDefaultSecurityManager(nsIXPCSecurityManager *aManager)
 {
-    NS_IF_ADDREF(aManager);
-    NS_IF_RELEASE(mDefaultSecurityManager);
     mDefaultSecurityManager = aManager;
 
     nsCOMPtr<nsIScriptSecurityManager> ssm =
@@ -901,19 +821,20 @@ nsXPConnect::CreateSandbox(JSContext *cx, nsIPrincipal *principal,
 NS_IMETHODIMP
 nsXPConnect::EvalInSandboxObject(const nsAString& source, const char *filename,
                                  JSContext *cx, JSObject *sandboxArg,
-                                 bool returnStringOnly, JS::Value *rvalArg)
+                                 bool returnStringOnly, MutableHandleValue rval)
 {
     if (!sandboxArg)
         return NS_ERROR_INVALID_ARG;
 
     RootedObject sandbox(cx, sandboxArg);
-    RootedValue rval(cx);
-    nsresult rv = EvalInSandbox(cx, sandbox, source, filename ? filename :
-                                "x-bogus://XPConnect/Sandbox", 1, JSVERSION_DEFAULT,
-                                returnStringOnly, &rval);
-    NS_ENSURE_SUCCESS(rv, rv);
-    *rvalArg = rval;
-    return NS_OK;
+    nsCString filenameStr;
+    if (filename) {
+        filenameStr.Assign(filename);
+    } else {
+        filenameStr = NS_LITERAL_CSTRING("x-bogus://XPConnect/Sandbox");
+    }
+    return EvalInSandbox(cx, sandbox, source, filenameStr, 1,
+                         JSVERSION_DEFAULT, returnStringOnly, rval);
 }
 
 /* nsIXPConnectJSObjectHolder getWrappedNativePrototype (in JSContextPtr aJSContext, in JSObjectPtr aScope, in nsIClassInfo aClassInfo); */
@@ -957,7 +878,7 @@ nsXPConnect::DebugDump(int16_t depth)
     XPC_LOG_INDENT();
         XPC_LOG_ALWAYS(("gSelf @ %x", gSelf));
         XPC_LOG_ALWAYS(("gOnceAliveNowDead is %d", (int)gOnceAliveNowDead));
-        XPC_LOG_ALWAYS(("mDefaultSecurityManager @ %x", mDefaultSecurityManager));
+        XPC_LOG_ALWAYS(("mDefaultSecurityManager @ %x", mDefaultSecurityManager.get()));
         if (mRuntime) {
             if (depth)
                 mRuntime->DebugDump(depth);
@@ -1059,37 +980,34 @@ nsXPConnect::DebugDumpEvalInJSStackFrame(uint32_t aFrameNumber, const char *aSou
 /* jsval variantToJS (in JSContextPtr ctx, in JSObjectPtr scope, in nsIVariant value); */
 NS_IMETHODIMP
 nsXPConnect::VariantToJS(JSContext* ctx, JSObject* scopeArg, nsIVariant* value,
-                         jsval* _retval)
+                         MutableHandleValue _retval)
 {
     NS_PRECONDITION(ctx, "bad param");
     NS_PRECONDITION(scopeArg, "bad param");
     NS_PRECONDITION(value, "bad param");
-    NS_PRECONDITION(_retval, "bad param");
 
     RootedObject scope(ctx, scopeArg);
     MOZ_ASSERT(js::IsObjectInContextCompartment(scope, ctx));
 
     nsresult rv = NS_OK;
-    RootedValue rval(ctx);
-    if (!XPCVariant::VariantDataToJS(value, &rv, &rval)) {
+    if (!XPCVariant::VariantDataToJS(value, &rv, _retval)) {
         if (NS_FAILED(rv))
             return rv;
 
         return NS_ERROR_FAILURE;
     }
-
-    *_retval = rval;
     return NS_OK;
 }
 
 /* nsIVariant JSToVariant (in JSContextPtr ctx, in jsval value); */
 NS_IMETHODIMP
-nsXPConnect::JSToVariant(JSContext* ctx, const jsval &value, nsIVariant** _retval)
+nsXPConnect::JSToVariant(JSContext* ctx, HandleValue value, nsIVariant** _retval)
 {
     NS_PRECONDITION(ctx, "bad param");
     NS_PRECONDITION(_retval, "bad param");
 
-    *_retval = XPCVariant::newVariant(ctx, value);
+    nsRefPtr<XPCVariant> variant = XPCVariant::newVariant(ctx, value);
+    variant.forget(_retval);
     if (!(*_retval))
         return NS_ERROR_FAILURE;
 
@@ -1253,7 +1171,7 @@ nsXPConnect::CheckForDebugMode(JSRuntime *rt)
 #endif //#ifdef MOZ_JSDEBUGGER
 
 
-NS_EXPORT_(void)
+void
 xpc_ActivateDebugMode()
 {
     XPCJSRuntime* rt = nsXPConnect::GetRuntimeInstance();
@@ -1342,11 +1260,10 @@ nsXPConnect::HoldObject(JSContext *aJSContext, JSObject *aObjectArg,
 
 namespace xpc {
 
-NS_EXPORT_(bool)
-Base64Encode(JSContext *cx, JS::Value val, JS::Value *out)
+bool
+Base64Encode(JSContext *cx, HandleValue val, MutableHandleValue out)
 {
     MOZ_ASSERT(cx);
-    MOZ_ASSERT(out);
 
     JS::RootedValue root(cx, val);
     xpc_qsACString encodedString(cx, root, &root, false,
@@ -1365,15 +1282,14 @@ Base64Encode(JSContext *cx, JS::Value val, JS::Value *out)
     if (!str)
         return false;
 
-    *out = STRING_TO_JSVAL(str);
+    out.setString(str);
     return true;
 }
 
-NS_EXPORT_(bool)
-Base64Decode(JSContext *cx, JS::Value val, JS::Value *out)
+bool
+Base64Decode(JSContext *cx, HandleValue val, MutableHandleValue out)
 {
     MOZ_ASSERT(cx);
-    MOZ_ASSERT(out);
 
     JS::RootedValue root(cx, val);
     xpc_qsACString encodedString(cx, root, &root, false,
@@ -1392,7 +1308,7 @@ Base64Decode(JSContext *cx, JS::Value val, JS::Value *out)
     if (!str)
         return false;
 
-    *out = STRING_TO_JSVAL(str);
+    out.setString(str);
     return true;
 }
 
@@ -1418,29 +1334,6 @@ nsXPConnect::SetDebugModeWhenPossible(bool mode, bool allowSyncDisable)
     gDesiredDebugMode = mode;
     if (!mode && allowSyncDisable)
         CheckForDebugMode(mRuntime->Runtime());
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-nsXPConnect::GetTelemetryValue(JSContext *cx, jsval *rval)
-{
-    RootedObject obj(cx, JS_NewObject(cx, nullptr, nullptr, nullptr));
-    if (!obj)
-        return NS_ERROR_OUT_OF_MEMORY;
-
-    unsigned attrs = JSPROP_ENUMERATE | JSPROP_READONLY | JSPROP_PERMANENT;
-
-    size_t i = JS_SetProtoCalled(cx);
-    RootedValue v(cx, DOUBLE_TO_JSVAL(i));
-    if (!JS_DefineProperty(cx, obj, "setProto", v, nullptr, nullptr, attrs))
-        return NS_ERROR_OUT_OF_MEMORY;
-
-    i = JS_GetCustomIteratorCount(cx);
-    v = DOUBLE_TO_JSVAL(i);
-    if (!JS_DefineProperty(cx, obj, "customIter", v, nullptr, nullptr, attrs))
-        return NS_ERROR_OUT_OF_MEMORY;
-
-    *rval = OBJECT_TO_JSVAL(obj);
     return NS_OK;
 }
 
@@ -1664,21 +1557,23 @@ JS_EXPORT_API(void) DumpCompleteHeap()
 namespace xpc {
 
 bool
-Atob(JSContext *cx, unsigned argc, jsval *vp)
+Atob(JSContext *cx, unsigned argc, Value *vp)
 {
-    if (!argc)
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (!args.length())
         return true;
 
-    return xpc::Base64Decode(cx, JS_ARGV(cx, vp)[0], &JS_RVAL(cx, vp));
+    return xpc::Base64Decode(cx, args[0], args.rval());
 }
 
 bool
-Btoa(JSContext *cx, unsigned argc, jsval *vp)
+Btoa(JSContext *cx, unsigned argc, Value *vp)
 {
-    if (!argc)
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (!args.length())
         return true;
 
-    return xpc::Base64Encode(cx, JS_ARGV(cx, vp)[0], &JS_RVAL(cx, vp));
+    return xpc::Base64Encode(cx, args[0], args.rval());
 }
 
 bool

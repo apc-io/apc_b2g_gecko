@@ -50,14 +50,10 @@
 #ifdef XP_UNIX
 #include <ctype.h>
 #endif
-#ifdef XP_OS2
-#define INCL_DOS
-#include <os2.h>
-#endif
 
 #if defined(XP_MACOSX)
 #define APP_REGISTRY_NAME "Application Registry"
-#elif defined(XP_WIN) || defined(XP_OS2)
+#elif defined(XP_WIN)
 #define APP_REGISTRY_NAME "registry.dat"
 #else
 #define APP_REGISTRY_NAME "appreg"
@@ -583,6 +579,9 @@ LoadExtensionDirectories(nsINIParser &parser,
 void
 nsXREDirProvider::LoadExtensionBundleDirectories()
 {
+  if (!mozilla::Preferences::GetBool("extensions.defaultProviders.enabled", true))
+    return;
+
   if (mProfileDir && !gSafeMode) {
     nsCOMPtr<nsIFile> extensionsINI;
     mProfileDir->Clone(getter_AddRefs(extensionsINI));
@@ -801,7 +800,7 @@ nsXREDirProvider::DoStartup()
       }
     }
 
-    static const PRUnichar kStartup[] = {'s','t','a','r','t','u','p','\0'};
+    static const char16_t kStartup[] = {'s','t','a','r','t','u','p','\0'};
     obsSvc->NotifyObservers(nullptr, "profile-do-change", kStartup);
     // Init the Extension Manager
     nsCOMPtr<nsIObserver> em = do_GetService("@mozilla.org/addons/integration;1");
@@ -822,7 +821,7 @@ nsXREDirProvider::DoStartup()
                                         "profile-after-change");
 
     if (gSafeMode && safeModeNecessary) {
-      static const PRUnichar kCrashed[] = {'c','r','a','s','h','e','d','\0'};
+      static const char16_t kCrashed[] = {'c','r','a','s','h','e','d','\0'};
       obsSvc->NotifyObservers(nullptr, "safemode-forced", kCrashed);
     }
 
@@ -849,7 +848,7 @@ nsXREDirProvider::DoShutdown()
       mozilla::services::GetObserverService();
     NS_ASSERTION(obsSvc, "No observer service?");
     if (obsSvc) {
-      static const PRUnichar kShutdownPersist[] =
+      static const char16_t kShutdownPersist[] =
         {'s','h','u','t','d','o','w','n','-','p','e','r','s','i','s','t','\0'};
       obsSvc->NotifyObservers(nullptr, "profile-change-net-teardown", kShutdownPersist);
       obsSvc->NotifyObservers(nullptr, "profile-change-teardown", kShutdownPersist);
@@ -1001,15 +1000,17 @@ nsXREDirProvider::GetUpdateRootDir(nsIFile* *aResult)
 
   nsAutoString pathHash;
   bool pathHashResult = false;
+  bool hasVendor = gAppData->vendor && strlen(gAppData->vendor) != 0;
 
   nsAutoString appDirPath;
-  if (gAppData->vendor && !getenv("MOZ_UPDATE_NO_HASH_DIR") &&
-      SUCCEEDED(updRoot->GetPath(appDirPath))) {
+  if (SUCCEEDED(updRoot->GetPath(appDirPath))) {
 
-    // Figure out where we should check for a cached hash value
+    // Figure out where we should check for a cached hash value. If the
+    // application doesn't have the nsXREAppData vendor value defined check
+    // under SOFTWARE\Mozilla.
     wchar_t regPath[1024] = { L'\0' };
     swprintf_s(regPath, mozilla::ArrayLength(regPath), L"SOFTWARE\\%S\\%S\\TaskBarIDs",
-               gAppData->vendor, MOZ_APP_NAME);
+               (hasVendor ? gAppData->vendor : "Mozilla"), MOZ_APP_BASENAME);
 
     // If we pre-computed the hash, grab it from the registry.
     pathHashResult = GetCachedHash(HKEY_LOCAL_MACHINE,
@@ -1028,9 +1029,9 @@ nsXREDirProvider::GetUpdateRootDir(nsIFile* *aResult)
   // shared update directory for different apps run from the same path (like
   // Metro & Desktop).
   nsCOMPtr<nsIFile> localDir;
-  if (pathHashResult && (gAppData->vendor || gAppData->name) &&
+  if (pathHashResult && (hasVendor || gAppData->name) &&
       NS_SUCCEEDED(GetUserDataDirectoryHome(getter_AddRefs(localDir), true)) &&
-      NS_SUCCEEDED(localDir->AppendNative(nsDependentCString(gAppData->vendor ?
+      NS_SUCCEEDED(localDir->AppendNative(nsDependentCString(hasVendor ?
                                           gAppData->vendor : gAppData->name))) &&
       NS_SUCCEEDED(localDir->Append(NS_LITERAL_STRING("updates"))) &&
       NS_SUCCEEDED(localDir->Append(pathHash))) {
@@ -1182,30 +1183,6 @@ nsXREDirProvider::GetUserDataDirectoryHome(nsIFile** aFile, bool aLocal)
   NS_ENSURE_SUCCESS(rv, rv);
 
   rv = NS_NewLocalFile(path, true, getter_AddRefs(localDir));
-#elif defined(XP_OS2)
-#if 0 /* For OS/2 we want to always use MOZILLA_HOME */
-  // we want an environment variable of the form
-  // FIREFOX_HOME, etc
-  if (!gAppData)
-    return NS_ERROR_FAILURE;
-  nsDependentCString envVar(nsDependentCString(gAppData->name));
-  envVar.Append("_HOME");
-  char *pHome = getenv(envVar.get());
-#endif
-  char *pHome = getenv("MOZILLA_HOME");
-  if (pHome && *pHome) {
-    rv = NS_NewNativeLocalFile(nsDependentCString(pHome), true,
-                               getter_AddRefs(localDir));
-  } else {
-    PPIB ppib;
-    PTIB ptib;
-    char appDir[CCHMAXPATH];
-
-    DosGetInfoBlocks(&ptib, &ppib);
-    DosQueryModuleName(ppib->pib_hmte, CCHMAXPATH, appDir);
-    *strrchr(appDir, '\\') = '\0';
-    rv = NS_NewNativeLocalFile(nsDependentCString(appDir), true, getter_AddRefs(localDir));
-  }
 #elif defined(MOZ_WIDGET_GONK)
   rv = NS_NewNativeLocalFile(NS_LITERAL_CSTRING("/data/b2g"), true,
                              getter_AddRefs(localDir));
@@ -1408,7 +1385,7 @@ nsXREDirProvider::AppendSysUserExtensionPath(nsIFile* aFile)
 
   nsresult rv;
 
-#if defined (XP_MACOSX) || defined(XP_WIN) || defined(XP_OS2)
+#if defined (XP_MACOSX) || defined(XP_WIN)
 
   static const char* const sXR = "Mozilla";
   rv = aFile->AppendNative(nsDependentCString(sXR));
@@ -1479,7 +1456,7 @@ nsXREDirProvider::AppendProfilePath(nsIFile* aFile,
   }
   NS_ENSURE_SUCCESS(rv, rv);
 
-#elif defined(XP_WIN) || defined(XP_OS2)
+#elif defined(XP_WIN)
   if (!profile.IsEmpty()) {
     rv = AppendProfileString(aFile, profile.get());
   }

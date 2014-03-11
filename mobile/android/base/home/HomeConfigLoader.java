@@ -5,7 +5,7 @@
 
 package org.mozilla.gecko.home;
 
-import org.mozilla.gecko.home.HomeConfig.PageEntry;
+import org.mozilla.gecko.home.HomeConfig.PanelConfig;
 import org.mozilla.gecko.home.HomeConfig.OnChangeListener;
 
 import android.content.Context;
@@ -13,9 +13,9 @@ import android.support.v4.content.AsyncTaskLoader;
 
 import java.util.List;
 
-public class HomeConfigLoader extends AsyncTaskLoader<List<PageEntry>> {
+public class HomeConfigLoader extends AsyncTaskLoader<HomeConfig.State> {
     private final HomeConfig mConfig;
-    private List<PageEntry> mPageEntries;
+    private HomeConfig.State mConfigState;
 
     public HomeConfigLoader(Context context, HomeConfig homeConfig) {
         super(context);
@@ -23,32 +23,32 @@ public class HomeConfigLoader extends AsyncTaskLoader<List<PageEntry>> {
     }
 
     @Override
-    public List<PageEntry> loadInBackground() {
+    public HomeConfig.State loadInBackground() {
         return mConfig.load();
     }
 
     @Override
-    public void deliverResult(List<PageEntry> pageEntries) {
+    public void deliverResult(HomeConfig.State configState) {
         if (isReset()) {
-            mPageEntries = null;
+            mConfigState = null;
             return;
         }
 
-        mPageEntries = pageEntries;
+        mConfigState = configState;
         mConfig.setOnChangeListener(new ForceLoadChangeListener());
 
         if (isStarted()) {
-            super.deliverResult(pageEntries);
+            super.deliverResult(configState);
         }
     }
 
     @Override
     protected void onStartLoading() {
-        if (mPageEntries != null) {
-            deliverResult(mPageEntries);
+        if (mConfigState != null) {
+            deliverResult(mConfigState);
         }
 
-        if (takeContentChanged() || mPageEntries == null) {
+        if (takeContentChanged() || mConfigState == null) {
             forceLoad();
         }
     }
@@ -59,8 +59,8 @@ public class HomeConfigLoader extends AsyncTaskLoader<List<PageEntry>> {
     }
 
     @Override
-    public void onCanceled(List<PageEntry> pageEntries) {
-        mPageEntries = null;
+    public void onCanceled(HomeConfig.State configState) {
+        mConfigState = null;
     }
 
     @Override
@@ -70,7 +70,7 @@ public class HomeConfigLoader extends AsyncTaskLoader<List<PageEntry>> {
         // Ensure the loader is stopped.
         onStopLoading();
 
-        mPageEntries = null;
+        mConfigState = null;
         mConfig.setOnChangeListener(null);
     }
 

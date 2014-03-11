@@ -23,7 +23,6 @@ class nsBlockFrame;
 class gfxASurface;
 class gfxDrawable;
 class nsView;
-class imgIContainer;
 class nsIFrame;
 class nsStyleCoord;
 class nsStyleCorners;
@@ -51,6 +50,7 @@ struct nsOverflowAreas;
 #include "nsStyleConsts.h"
 #include "nsGkAtoms.h"
 #include "nsRuleNode.h"
+#include "imgIContainer.h"
 #include "mozilla/gfx/2D.h"
 
 #include <limits>
@@ -70,6 +70,18 @@ class HTMLVideoElement;
 namespace layers {
 class Layer;
 }
+}
+
+namespace mozilla {
+
+struct DisplayPortPropertyData {
+  DisplayPortPropertyData(const nsRect& aRect, uint32_t aPriority)
+    : mRect(aRect)
+    , mPriority(aPriority)
+  {}
+  nsRect mRect;
+  uint32_t mPriority;
+};
 
 template <class AnimationsOrTransitions>
 extern AnimationsOrTransitions* HasAnimationOrTransition(nsIContent* aContent,
@@ -375,11 +387,28 @@ public:
   static bool IsAncestorFrameCrossDoc(const nsIFrame* aAncestorFrame, const nsIFrame* aFrame,
                                         const nsIFrame* aCommonAncestor = nullptr);
 
+  /**
+   * Sets the fixed-pos metadata properties on aLayer.
+   * aAnchorRect is the basic anchor rectangle. If aFixedPosFrame is not a viewport
+   * frame, then we pick a corner of aAnchorRect to as the anchor point for the
+   * fixed-pos layer (i.e. the point to remain stable during zooming), based
+   * on which of the fixed-pos frame's CSS absolute positioning offset
+   * properties (top, left, right, bottom) are auto. aAnchorRect is in the
+   * coordinate space of aLayer's container layer (i.e. relative to the reference
+   * frame of the display item which is building aLayer's container layer).
+   */
   static void SetFixedPositionLayerData(Layer* aLayer, const nsIFrame* aViewportFrame,
-                                        nsSize aViewportSize,
+                                        const nsRect& aAnchorRect,
                                         const nsIFrame* aFixedPosFrame,
                                         nsPresContext* aPresContext,
                                         const ContainerLayerParameters& aContainerParameters);
+
+  /**
+   * Return true if aPresContext's viewport has a displayport.
+   * Fills in aDisplayPort with the displayport rectangle if non-null.
+   */
+  static bool ViewportHasDisplayPort(nsPresContext* aPresContext,
+                                     nsRect* aDisplayPort = nullptr);
 
   /**
    * Return true if aFrame is a fixed-pos frame and is a child of a viewport
@@ -637,14 +666,6 @@ public:
                                    uint32_t aFlags = 0);
 
   /**
-   * Transform aRect relative to aAncestor down to the coordinate system of
-   * aFrame. Computes the bounding-box of the true quadrilateral.
-   */
-  static nsRect TransformAncestorRectToFrame(nsIFrame* aFrame,
-                                             const nsRect& aRect,
-                                             const nsIFrame* aAncestor);
-
-  /**
    * Transform aRect relative to aFrame up to the coordinate system of
    * aAncestor. Computes the bounding-box of the true quadrilateral.
    * Pass non-null aPreservesAxisAlignedRectangles and it will be set to true if
@@ -768,7 +789,8 @@ public:
     PAINT_ALL_CONTINUATIONS = 0x40,
     PAINT_TO_WINDOW = 0x80,
     PAINT_EXISTING_TRANSACTION = 0x100,
-    PAINT_NO_COMPOSITE = 0x200
+    PAINT_NO_COMPOSITE = 0x200,
+    PAINT_COMPRESSED = 0x400
   };
 
   /**
@@ -799,6 +821,8 @@ public:
    * If PAINT_EXISTING_TRANSACTION is set, then BeginTransaction() has already
    * been called on aFrame's widget's layer manager and should not be
    * called again.
+   * If PAINT_COMPRESSED is set, the FrameLayerBuilder should be set to compressed mode
+   * to avoid short cut optimizations.
    *
    * So there are three possible behaviours:
    * 1) PAINT_WIDGET_LAYERS is set and aRenderingContext is null; we paint
@@ -837,7 +861,7 @@ public:
    */
   static bool
   BinarySearchForPosition(nsRenderingContext* acx,
-                          const PRUnichar* aText,
+                          const char16_t* aText,
                           int32_t    aBaseWidth,
                           int32_t    aBaseInx,
                           int32_t    aStartInx,
@@ -999,24 +1023,25 @@ public:
   static nsIFrame* GetParentOrPlaceholderForCrossDoc(nsIFrame* aFrame);
 
   /**
-   * Get a frame's next-in-flow, or, if it doesn't have one, its special sibling.
+   * Get a frame's next-in-flow, or, if it doesn't have one, its
+   * block-in-inline-split sibling.
    */
   static nsIFrame*
-  GetNextContinuationOrSpecialSibling(nsIFrame *aFrame);
+  GetNextContinuationOrIBSplitSibling(nsIFrame *aFrame);
 
   /**
-   * Get the first frame in the continuation-plus-special-sibling chain
+   * Get the first frame in the continuation-plus-ib-split-sibling chain
    * containing aFrame.
    */
   static nsIFrame*
-  FirstContinuationOrSpecialSibling(nsIFrame *aFrame);
+  FirstContinuationOrIBSplitSibling(nsIFrame *aFrame);
 
   /**
-   * Is FirstContinuationOrSpecialSibling(aFrame) going to return
+   * Is FirstContinuationOrIBSplitSibling(aFrame) going to return
    * aFrame?
    */
   static bool
-  IsFirstContinuationOrSpecialSibling(nsIFrame *aFrame);
+  IsFirstContinuationOrIBSplitSibling(nsIFrame *aFrame);
 
   /**
    * Check whether aFrame is a part of the scrollbar or scrollcorner of
@@ -1063,9 +1088,9 @@ public:
    * @param aFrame Frame whose (min-/max-/)width is being computed
    * @param aContainingBlockWidth Width of aFrame's containing block.
    * @param aContentEdgeToBoxSizing The sum of any left/right padding and
-   *          border that goes inside the rect chosen by -moz-box-sizing.
+   *          border that goes inside the rect chosen by box-sizing.
    * @param aBoxSizingToMarginEdge The sum of any left/right padding, border,
-   *          and margin that goes outside the rect chosen by -moz-box-sizing.
+   *          and margin that goes outside the rect chosen by box-sizing.
    * @param aCoord The width value to compute.
    */
   static nscoord ComputeWidthValue(
@@ -1170,14 +1195,14 @@ public:
 
   static void DrawString(const nsIFrame*       aFrame,
                          nsRenderingContext*   aContext,
-                         const PRUnichar*      aString,
+                         const char16_t*      aString,
                          int32_t               aLength,
                          nsPoint               aPoint,
                          nsStyleContext*       aStyleContext = nullptr);
 
   static nscoord GetStringWidth(const nsIFrame*      aFrame,
                                 nsRenderingContext* aContext,
-                                const PRUnichar*     aString,
+                                const char16_t*     aString,
                                 int32_t              aLength);
 
   /**
@@ -1504,6 +1529,31 @@ public:
   static nsIFrame* GetDisplayRootFrame(nsIFrame* aFrame);
 
   /**
+   * Get the reference frame that would be used when constructing a
+   * display item for this frame.  (Note, however, that
+   * nsDisplayTransform use the reference frame appropriate for their
+   * GetTransformRootFrame(), rather than using their own frame as a
+   * reference frame.)
+   *
+   * This duplicates some of the logic of GetDisplayRootFrame above and
+   * of nsDisplayListBuilder::FindReferenceFrameFor.
+   *
+   * If you have an nsDisplayListBuilder, you should get the reference
+   * frame from it instead of calling this.
+   */
+  static nsIFrame* GetReferenceFrame(nsIFrame* aFrame);
+
+  /**
+   * Get the parent of this frame, except if that parent is part of a
+   * preserve-3d hierarchy, get the parent of the root of the
+   * preserve-3d hierarchy.
+   *
+   * (This is used as the starting point for reference frame computation
+   * for nsDisplayTransform display items.)
+   */
+  static nsIFrame* GetTransformRootFrame(nsIFrame* aFrame);
+
+  /**
    * Get textrun construction flags determined by a given style; in particular
    * some combination of:
    * -- TEXT_DISABLE_OPTIONAL_LIGATURES if letter-spacing is in use
@@ -1512,6 +1562,7 @@ public:
    */
   static uint32_t GetTextRunFlagsForStyle(nsStyleContext* aStyleContext,
                                           const nsStyleFont* aStyleFont,
+                                          const nsStyleText* aStyleText,
                                           nscoord aLetterSpacing);
 
   /**
@@ -1568,7 +1619,19 @@ public:
     /* Whether we should skip premultiplication -- the resulting
        image will always be an image surface, and must not be given to
        Thebes for compositing! */
-    SFE_NO_PREMULTIPLY_ALPHA = 1 << 3
+    SFE_NO_PREMULTIPLY_ALPHA = 1 << 3,
+    /* Whether we should skip getting a surface for vector images and
+       return a DirectDrawInfo containing an imgIContainer instead. */
+    SFE_NO_RASTERIZING_VECTORS = 1 << 4
+  };
+
+  struct DirectDrawInfo {
+    /* imgIContainer to directly draw to a context */
+    nsCOMPtr<imgIContainer> mImgContainer;
+    /* which frame to draw */
+    uint32_t mWhichFrame;
+    /* imgIContainer flags to use when drawing */
+    uint32_t mDrawingFlags;
   };
 
   struct SurfaceFromElementResult {
@@ -1577,6 +1640,8 @@ public:
     /* mSurface will contain the resulting surface, or will be nullptr on error */
     nsRefPtr<gfxASurface> mSurface;
     mozilla::RefPtr<SourceSurface> mSourceSurface;
+    /* Contains info for drawing when there is no mSourceSurface. */
+    DirectDrawInfo mDrawInfo;
 
     /* The size of the surface */
     gfxIntSize mSize;
@@ -1700,11 +1765,14 @@ public:
   static bool IsAnimationLoggingEnabled();
 
   /**
-   * Find the maximum scale for an element (aContent) over the course of any
-   * animations and transitions on the element. Will return 1,1 if there is no
-   * animated scaling.
+   * Find a suitable scale for an element (aContent) over the course of any
+   * animations and transitions on the element.
+   * It will check the maximum and minimum scale during the animations and
+   * transitions and return a suitable value for performance and quality.
+   * Will return scale(1,1) if there is no animated scaling.
+   * Always return positive value.
    */
-  static gfxSize GetMaximumAnimatedScale(nsIContent* aContent);
+  static gfxSize ComputeSuitableScaleForAnimation(nsIContent* aContent);
 
   /**
    * Checks if we should forcibly use nearest pixel filtering for the

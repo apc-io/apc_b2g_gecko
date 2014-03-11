@@ -18,7 +18,7 @@
 #include "nsIDOMMozNamedAttrMap.h"
 #include "nsIDOMMutationEvent.h"
 #include "nsBindingManager.h"
-#include "nsINameSpaceManager.h"
+#include "nsNameSpaceManager.h"
 #include "nsIDocument.h"
 #include "nsIServiceManager.h"
 #include "nsITreeColumns.h"
@@ -606,19 +606,19 @@ inDOMView::Drop(int32_t row, int32_t orientation, nsIDOMDataTransfer* aDataTrans
 }
 
 NS_IMETHODIMP
-inDOMView::PerformAction(const PRUnichar *action)
+inDOMView::PerformAction(const char16_t *action)
 {
   return NS_OK;
 }
 
 NS_IMETHODIMP
-inDOMView::PerformActionOnRow(const PRUnichar *action, int32_t row)
+inDOMView::PerformActionOnRow(const char16_t *action, int32_t row)
 {
   return NS_OK;
 }
 
 NS_IMETHODIMP
-inDOMView::PerformActionOnCell(const PRUnichar* action, int32_t row, nsITreeColumn* col)
+inDOMView::PerformActionOnCell(const char16_t* action, int32_t row, nsITreeColumn* col)
 {
   return NS_OK;
 }
@@ -652,8 +652,7 @@ inDOMView::AttributeChanged(nsIDocument* aDocument, dom::Element* aElement,
   nsCOMPtr<nsIDOMAttr> domAttr;
   nsDependentAtomString attrStr(aAttribute);
   if (aNameSpaceID) {
-    nsCOMPtr<nsINameSpaceManager> nsm =
-      do_GetService(NS_NAMESPACEMANAGER_CONTRACTID);
+    nsNameSpaceManager* nsm = nsNameSpaceManager::GetInstance();
     if (!nsm) {
       // we can't find out which attribute we want :(
       return;

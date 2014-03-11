@@ -93,16 +93,11 @@ var AccessFuTest = {
     // Disable the console service logging.
     Logger.test = false;
     Logger.logLevel = Logger.INFO;
-    AccessFu.doneCallback = function doneCallback() {
-      // This is being called once AccessFu has been shut down.
-      // Detach AccessFu from everything it attached itself to.
+    // Finish through idle callback to let AccessFu._disable complete.
+    SimpleTest.executeSoon(function () {
       AccessFu.detach();
-      // and finish the test run.
       SimpleTest.finish();
-    };
-    // Tear down accessibility and make AccessFu stop.
-    SpecialPowers.setIntPref("accessibility.accessfu.notify_output", 0);
-    SpecialPowers.setIntPref("accessibility.accessfu.activate", 0);
+    });
   },
 
   nextTest: function AccessFuTest_nextTest() {
@@ -138,8 +133,12 @@ var AccessFuTest = {
       // Enable logging to the console service.
       Logger.test = true;
       Logger.logLevel = Logger.DEBUG;
-      // This is being called once accessibility has been turned on.
+    };
 
+    SpecialPowers.pushPrefEnv({
+      'set': [['accessibility.accessfu.notify_output', 1],
+              ['dom.mozSettings.enabled', true]]
+    }, function () {
       if (AccessFuTest._waitForExplicitFinish) {
         // Run all test functions asynchronously.
         AccessFuTest.nextTest();
@@ -148,10 +147,124 @@ var AccessFuTest = {
         [testFunc() for (testFunc of gTestFuncs)];
         AccessFuTest.finish();
       }
-    };
+    });
+  }
+};
 
-    // Invoke the whole thing.
-    SpecialPowers.setIntPref("accessibility.accessfu.activate", 1);
-    SpecialPowers.setIntPref("accessibility.accessfu.notify_output", 1);
+function AccessFuContentTest(aFuncResultPairs) {
+  this.queue = aFuncResultPairs;
+}
+
+AccessFuContentTest.prototype = {
+  currentPair: null,
+
+  start: function(aFinishedCallback) {
+    this.finishedCallback = aFinishedCallback;
+    var self = this;
+
+    // Get top content message manager, and set it up.
+    this.mms = [Utils.getMessageManager(currentBrowser())];
+    this.setupMessageManager(this.mms[0], function () {
+      // Get child message managers and set them up
+      var frames = currentTabDocument().querySelectorAll('iframe');
+      var toSetup = 0;
+      for (var i = 0; i < frames.length; i++ ) {
+        var mm = Utils.getMessageManager(frames[i]);
+        if (mm) {
+          toSetup++;
+          self.mms.push(mm);
+          self.setupMessageManager(mm, function () {
+            if (--toSetup === 0) {
+              // All message managers are loaded and ready to go.
+              self.pump();
+            }
+          });
+        }
+      }
+    });
+  },
+
+  setupMessageManager:  function (aMessageManager, aCallback) {
+    function contentScript() {
+      addMessageListener('AccessFuTest:Focus', function (aMessage) {
+        var elem = content.document.querySelector(aMessage.json.selector);
+        if (elem) {
+          if (aMessage.json.blur) {
+            elem.blur();
+          } else {
+            elem.focus();
+          }
+        }
+      });
+    }
+
+    aMessageManager.addMessageListener('AccessFu:Present', this);
+    aMessageManager.addMessageListener('AccessFu:Ready', function (aMessage) {
+      aMessageManager.addMessageListener('AccessFu:ContentStarted', aCallback);
+      aMessageManager.sendAsyncMessage('AccessFu:Start', { buildApp: 'browser' });
+    });
+
+    aMessageManager.loadFrameScript(
+      'chrome://global/content/accessibility/content-script.js', false);
+    aMessageManager.loadFrameScript(
+      'data:,(' + contentScript.toString() + ')();', false);
+  },
+
+  pump: function() {
+    this.currentPair = this.queue.shift();
+
+    if (this.currentPair) {
+      if (this.currentPair[0] instanceof Function) {
+        this.currentPair[0](this.mms[0]);
+      } else if (this.currentPair[0]) {
+        this.mms[0].sendAsyncMessage(this.currentPair[0].name,
+         this.currentPair[0].json);
+      }
+
+      if (!this.currentPair[1]) {
+       this.pump();
+     }
+    } else if (this.finishedCallback) {
+      for (var mm of this.mms) {
+       mm.sendAsyncMessage('AccessFu:Stop');
+      }
+      this.finishedCallback();
+    }
+  },
+
+  receiveMessage: function(aMessage) {
+    if (!this.currentPair) {
+      return;
+    }
+
+    var expected = this.currentPair[1];
+
+    if (expected) {
+      if (expected.speak !== undefined) {
+        var speech = this.extractUtterance(aMessage.json);
+        if (!speech) {
+          // Probably a visual highlight adjustment after a scroll.
+          return;
+        }
+        var checkFunc = SimpleTest[expected.speak_checkFunc] || is;
+        checkFunc(speech, expected.speak);
+      }
+    }
+
+    this.pump();
+  },
+
+  extractUtterance: function(aData) {
+    for (var output of aData) {
+      if (output && output.type === 'Speech') {
+        for (var action of output.details.actions) {
+          if (action && action.method == 'speak') {
+            return action.data;
+          }
+        }
+      }
+    }
+
+    return null;
   }
 };

@@ -294,7 +294,9 @@ Section "Uninstall"
 
 !ifdef MOZ_METRO
   ${If} ${AtLeastWin8}
-    ${un.CleanupMetroBrowserHandlerValues} ${DELEGATE_EXECUTE_HANDLER_ID}
+    ${un.CleanupMetroBrowserHandlerValues} ${DELEGATE_EXECUTE_HANDLER_ID} \
+                                           "FirefoxURL" \
+                                           "FirefoxHTML"
   ${EndIf}
   ${ResetWin8PromptKeys}
   ${ResetWin8MetroSplash}
@@ -684,6 +686,10 @@ Function un.onInit
   StrCpy $LANGUAGE 0
 
   ${un.UninstallUnOnInitCommon}
+
+  ${If} ${AtLeastWinVista}
+    System::Call 'user32::SetProcessDPIAware()'
+  ${EndIf}
 
   !insertmacro InitInstallOptionsFile "unconfirm.ini"
 FunctionEnd

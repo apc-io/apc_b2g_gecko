@@ -3,6 +3,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/ArrayUtils.h"
+
 #include "inDOMUtils.h"
 #include "inLayoutUtils.h"
 
@@ -381,8 +383,8 @@ inDOMUtils::SelectorMatchesElement(nsIDOMElement* aElement,
 NS_IMETHODIMP
 inDOMUtils::IsInheritedProperty(const nsAString &aPropertyName, bool *_retval)
 {
-  nsCSSProperty prop = nsCSSProps::LookupProperty(aPropertyName,
-                                                  nsCSSProps::eAny);
+  nsCSSProperty prop =
+    nsCSSProps::LookupProperty(aPropertyName, nsCSSProps::eIgnoreEnabledState);
   if (prop == eCSSProperty_UNKNOWN) {
     *_retval = false;
     return NS_OK;
@@ -406,7 +408,7 @@ extern const char* const kCSSRawProperties[];
 
 NS_IMETHODIMP
 inDOMUtils::GetCSSPropertyNames(uint32_t aFlags, uint32_t* aCount,
-                                PRUnichar*** aProps)
+                                char16_t*** aProps)
 {
   // maxCount is the largest number of properties we could have; our actual
   // number might be smaller because properties might be disabled.
@@ -421,8 +423,8 @@ inDOMUtils::GetCSSPropertyNames(uint32_t aFlags, uint32_t* aCount,
     maxCount += (eCSSProperty_COUNT_with_aliases - eCSSProperty_COUNT);
   }
 
-  PRUnichar** props =
-    static_cast<PRUnichar**>(nsMemory::Alloc(maxCount * sizeof(PRUnichar*)));
+  char16_t** props =
+    static_cast<char16_t**>(nsMemory::Alloc(maxCount * sizeof(char16_t*)));
 
 #define DO_PROP(_prop)                                                  \
   PR_BEGIN_MACRO                                                        \
@@ -486,7 +488,8 @@ static void GetKeywordsForProperty(const nsCSSProperty aProperty,
     // Shorthand props have no keywords.
     return;
   }
-  const int32_t *keywordTable = nsCSSProps::kKeywordTableTable[aProperty];
+  const nsCSSProps::KTableValue *keywordTable =
+    nsCSSProps::kKeywordTableTable[aProperty];
   if (keywordTable && keywordTable != nsCSSProps::kBoxPropSourceKTable) {
     size_t i = 0;
     while (nsCSSKeyword(keywordTable[i]) != eCSSKeyword_UNKNOWN) {
@@ -559,10 +562,10 @@ static void GetOtherValuesForProperty(const uint32_t aParserVariant,
 NS_IMETHODIMP
 inDOMUtils::GetCSSValuesForProperty(const nsAString& aProperty,
                                     uint32_t* aLength,
-                                    PRUnichar*** aValues)
+                                    char16_t*** aValues)
 {
   nsCSSProperty propertyID = nsCSSProps::LookupProperty(aProperty,
-                                                        nsCSSProps::eEnabled);
+                                                        nsCSSProps::eEnabledForAllContent);
   if (propertyID == eCSSProperty_UNKNOWN) {
     return NS_ERROR_FAILURE;
   }
@@ -605,8 +608,8 @@ inDOMUtils::GetCSSValuesForProperty(const nsAString& aProperty,
   InsertNoDuplicates(array, NS_LITERAL_STRING("unset"));
 
   *aLength = array.Length();
-  PRUnichar** ret =
-    static_cast<PRUnichar**>(NS_Alloc(*aLength * sizeof(PRUnichar*)));
+  char16_t** ret =
+    static_cast<char16_t**>(NS_Alloc(*aLength * sizeof(char16_t*)));
   for (uint32_t i = 0; i < *aLength; ++i) {
     ret[i] = ToNewUnicode(array[i]);
   }
@@ -616,7 +619,7 @@ inDOMUtils::GetCSSValuesForProperty(const nsAString& aProperty,
 
 NS_IMETHODIMP
 inDOMUtils::ColorNameToRGB(const nsAString& aColorName, JSContext* aCx,
-                           JS::Value* aValue)
+                           JS::MutableHandle<JS::Value> aValue)
 {
   nscolor color;
   if (!NS_ColorNameToRGB(aColorName, &color)) {
@@ -628,8 +631,7 @@ inDOMUtils::ColorNameToRGB(const nsAString& aColorName, JSContext* aCx,
   triple.mG = NS_GET_G(color);
   triple.mB = NS_GET_B(color);
 
-  if (!triple.ToObject(aCx, JS::NullPtr(),
-                       JS::MutableHandle<JS::Value>::fromMarkedLocation(aValue))) {
+  if (!triple.ToObject(aCx, JS::NullPtr(), aValue)) {
     return NS_ERROR_FAILURE;
   }
 
@@ -762,7 +764,7 @@ GetStatesForPseudoClass(const nsAString& aStatePseudo)
     nsEventStates(),
     nsEventStates()
   };
-  static_assert(NS_ARRAY_LENGTH(sPseudoClassStates) ==
+  static_assert(MOZ_ARRAY_LENGTH(sPseudoClassStates) ==
                 nsCSSPseudoClasses::ePseudoClass_NotPseudoClass + 1,
                 "Length of PseudoClassStates array is incorrect");
 

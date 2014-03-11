@@ -20,7 +20,7 @@ function test() {
     gSources = gDebugger.DebuggerView.Sources;
     gSearchBox = gDebugger.DebuggerView.Filtering._searchbox;
 
-    waitForSourceAndCaretAndScopes(gPanel, "-02.js", 6)
+    waitForSourceAndCaretAndScopes(gPanel, "-02.js", 1)
       .then(performFileSearch)
       .then(escapeAndHide)
       .then(escapeAndClear)
@@ -44,7 +44,7 @@ function test() {
 function performFileSearch() {
   let finished = promise.all([
     ensureSourceIs(gPanel, "-02.js"),
-    ensureCaretAt(gPanel, 6),
+    ensureCaretAt(gPanel, 1),
     once(gDebugger, "popupshown"),
     waitForDebuggerEvents(gPanel, gDebugger.EVENTS.FILE_SEARCH_MATCH_FOUND),
     waitForSourceShown(gPanel, "-01.js")
@@ -102,7 +102,7 @@ function escapeAndClear() {
 }
 
 function verifySourceAndCaret(aUrl, aLine, aColumn) {
-  ok(gSources.selectedItem.label.contains(aUrl),
+  ok(gSources.selectedItem.attachment.label.contains(aUrl),
     "The selected item's label appears to be correct.");
   ok(gSources.selectedItem.value.contains(aUrl),
     "The selected item's value appears to be correct.");

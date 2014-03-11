@@ -18,8 +18,7 @@
 #include "nsEventListenerManager.h"
 #include "nsIDOMDocument.h"
 #include "nsReadableUtils.h"
-#include "mozilla/MutationEvent.h"
-#include "nsINameSpaceManager.h"
+#include "mozilla/InternalMutationEvent.h"
 #include "nsIURI.h"
 #include "nsIDOMEvent.h"
 #include "nsIDOMText.h"
@@ -258,7 +257,7 @@ nsGenericDOMDataNode::ReplaceData(uint32_t aOffset, uint32_t aCount,
 
 nsresult
 nsGenericDOMDataNode::SetTextInternal(uint32_t aOffset, uint32_t aCount,
-                                      const PRUnichar* aBuffer,
+                                      const char16_t* aBuffer,
                                       uint32_t aLength, bool aNotify,
                                       CharacterDataChangeInfo::Details* aDetails)
 {
@@ -326,7 +325,7 @@ nsGenericDOMDataNode::SetTextInternal(uint32_t aOffset, uint32_t aCount,
 
     // Allocate new buffer
     int32_t newLength = textLength - aCount + aLength;
-    PRUnichar* to = new PRUnichar[newLength];
+    char16_t* to = new char16_t[newLength];
     NS_ENSURE_TRUE(to, NS_ERROR_OUT_OF_MEMORY);
 
     // Copy over appropriate data
@@ -334,7 +333,7 @@ nsGenericDOMDataNode::SetTextInternal(uint32_t aOffset, uint32_t aCount,
       mText.CopyTo(to, 0, aOffset);
     }
     if (aLength) {
-      memcpy(to + aOffset, aBuffer, aLength * sizeof(PRUnichar));
+      memcpy(to + aOffset, aBuffer, aLength * sizeof(char16_t));
     }
     if (endOffset != textLength) {
       mText.CopyTo(to + aOffset + aLength, endOffset, textLength - endOffset);
@@ -394,11 +393,11 @@ nsGenericDOMDataNode::ToCString(nsAString& aBuf, int32_t aOffset,
                                 int32_t aLen) const
 {
   if (mText.Is2b()) {
-    const PRUnichar* cp = mText.Get2b() + aOffset;
-    const PRUnichar* end = cp + aLen;
+    const char16_t* cp = mText.Get2b() + aOffset;
+    const char16_t* end = cp + aLen;
 
     while (cp < end) {
-      PRUnichar ch = *cp++;
+      char16_t ch = *cp++;
       if (ch == '&') {
         aBuf.AppendLiteral("&amp;");
       } else if (ch == '<') {
@@ -418,7 +417,7 @@ nsGenericDOMDataNode::ToCString(nsAString& aBuf, int32_t aOffset,
     const unsigned char* end = cp + aLen;
 
     while (cp < end) {
-      PRUnichar ch = *cp++;
+      char16_t ch = *cp++;
       if (ch == '&') {
         aBuf.AppendLiteral("&amp;");
       } else if (ch == '<') {
@@ -713,6 +712,17 @@ nsGenericDOMDataNode::SetXBLInsertionParent(nsIContent* aContent)
   slots->mXBLInsertionParent = aContent;
 }
 
+CustomElementData *
+nsGenericDOMDataNode::GetCustomElementData() const
+{
+  return nullptr;
+}
+
+void
+nsGenericDOMDataNode::SetCustomElementData(CustomElementData* aData)
+{
+}
+
 bool
 nsGenericDOMDataNode::IsNodeOfType(uint32_t aFlags) const
 {
@@ -922,7 +932,7 @@ nsGenericDOMDataNode::TextLength() const
 }
 
 nsresult
-nsGenericDOMDataNode::SetText(const PRUnichar* aBuffer,
+nsGenericDOMDataNode::SetText(const char16_t* aBuffer,
                               uint32_t aLength,
                               bool aNotify)
 {
@@ -930,7 +940,7 @@ nsGenericDOMDataNode::SetText(const PRUnichar* aBuffer,
 }
 
 nsresult
-nsGenericDOMDataNode::AppendText(const PRUnichar* aBuffer,
+nsGenericDOMDataNode::AppendText(const char16_t* aBuffer,
                                  uint32_t aLength,
                                  bool aNotify)
 {

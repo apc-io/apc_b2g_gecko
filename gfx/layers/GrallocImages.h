@@ -8,9 +8,12 @@
 
 #ifdef MOZ_WIDGET_GONK
 
-#include "mozilla/layers/LayersSurfaces.h"
 #include "ImageLayers.h"
 #include "ImageContainer.h"
+#include "mozilla/gfx/Point.h"
+#include "mozilla/layers/AtomicRefCountedWithFinalize.h"
+#include "mozilla/layers/FenceUtils.h"
+#include "mozilla/layers/LayersSurfaces.h"
 
 #include <ui/GraphicBuffer.h>
 
@@ -28,8 +31,9 @@ class GrallocTextureClientOGL;
  * called. Each producer must maintain their own buffer queue and
  * implement the GraphicBufferLocked::Unlock() interface.
  */
-class GraphicBufferLocked {
-  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(GraphicBufferLocked)
+class GraphicBufferLocked
+  : public AtomicRefCountedWithFinalize<GraphicBufferLocked>
+{
 
 public:
   GraphicBufferLocked(SurfaceDescriptor aGraphicBuffer)
@@ -38,15 +42,41 @@ public:
 
   virtual ~GraphicBufferLocked() {}
 
-  virtual void Unlock() {}
-
   SurfaceDescriptor GetSurfaceDescriptor()
   {
     return mSurfaceDescriptor;
   }
 
+  void SetReleaseFenceHandle(const FenceHandle& aReleaseFenceHandle)
+  {
+    mReleaseFenceHandle = aReleaseFenceHandle;
+  }
+
+  const FenceHandle& GetReleaseFenceHandle() const
+  {
+    return mReleaseFenceHandle;
+  }
+
+protected:
+  virtual void Unlock() {}
+
+private:
+  /**
+   * Called once, just before the destructor.
+   *
+   * Here goes the shut-down code that uses virtual methods.
+   * Must only be called by Release().
+   */
+  void Finalize()
+  {
+    Unlock();
+  }
+
+  friend class AtomicRefCountedWithFinalize<GraphicBufferLocked>;
+
 protected:
   SurfaceDescriptor mSurfaceDescriptor;
+  FenceHandle mReleaseFenceHandle;
 };
 
 /**
@@ -78,7 +108,7 @@ class GrallocImage : public PlanarYCbCrImage
 public:
   struct GrallocData {
     nsRefPtr<GraphicBufferLocked> mGraphicBuffer;
-    gfxIntSize mPicSize;
+    gfx::IntSize mPicSize;
   };
 
   GrallocImage();
@@ -108,7 +138,8 @@ public:
     HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS     = 0x7FA30C04,
   };
 
-  virtual already_AddRefed<gfxASurface> GetAsSurface();
+  virtual already_AddRefed<gfxASurface> DeprecatedGetAsSurface();
+  virtual TemporaryRef<gfx::SourceSurface> GetAsSourceSurface() MOZ_OVERRIDE;
 
   void* GetNativeBuffer()
   {
@@ -122,15 +153,15 @@ public:
   virtual bool IsValid() { return GetSurfaceDescriptor().type() != SurfaceDescriptor::T__None; }
 
   SurfaceDescriptor GetSurfaceDescriptor() {
-    if (mGraphicBuffer.get()) {
-      return mGraphicBuffer->GetSurfaceDescriptor();
+    if (mGraphicBufferLocked.get()) {
+      return mGraphicBufferLocked->GetSurfaceDescriptor();
     }
     return SurfaceDescriptor();
   }
 
   virtual ISharedImage* AsSharedImage() MOZ_OVERRIDE { return this; }
 
-  virtual TextureClient* GetTextureClient() MOZ_OVERRIDE;
+  virtual TextureClient* GetTextureClient(CompositableClient* aClient) MOZ_OVERRIDE;
 
   virtual uint8_t* GetBuffer()
   {
@@ -139,7 +170,7 @@ public:
 
 private:
   bool mBufferAllocated;
-  nsRefPtr<GraphicBufferLocked> mGraphicBuffer;
+  nsRefPtr<GraphicBufferLocked> mGraphicBufferLocked;
   RefPtr<GrallocTextureClientOGL> mTextureClient;
 };
 

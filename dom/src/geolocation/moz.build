@@ -21,12 +21,12 @@ include('/ipc/chromium/chromium-config.mozbuild')
 FINAL_LIBRARY = 'gklayout'
 LOCAL_INCLUDES += [
     '/content/base/src',
-    '/content/events/src',
     '/dom/base',
+    '/dom/events',
     '/dom/ipc',
 ]
 
-if CONFIG['MOZ_ENABLE_QTMOBILITY']:
+if CONFIG['MOZ_ENABLE_QT5GEOPOSITION']:
     LOCAL_INCLUDES += [
         '/dom/system/unix',
     ]

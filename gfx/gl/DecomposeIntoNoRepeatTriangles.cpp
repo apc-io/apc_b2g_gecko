@@ -5,61 +5,55 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "DecomposeIntoNoRepeatTriangles.h"
+#include "gfxMatrix.h"
 
 namespace mozilla {
 namespace gl {
+
+void
+RectTriangles::AppendRectToCoordArray(InfallibleTArray<coord>& array,
+                                      GLfloat x0, GLfloat y0,
+                                      GLfloat x1, GLfloat y1)
+{
+    coord* v = array.AppendElements(6);
+
+    v[0].x = x0; v[0].y = y0;
+    v[1].x = x1; v[1].y = y0;
+    v[2].x = x0; v[2].y = y1;
+    v[3].x = x0; v[3].y = y1;
+    v[4].x = x1; v[4].y = y0;
+    v[5].x = x1; v[5].y = y1;
+}
 
 void
 RectTriangles::addRect(GLfloat x0, GLfloat y0, GLfloat x1, GLfloat y1,
                        GLfloat tx0, GLfloat ty0, GLfloat tx1, GLfloat ty1,
                        bool flip_y /* = false */)
 {
-    vert_coord v;
-    v.x = x0; v.y = y0;
-    vertexCoords.AppendElement(v);
-    v.x = x1; v.y = y0;
-    vertexCoords.AppendElement(v);
-    v.x = x0; v.y = y1;
-    vertexCoords.AppendElement(v);
-
-    v.x = x0; v.y = y1;
-    vertexCoords.AppendElement(v);
-    v.x = x1; v.y = y0;
-    vertexCoords.AppendElement(v);
-    v.x = x1; v.y = y1;
-    vertexCoords.AppendElement(v);
-
     if (flip_y) {
-        tex_coord t;
-        t.u = tx0; t.v = ty1;
-        texCoords.AppendElement(t);
-        t.u = tx1; t.v = ty1;
-        texCoords.AppendElement(t);
-        t.u = tx0; t.v = ty0;
-        texCoords.AppendElement(t);
-
-        t.u = tx0; t.v = ty0;
-        texCoords.AppendElement(t);
-        t.u = tx1; t.v = ty1;
-        texCoords.AppendElement(t);
-        t.u = tx1; t.v = ty0;
-        texCoords.AppendElement(t);
-    } else {
-        tex_coord t;
-        t.u = tx0; t.v = ty0;
-        texCoords.AppendElement(t);
-        t.u = tx1; t.v = ty0;
-        texCoords.AppendElement(t);
-        t.u = tx0; t.v = ty1;
-        texCoords.AppendElement(t);
-
-        t.u = tx0; t.v = ty1;
-        texCoords.AppendElement(t);
-        t.u = tx1; t.v = ty0;
-        texCoords.AppendElement(t);
-        t.u = tx1; t.v = ty1;
-        texCoords.AppendElement(t);
+        std::swap(ty0, ty1);
     }
+    AppendRectToCoordArray(mVertexCoords, x0, y0, x1, y1);
+    AppendRectToCoordArray(mTexCoords, tx0, ty0, tx1, ty1);
+}
+
+bool
+RectTriangles::isSimpleQuad(gfx3DMatrix& aOutTextureTransform) const
+{
+    if (mVertexCoords.Length() == 6 &&
+        mVertexCoords[0].x == 0.0f &&
+        mVertexCoords[0].y == 0.0f &&
+        mVertexCoords[5].x == 1.0f &&
+        mVertexCoords[5].y == 1.0f)
+    {
+        GLfloat tx0 = mTexCoords[0].x;
+        GLfloat ty0 = mTexCoords[0].y;
+        GLfloat tx1 = mTexCoords[5].x;
+        GLfloat ty1 = mTexCoords[5].y;
+        aOutTextureTransform = gfx3DMatrix::From2D(gfxMatrix(tx1 - tx0, 0, 0, ty1 - ty0, tx0, ty0));
+        return true;
+    }
+    return false;
 }
 
 static GLfloat

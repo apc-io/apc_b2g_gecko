@@ -5,6 +5,10 @@
 
 package org.mozilla.gecko.home;
 
+import java.util.Collections;
+import java.util.LinkedList;
+import java.util.List;
+
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.db.BrowserContract.Bookmarks;
 
@@ -14,10 +18,6 @@ import android.database.Cursor;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.view.View;
-
-import java.util.Collections;
-import java.util.List;
-import java.util.LinkedList;
 
 /**
  * Adapter to back the BookmarksListView with a list of bookmarks.
@@ -130,8 +130,10 @@ class BookmarksListAdapter extends MultiTypeCursorAdapter {
      * @return Whether the adapter successfully moved to a parent folder.
      */
     public boolean moveToParentFolder() {
-        // If we're already at the root, we can't move to a parent folder
-        if (mParentStack.size() == 1) {
+        // If we're already at the root, we can't move to a parent folder.
+        // An empty parent stack here means we're still waiting for the
+        // initial list of bookmarks and can't go to a parent folder.
+        if (mParentStack.size() <= 1) {
             return false;
         }
 

@@ -463,7 +463,7 @@ FT2FontEntry::CairoFontFace()
 }
 
 nsresult
-FT2FontEntry::ReadCMAP()
+FT2FontEntry::ReadCMAP(FontInfoData *aFontInfoData)
 {
     if (mCharacterMap) {
         return NS_OK;
@@ -605,12 +605,7 @@ public:
             nullptr
         };
 
-        if (!PL_DHashTableInit(&mMap, &mOps, nullptr,
-                               sizeof(FNCMapEntry), 0))
-        {
-            mMap.ops = nullptr;
-            LOG(("initializing the map failed"));
-        }
+        PL_DHashTableInit(&mMap, &mOps, nullptr, sizeof(FNCMapEntry), 0);
 
         NS_ABORT_IF_FALSE(XRE_GetProcessType() == GeckoProcessType_Default,
                           "StartupCacheFontNameCache should only be used in chrome process");

@@ -16,8 +16,6 @@ Cu.import("resource://gre/modules/AddonManager.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
 Cu.import("resource://gre/modules/JNI.jsm");
 Cu.import('resource://gre/modules/Payment.jsm');
-Cu.import("resource://gre/modules/PermissionPromptHelper.jsm");
-Cu.import("resource://gre/modules/ContactService.jsm");
 Cu.import("resource://gre/modules/NotificationDB.jsm");
 Cu.import("resource://gre/modules/SpatialNavigation.jsm");
 Cu.import("resource://gre/modules/UITelemetry.jsm");
@@ -28,6 +26,9 @@ Cu.import("resource://gre/modules/accessibility/AccessFu.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
                                   "resource://gre/modules/PluralForm.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "sendMessageToJava",
+                                  "resource://gre/modules/Messaging.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "DebuggerServer",
                                   "resource://gre/modules/devtools/dbg-server.jsm");
@@ -58,6 +59,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "Prompt",
 XPCOMUtils.defineLazyModuleGetter(this, "HelperApps",
                                   "resource://gre/modules/HelperApps.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "SSLExceptions",
+                                  "resource://gre/modules/SSLExceptions.jsm");
+
 XPCOMUtils.defineLazyModuleGetter(this, "FormHistory",
                                   "resource://gre/modules/FormHistory.jsm");
 
@@ -65,9 +69,17 @@ XPCOMUtils.defineLazyServiceGetter(this, "uuidgen",
                                    "@mozilla.org/uuid-generator;1",
                                    "nsIUUIDGenerator");
 
+XPCOMUtils.defineLazyModuleGetter(this, "SimpleServiceDiscovery",
+                                  "resource://gre/modules/SimpleServiceDiscovery.jsm");
+
 #ifdef NIGHTLY_BUILD
 XPCOMUtils.defineLazyModuleGetter(this, "ShumwayUtils",
                                   "resource://shumway/ShumwayUtils.jsm");
+#endif
+
+#ifdef MOZ_ANDROID_SYNTHAPKS
+XPCOMUtils.defineLazyModuleGetter(this, "WebappManager",
+                                  "resource://gre/modules/WebappManager.jsm");
 #endif
 
 // Lazily-loaded browser scripts:
@@ -75,11 +87,12 @@ XPCOMUtils.defineLazyModuleGetter(this, "ShumwayUtils",
   ["SelectHelper", "chrome://browser/content/SelectHelper.js"],
   ["InputWidgetHelper", "chrome://browser/content/InputWidgetHelper.js"],
   ["AboutReader", "chrome://browser/content/aboutReader.js"],
-  ["WebAppRT", "chrome://browser/content/WebAppRT.js"],
   ["MasterPassword", "chrome://browser/content/MasterPassword.js"],
   ["PluginHelper", "chrome://browser/content/PluginHelper.js"],
   ["OfflineApps", "chrome://browser/content/OfflineApps.js"],
   ["Linkifier", "chrome://browser/content/Linkify.js"],
+  ["ZoomHelper", "chrome://browser/content/ZoomHelper.js"],
+  ["CastingApps", "chrome://browser/content/CastingApps.js"],
 ].forEach(function (aScript) {
   let [name, script] = aScript;
   XPCOMUtils.defineLazyGetter(window, name, function() {
@@ -89,23 +102,11 @@ XPCOMUtils.defineLazyModuleGetter(this, "ShumwayUtils",
   });
 });
 
-// Lazily-loaded browser scripts that use observer notifcations:
-var LazyNotificationGetter = {
-  observers: [],
-  shutdown: function lng_shutdown() {
-    this.observers.forEach(function(o) {
-      Services.obs.removeObserver(o, o.notification);
-    });
-    this.observers = [];
-  }
-};
-
 [
 #ifdef MOZ_WEBRTC
   ["WebrtcUI", ["getUserMedia:request", "recording-device-events"], "chrome://browser/content/WebrtcUI.js"],
 #endif
   ["MemoryObserver", ["memory-pressure", "Memory:Dump"], "chrome://browser/content/MemoryObserver.js"],
-  ["ConsoleAPI", ["console-api-log-event"], "chrome://browser/content/ConsoleAPI.js"],
   ["FindHelper", ["FindInPage:Find", "FindInPage:Prev", "FindInPage:Next", "FindInPage:Closed", "Tab:Selected"], "chrome://browser/content/FindHelper.js"],
   ["PermissionsHelper", ["Permissions:Get", "Permissions:Clear"], "chrome://browser/content/PermissionsHelper.js"],
   ["FeedHandler", ["Feeds:Subscribe"], "chrome://browser/content/FeedHandler.js"],
@@ -119,14 +120,22 @@ var LazyNotificationGetter = {
     return sandbox[name];
   });
   notifications.forEach(function (aNotification) {
-    let o = {
-      notification: aNotification,
-      observe: function(s, t, d) {
-        window[name].observe(s, t, d);
-      }
-    };
-    Services.obs.addObserver(o, aNotification, false);
-    LazyNotificationGetter.observers.push(o);
+    Services.obs.addObserver(function(s, t, d) {
+        window[name].observe(s, t, d)
+    }, aNotification, false);
+  });
+});
+
+// Lazily-loaded JS modules that use observer notifications
+[
+  ["Home", ["HomePanels:Get"], "resource://gre/modules/Home.jsm"],
+].forEach(module => {
+  let [name, notifications, resource] = module;
+  XPCOMUtils.defineLazyModuleGetter(this, name, resource);
+  notifications.forEach(notification => {
+    Services.obs.addObserver((s,t,d) => {
+      this[name].observe(s,t,d)
+    }, notification, false);
   });
 });
 
@@ -163,10 +172,6 @@ function dump(a) {
   Services.console.logStringMessage(a);
 }
 
-function sendMessageToJava(aMessage) {
-  return Services.androidBridge.handleGeckoMessage(JSON.stringify(aMessage));
-}
-
 function doChangeMaxLineBoxWidth(aWidth) {
   gReflowPending = null;
   let webNav = BrowserApp.selectedTab.window.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIWebNavigation);
@@ -178,10 +183,20 @@ function doChangeMaxLineBoxWidth(aWidth) {
     range = BrowserApp.selectedTab._mReflozPoint.range;
   }
 
-  docViewer.changeMaxLineBoxWidth(aWidth);
+  try {
+    docViewer.pausePainting();
+    docViewer.changeMaxLineBoxWidth(aWidth);
 
-  if (range) {
-    BrowserEventHandler._zoomInAndSnapToRange(range);
+    if (range) {
+      ZoomHelper.zoomInAndSnapToRange(range);
+    } else {
+      // In this case, we actually didn't zoom into a specific range. It
+      // probably happened from a page load reflow-on-zoom event, so we
+      // need to make sure painting is re-enabled.
+      BrowserApp.selectedTab.clearReflowOnZoomPendingActions();
+    }
+  } finally {
+    docViewer.resumePainting();
   }
 }
 
@@ -227,7 +242,9 @@ function resolveGeckoURI(aURI) {
 }
 
 function shouldShowProgress(url) {
-  return (url != "about:home" && !url.startsWith("about:reader"));
+  return (url != "about:home" &&
+          url != "about:privatebrowsing" &&
+          !url.startsWith("about:reader"));
 }
 
 /**
@@ -274,6 +291,14 @@ var BrowserApp = {
     dump("zerdatime " + Date.now() + " - browser chrome startup finished.");
 
     this.deck = document.getElementById("browsers");
+    this.deck.addEventListener("DOMContentLoaded", function BrowserApp_delayedStartup() {
+      try {
+        BrowserApp.deck.removeEventListener("DOMContentLoaded", BrowserApp_delayedStartup, false);
+        Services.obs.notifyObservers(window, "browser-delayed-startup-finished", "");
+        sendMessageToJava({ type: "Gecko:DelayedStartup" });
+      } catch(ex) { console.log(ex); }
+    }, false);
+
     BrowserEventHandler.init();
     ViewportHandler.init();
 
@@ -301,7 +326,16 @@ var BrowserApp = {
     Services.obs.addObserver(this, "FormHistory:Init", false);
     Services.obs.addObserver(this, "gather-telemetry", false);
     Services.obs.addObserver(this, "keyword-search", false);
-
+#ifdef MOZ_ANDROID_SYNTHAPKS
+    Services.obs.addObserver(this, "webapps-runtime-install", false);
+    Services.obs.addObserver(this, "webapps-runtime-install-package", false);
+    Services.obs.addObserver(this, "webapps-ask-install", false);
+    Services.obs.addObserver(this, "webapps-launch", false);
+    Services.obs.addObserver(this, "webapps-uninstall", false);
+    Services.obs.addObserver(this, "Webapps:AutoInstall", false);
+    Services.obs.addObserver(this, "Webapps:Load", false);
+    Services.obs.addObserver(this, "Webapps:AutoUninstall", false);
+#endif
     Services.obs.addObserver(this, "sessionstore-state-purge-complete", false);
 
     function showFullScreenWarning() {
@@ -336,11 +370,18 @@ var BrowserApp = {
     XPInstallObserver.init();
     CharacterEncoding.init();
     ActivityObserver.init();
+#ifdef MOZ_ANDROID_SYNTHAPKS
+    // TODO: replace with Android implementation of WebappOSUtils.isLaunchable.
+    Cu.import("resource://gre/modules/Webapps.jsm");
+    DOMApplicationRegistry.allAppsLaunchable = true;
+#else
     WebappsUI.init();
+#endif
     RemoteDebugger.init();
     Reader.init();
     UserAgentOverrides.init();
     DesktopUserAgent.init();
+    CastingApps.init();
     Distribution.init();
     Tabs.init();
 #ifdef ACCESSIBILITY
@@ -368,11 +409,8 @@ var BrowserApp = {
         this.isGuest = window.arguments[4];
     }
 
-    let status = this.startupStatus();
     if (pinned) {
-      WebAppRT.init(status, url, function(aUrl) {
-        BrowserApp.addTab(aUrl);
-      });
+      this._initRuntime(this._startupStatus, url, aUrl => this.addTab(aUrl));
     } else {
       SearchEngines.init();
       this.initContextMenu();
@@ -389,7 +427,7 @@ var BrowserApp = {
     event.initEvent("UIReady", true, false);
     window.dispatchEvent(event);
 
-    if (status)
+    if (this._startupStatus)
       this.onAppUpdated();
 
     // Store the low-precision buffer pref
@@ -404,18 +442,22 @@ var BrowserApp = {
 #endif
   },
 
-  startupStatus: function() {
-    let savedmstone = null;
+  get _startupStatus() {
+    delete this._startupStatus;
+
+    let savedMilestone = null;
     try {
-      savedmstone = Services.prefs.getCharPref("browser.startup.homepage_override.mstone");
+      savedMilestone = Services.prefs.getCharPref("browser.startup.homepage_override.mstone");
     } catch (e) {
     }
-#expand    let ourmstone = "__MOZ_APP_VERSION__";
-    if (ourmstone != savedmstone) {
-      Services.prefs.setCharPref("browser.startup.homepage_override.mstone", ourmstone);
-      return savedmstone ? "upgrade" : "new";
+#expand    let ourMilestone = "__MOZ_APP_VERSION__";
+    this._startupStatus = "";
+    if (ourMilestone != savedMilestone) {
+      Services.prefs.setCharPref("browser.startup.homepage_override.mstone", ourMilestone);
+      this._startupStatus = savedMilestone ? "upgrade" : "new";
     }
-    return "";
+
+    return this._startupStatus;
   },
 
   /**
@@ -426,12 +468,20 @@ var BrowserApp = {
     sendMessageToJava({ type: "Locale:Set", locale: locale });
   },
 
+  _initRuntime: function(status, url, callback) {
+    let sandbox = {};
+    Services.scriptloader.loadSubScript("chrome://browser/content/WebappRT.js", sandbox);
+    window.WebappRT = sandbox.WebappRT;
+    WebappRT.init(status, url, callback);
+  },
+
   initContextMenu: function ba_initContextMenu() {
     // TODO: These should eventually move into more appropriate classes
     NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.openInNewTab"),
       NativeWindow.contextmenus.linkOpenableNonPrivateContext,
       function(aTarget) {
         let url = NativeWindow.contextmenus._getLinkURL(aTarget);
+        ContentAreaUtils.urlSecurityCheck(url, aTarget.ownerDocument.nodePrincipal);
         BrowserApp.addTab(url, { selected: false, parentId: BrowserApp.selectedTab.id });
 
         let newtabStrings = Strings.browser.GetStringFromName("newtabpopup.opened");
@@ -443,6 +493,7 @@ var BrowserApp = {
       NativeWindow.contextmenus.linkOpenableContext,
       function(aTarget) {
         let url = NativeWindow.contextmenus._getLinkURL(aTarget);
+        ContentAreaUtils.urlSecurityCheck(url, aTarget.ownerDocument.nodePrincipal);
         BrowserApp.addTab(url, { selected: false, parentId: BrowserApp.selectedTab.id, isPrivate: true });
 
         let newtabStrings = Strings.browser.GetStringFromName("newprivatetabpopup.opened");
@@ -520,7 +571,7 @@ var BrowserApp = {
       });
 
     NativeWindow.contextmenus.add(Strings.browser.GetStringFromName("contextmenu.bookmarkLink"),
-      NativeWindow.contextmenus.linkBookmarkableContext,
+      NativeWindow.contextmenus._disableInGuest(NativeWindow.contextmenus.linkBookmarkableContext),
       function(aTarget) {
         let url = NativeWindow.contextmenus._getLinkURL(aTarget);
         let title = aTarget.textContent || aTarget.title || url;
@@ -669,12 +720,15 @@ var BrowserApp = {
     HealthReportStatusListener.uninit();
     CharacterEncoding.uninit();
     SearchEngines.uninit();
+#ifndef MOZ_ANDROID_SYNTHAPKS
     WebappsUI.uninit();
+#endif
     RemoteDebugger.uninit();
     Reader.uninit();
     UserAgentOverrides.uninit();
     DesktopUserAgent.uninit();
     ExternalApps.uninit();
+    CastingApps.uninit();
     Distribution.uninit();
     Tabs.uninit();
   },
@@ -716,7 +770,6 @@ var BrowserApp = {
       return;
 
     if (this._selectedTab) {
-      Tabs.touch(this._selectedTab);
       this._selectedTab.setActive(false);
     }
 
@@ -724,7 +777,6 @@ var BrowserApp = {
     if (!aTab)
       return;
 
-    Tabs.touch(aTab);
     aTab.setActive(true);
     aTab.setResolution(aTab._zoom, true);
     this.contentDocumentChanged();
@@ -835,8 +887,6 @@ var BrowserApp = {
     evt.initUIEvent("TabOpen", true, false, window, null);
     newTab.browser.dispatchEvent(evt);
 
-    Tabs.expireLruTab();
-
     return newTab;
   },
 
@@ -855,6 +905,16 @@ var BrowserApp = {
     };
     sendMessageToJava(message);
   },
+
+#ifdef MOZ_ANDROID_SYNTHAPKS
+  _loadWebapp: function(aMessage) {
+
+    this._initRuntime(this._startupStatus, aMessage.url, aUrl => {
+      this.manifestUrl = aMessage.url;
+      this.addTab(aUrl, { title: aMessage.name });
+    });
+  },
+#endif
 
   // Calling this will update the state in BrowserApp after a tab has been
   // closed in the Java UI.
@@ -1127,6 +1187,7 @@ var BrowserApp = {
         case "browser.chrome.titlebarMode":
         case "network.cookie.cookieBehavior":
         case "font.size.inflation.minTwips":
+        case "home.sync.updateMode":
           pref.type = "string";
           pref.value = pref.value.toString();
           break;
@@ -1198,6 +1259,7 @@ var BrowserApp = {
       case "browser.chrome.titlebarMode":
       case "network.cookie.cookieBehavior":
       case "font.size.inflation.minTwips":
+      case "home.sync.updateMode":
         json.type = "int";
         json.value = parseInt(json.value);
         break;
@@ -1316,8 +1378,8 @@ var BrowserApp = {
       let shouldZoom = Services.prefs.getBoolPref("formhelper.autozoom");
       if (formHelperMode == kFormHelperModeDynamic && this.isTablet)
         shouldZoom = false;
-       // _zoomToElement will handle not sending any message if this input is already mostly filling the screen
-      BrowserEventHandler._zoomToElement(focused, -1, false,
+      // ZoomHelper.zoomToElement will handle not sending any message if this input is already mostly filling the screen
+      ZoomHelper.zoomToElement(focused, -1, false,
           aAllowZoom && shouldZoom && !ViewportHandler.getViewportMetadata(aBrowser.contentWindow).isSpecified);
     }
   },
@@ -1379,7 +1441,8 @@ var BrowserApp = {
 
         // Pass LOAD_FLAGS_DISALLOW_INHERIT_OWNER to prevent any loads from
         // inheriting the currently loaded document's principal.
-        let flags = Ci.nsIWebNavigation.LOAD_FLAGS_ALLOW_THIRD_PARTY_FIXUP;
+        let flags = Ci.nsIWebNavigation.LOAD_FLAGS_ALLOW_THIRD_PARTY_FIXUP |
+                    Ci.nsIWebNavigation.LOAD_FLAGS_FIXUP_SCHEME_TYPOS;
         if (data.userEntered) {
           flags |= Ci.nsIWebNavigation.LOAD_FLAGS_DISALLOW_INHERIT_OWNER;
         }
@@ -1510,7 +1573,47 @@ var BrowserApp = {
         this.notifyPrefObservers(aData);
         break;
 
+#ifdef MOZ_ANDROID_SYNTHAPKS
+      case "webapps-runtime-install":
+        WebappManager.install(JSON.parse(aData), aSubject);
+        break;
+
+      case "webapps-runtime-install-package":
+        WebappManager.installPackage(JSON.parse(aData), aSubject);
+        break;
+
+      case "webapps-ask-install":
+        WebappManager.askInstall(JSON.parse(aData));
+        break;
+
+      case "webapps-launch": {
+        WebappManager.launch(JSON.parse(aData));
+        break;
+      }
+
+      case "webapps-uninstall": {
+        WebappManager.uninstall(JSON.parse(aData));
+        break;
+      }
+
+      case "Webapps:AutoInstall":
+        WebappManager.autoInstall(JSON.parse(aData));
+        break;
+
+      case "Webapps:Load":
+        this._loadWebapp(JSON.parse(aData));
+        break;
+
+      case "Webapps:AutoUninstall":
+        WebappManager.autoUninstall(JSON.parse(aData));
+        break;
+#endif
+
       case "Locale:Changed":
+        // The value provided to Locale:Changed should be a BCP47 language tag
+        // understood by Gecko -- for example, "es-ES" or "de".
+        console.log("Locale:Changed: " + aData);
+
         // TODO: do we need to be more nuanced here -- e.g., checking for the
         // OS locale -- or should it always be false on Fennec?
         Services.prefs.setBoolPref("intl.locale.matchOS", false);
@@ -2744,6 +2847,7 @@ Tab.prototype = {
     this.browser.addEventListener("MozApplicationManifest", this, true);
 
     Services.obs.addObserver(this, "before-first-paint", false);
+    Services.obs.addObserver(this, "after-viewport-change", false);
     Services.prefs.addObserver("browser.ui.zoom.force-user-scalable", this, false);
 
     if (aParams.delayLoad) {
@@ -2803,21 +2907,58 @@ Tab.prototype = {
     return minFontSize / this.getInflatedFontSizeFor(aElement);
   },
 
+  clearReflowOnZoomPendingActions: function() {
+    // Reflow was completed, so now re-enable painting.
+    let webNav = BrowserApp.selectedTab.window.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIWebNavigation);
+    let docShell = webNav.QueryInterface(Ci.nsIDocShell);
+    let docViewer = docShell.contentViewer.QueryInterface(Ci.nsIMarkupDocumentViewer);
+    docViewer.resumePainting();
+
+    BrowserApp.selectedTab._mReflozPositioned = false;
+  },
+
+  /**
+   * Reflow on zoom consists of a few different sub-operations:
+   *
+   * 1. When a double-tap event is seen, we verify that the correct preferences
+   *    are enabled and perform the pre-position handling calculation. We also
+   *    signal that reflow-on-zoom should be performed at this time, and pause
+   *    painting.
+   * 2. During the next call to setViewport(), which is in the Tab prototype,
+   *    we detect that a call to changeMaxLineBoxWidth should be performed. If
+   *    we're zooming out, then the max line box width should be reset at this
+   *    time. Otherwise, we call performReflowOnZoom.
+   *   2a. PerformReflowOnZoom() and resetMaxLineBoxWidth() schedule a call to
+   *       doChangeMaxLineBoxWidth, based on a timeout specified in preferences.
+   * 3. doChangeMaxLineBoxWidth changes the line box width (which also
+   *    schedules a reflow event), and then calls ZoomHelper.zoomInAndSnapToRange.
+   * 4. ZoomHelper.zoomInAndSnapToRange performs the positioning of reflow-on-zoom
+   *    and then re-enables painting.
+   *
+   * Some of the events happen synchronously, while others happen asynchronously.
+   * The following is a rough sketch of the progression of events:
+   *
+   * double tap event seen -> onDoubleTap() -> ... asynchronous ...
+   *   -> setViewport() -> performReflowOnZoom() -> ... asynchronous ...
+   *   -> doChangeMaxLineBoxWidth() -> ZoomHelper.zoomInAndSnapToRange()
+   *   -> ... asynchronous ... -> setViewport() -> Observe('after-viewport-change')
+   *   -> resumePainting()
+   */
   performReflowOnZoom: function(aViewport) {
-      let zoom = this._drawZoom ? this._drawZoom : aViewport.zoom;
+    let zoom = this._drawZoom ? this._drawZoom : aViewport.zoom;
 
-      let viewportWidth = gScreenWidth / zoom;
-      let reflozTimeout = Services.prefs.getIntPref("browser.zoom.reflowZoom.reflowTimeout");
+    let viewportWidth = gScreenWidth / zoom;
+    let reflozTimeout = Services.prefs.getIntPref("browser.zoom.reflowZoom.reflowTimeout");
 
-      if (gReflowPending) {
-        clearTimeout(gReflowPending);
-      }
+    if (gReflowPending) {
+      clearTimeout(gReflowPending);
+    }
 
-      // We add in a bit of fudge just so that the end characters
-      // don't accidentally get clipped. 15px is an arbitrary choice.
-      gReflowPending = setTimeout(doChangeMaxLineBoxWidth,
-                                  reflozTimeout,
-                                  viewportWidth - 15);
+    // We add in a bit of fudge just so that the end characters
+    // don't accidentally get clipped. 15px is an arbitrary choice.
+    gReflowPending = setTimeout(doChangeMaxLineBoxWidth,
+                                reflozTimeout,
+                                viewportWidth - 15);
   },
 
   /** 
@@ -2840,26 +2981,11 @@ Tab.prototype = {
       return;
 
     let url = currentURI.spec;
-    let flags = Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE;
+    let flags = Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE |
+                Ci.nsIWebNavigation.LOAD_FLAGS_REPLACE_HISTORY;
     if (this.originalURI && !this.originalURI.equals(currentURI)) {
       // We were redirected; reload the original URL
       url = this.originalURI.spec;
-      flags |= Ci.nsIWebNavigation.LOAD_FLAGS_REPLACE_HISTORY;
-    } else {
-      // Many sites use mobile-specific URLs, such as:
-      //   http://m.yahoo.com
-      //   http://www.google.com/m
-      // If the user clicks "Request Desktop Site" while on a mobile site, it
-      // will appear to do nothing since the mobile URL is still being
-      // requested. To address this, we do the following:
-      //   1) Remove the path from the URL (http://www.google.com/m?q=query -> http://www.google.com)
-      //   2) If a host subdomain is "m", remove it (http://en.m.wikipedia.org -> http://en.wikipedia.org)
-      // This means the user is sent to site's home page, but this is better
-      // than the setting having no effect at all.
-      if (aDesktopMode)
-        url = currentURI.prePath.replace(/([\/\.])m\./g, "$1");
-      else
-        flags |= Ci.nsIWebNavigation.LOAD_FLAGS_REPLACE_HISTORY;
     }
 
     this.browser.docShell.loadURI(url, flags, null, null, null);
@@ -2889,6 +3015,7 @@ Tab.prototype = {
     this.browser.removeEventListener("MozApplicationManifest", this, true);
 
     Services.obs.removeObserver(this, "before-first-paint");
+    Services.obs.removeObserver(this, "after-viewport-change");
     Services.prefs.removeObserver("browser.ui.zoom.force-user-scalable", this);
 
     // Make sure the previously selected panel remains selected. The selected panel of a deck is
@@ -2905,6 +3032,8 @@ Tab.prototype = {
   setActive: function setActive(aActive) {
     if (!this.browser || !this.browser.docShell)
       return;
+
+    this.lastTouchedAt = Date.now();
 
     if (aActive) {
       this.browser.setAttribute("type", "content-primary");
@@ -2994,14 +3123,14 @@ Tab.prototype = {
                                     pageRect.left - geckoScrollX), pageXMost - dpW);
         let dpY = Math.min(Math.max(displayPort.y - displayPort.height * 1.5,
                                     pageRect.top - geckoScrollY), pageYMost - dpH);
-        cwu.setDisplayPortForElement(dpX, dpY, dpW, dpH, element);
+        cwu.setDisplayPortForElement(dpX, dpY, dpW, dpH, element, 0);
         cwu.setCriticalDisplayPortForElement(displayPort.x, displayPort.y,
                                              displayPort.width, displayPort.height,
                                              element);
       } else {
         cwu.setDisplayPortForElement(displayPort.x, displayPort.y,
                                      displayPort.width, displayPort.height,
-                                     element);
+                                     element, 0);
       }
     }
 
@@ -3164,24 +3293,18 @@ Tab.prototype = {
     // Adjust the max line box width to be no more than the viewport width, but
     // only if the reflow-on-zoom preference is enabled.
     let isZooming = !fuzzyEquals(aViewport.zoom, this._zoom);
-    if (BrowserApp.selectedTab.reflozPinchSeen &&
-        isZooming && aViewport.zoom < 1.0) {
-      // In this case, we want to restore the max line box width,
-      // because we are pinch-zooming to zoom out.
-      BrowserEventHandler.resetMaxLineBoxWidth();
-      BrowserApp.selectedTab.reflozPinchSeen = false;
-    } else if (BrowserApp.selectedTab.reflozPinchSeen &&
-               isZooming) {
-      // In this case, the user pinch-zoomed in, so we don't want to
-      // preserve position as we would with reflow-on-zoom.
-      BrowserApp.selectedTab.probablyNeedRefloz = false;
-      BrowserApp.selectedTab._mReflozPoint = null;
-    }
+
+    let docViewer = null;
 
     if (isZooming &&
         BrowserEventHandler.mReflozPref &&
         BrowserApp.selectedTab._mReflozPoint &&
         BrowserApp.selectedTab.probablyNeedRefloz) {
+      let webNav = BrowserApp.selectedTab.window.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIWebNavigation);
+      let docShell = webNav.QueryInterface(Ci.nsIDocShell);
+      docViewer = docShell.contentViewer.QueryInterface(Ci.nsIMarkupDocumentViewer);
+      docViewer.pausePainting();
+
       BrowserApp.selectedTab.performReflowOnZoom(aViewport);
       BrowserApp.selectedTab.probablyNeedRefloz = false;
     }
@@ -3210,6 +3333,9 @@ Tab.prototype = {
       aViewport.fixedMarginLeft / aViewport.zoom);
 
     Services.obs.notifyObservers(null, "after-viewport-change", "");
+    if (docViewer) {
+        docViewer.resumePainting();
+    }
   },
 
   setResolution: function(aZoom, aForce) {
@@ -3661,8 +3787,9 @@ Tab.prototype = {
         }
 
         // Show page actions for helper apps.
-        if (BrowserApp.selectedTab == this)
-          ExternalApps.updatePageAction(this.browser.currentURI);
+        let uri = this.browser.currentURI;
+        if (BrowserApp.selectedTab == this && ExternalApps.shouldCheckUri(uri))
+          ExternalApps.updatePageAction(uri);
 
         if (!Reader.isEnabledForParseOnLoad)
           return;
@@ -3671,7 +3798,7 @@ Tab.prototype = {
         Reader.parseDocumentFromTab(this.id, function (article) {
           // Do nothing if there's no article or the page in this tab has
           // changed
-          let tabURL = this.browser.currentURI.specIgnoringRef;
+          let tabURL = uri.specIgnoringRef;
           if (article == null || (article.url != tabURL)) {
             // Don't clear the article for about:reader pages since we want to
             // use the article from the previous page
@@ -3717,22 +3844,12 @@ Tab.prototype = {
 
       // Clear page-specific opensearch engines and feeds for a new request.
       if (aStateFlags & Ci.nsIWebProgressListener.STATE_START && aRequest && aWebProgress.isTopLevel) {
-          this.browser.engines = null;
-
-          // Send message to clear search engine option in context menu.
-          let newEngineMessage = {
-            type: "Link:OpenSearch",
-            tabID: this.id,
-            visible: false
-          };
-
-          sendMessageToJava(newEngineMessage);
-
-          this.browser.feeds = null;
+        this.browser.engines = null;
+        this.browser.feeds = null;
       }
 
       // true if the page loaded successfully (i.e., no 404s or other errors)
-      let success = false; 
+      let success = false;
       let uri = "";
       try {
         // Remember original URI for UA changes on redirected pages
@@ -3743,7 +3860,11 @@ Tab.prototype = {
       } catch (e) { }
       try {
         success = aRequest.QueryInterface(Components.interfaces.nsIHttpChannel).requestSucceeded;
-      } catch (e) { }
+      } catch (e) {
+        // If the request does not handle the nsIHttpChannel interface, use nsIRequest's success
+        // status. Used for local files. See bug 948849.
+        success = aRequest.status == 0;
+      }
 
       // Check to see if we restoring the content from a previous presentation (session)
       // since there should be no real network activity
@@ -3809,6 +3930,11 @@ Tab.prototype = {
           baseDomain = IDNService.convertACEtoUTF8(baseDomain);
         }
       } catch (e) {}
+    }
+
+    // Update the page actions URI for helper apps.
+    if (BrowserApp.selectedTab == this) {
+      ExternalApps.updatePageActionUri(fixedURI);
     }
 
     let message = {
@@ -3921,6 +4047,7 @@ Tab.prototype = {
   updateViewportMetadata: function updateViewportMetadata(aMetadata, aInitialLoad) {
     if (Services.prefs.getBoolPref("browser.ui.zoom.force-user-scalable")) {
       aMetadata.allowZoom = true;
+      aMetadata.allowDoubleTapZoom = true;
       aMetadata.minZoom = aMetadata.maxZoom = NaN;
     }
 
@@ -3936,8 +4063,9 @@ Tab.prototype = {
     aMetadata.isRTL = this.browser.contentDocument.documentElement.dir == "rtl";
 
     ViewportHandler.setMetadataForDocument(this.browser.contentDocument, aMetadata);
-    this.updateViewportSize(gScreenWidth, aInitialLoad);
     this.sendViewportMetadata();
+
+    this.updateViewportSize(gScreenWidth, aInitialLoad);
   },
 
   /** Update viewport when the metadata or the window size changes. */
@@ -4062,6 +4190,17 @@ Tab.prototype = {
 
     this.sendViewportUpdate();
 
+    if (metadata.allowZoom && !Services.prefs.getBoolPref("browser.ui.zoom.force-user-scalable")) {
+      // If the CSS viewport is narrower than the screen (i.e. width <= device-width)
+      // then we disable double-tap-to-zoom behaviour.
+      var oldAllowDoubleTapZoom = metadata.allowDoubleTapZoom;
+      var newAllowDoubleTapZoom = (viewportW > screenW / window.devicePixelRatio);
+      if (oldAllowDoubleTapZoom !== newAllowDoubleTapZoom) {
+        metadata.allowDoubleTapZoom = newAllowDoubleTapZoom;
+        this.sendViewportMetadata();
+      }
+    }
+
     // Store the page size that was used to calculate the viewport so that we
     // can verify it's changed when we consider remeasuring in updateViewportForPageSize
     let viewport = this.getViewport();
@@ -4076,6 +4215,7 @@ Tab.prototype = {
     sendMessageToJava({
       type: "Tab:ViewportMetadata",
       allowZoom: metadata.allowZoom,
+      allowDoubleTapZoom: metadata.allowDoubleTapZoom,
       defaultZoom: metadata.defaultZoom || window.devicePixelRatio,
       minZoom: metadata.minZoom || 0,
       maxZoom: metadata.maxZoom || 0,
@@ -4164,6 +4304,11 @@ Tab.prototype = {
           // accordingly.
           let vp = BrowserApp.selectedTab.getViewport();
           BrowserApp.selectedTab.performReflowOnZoom(vp);
+        }
+        break;
+      case "after-viewport-change":
+        if (BrowserApp.selectedTab._mReflozPositioned) {
+          BrowserApp.selectedTab.clearReflowOnZoomPendingActions();
         }
         break;
       case "nsPref:changed":
@@ -4400,7 +4545,6 @@ var BrowserEventHandler = {
             let [x, y] = [data.x, data.y];
             if (ElementTouchHelper.isElementClickable(element)) {
               [x, y] = this._moveClickPoint(element, x, y);
-              element = ElementTouchHelper.anyElementFromPoint(x, y);
             }
 
             // Was the element already focused before it was clicked?
@@ -4439,41 +4583,6 @@ var BrowserEventHandler = {
     }
   },
 
-  _zoomOut: function() {
-    BrowserEventHandler.resetMaxLineBoxWidth();
-    sendMessageToJava({ type: "Browser:ZoomToPageWidth" });
-  },
-
-  _isRectZoomedIn: function(aRect, aViewport) {
-    // This function checks to see if the area of the rect visible in the
-    // viewport (i.e. the "overlapArea" variable below) is approximately
-    // the max area of the rect we can show. It also checks that the rect
-    // is actually on-screen by testing the left and right edges of the rect.
-    // In effect, this tells us whether or not zooming in to this rect
-    // will significantly change what the user is seeing.
-    const minDifference = -20;
-    const maxDifference = 20;
-    const maxZoomAllowed = 4; // keep this in sync with mobile/android/base/ui/PanZoomController.MAX_ZOOM
-
-    let vRect = new Rect(aViewport.cssX, aViewport.cssY, aViewport.cssWidth, aViewport.cssHeight);
-    let overlap = vRect.intersect(aRect);
-    let overlapArea = overlap.width * overlap.height;
-    let availHeight = Math.min(aRect.width * vRect.height / vRect.width, aRect.height);
-    let showing = overlapArea / (aRect.width * availHeight);
-    let dw = (aRect.width - vRect.width);
-    let dx = (aRect.x - vRect.x);
-
-    if (fuzzyEquals(aViewport.zoom, maxZoomAllowed) && overlap.width / aRect.width > 0.9) {
-      // we're already at the max zoom and the block is not spilling off the side of the screen so that even
-      // if the block isn't taking up most of the viewport we can't pan/zoom in any more. return true so that we zoom out
-      return true;
-    }
-
-    return (showing > 0.9 &&
-            dx > minDifference && dx < maxDifference &&
-            dw > minDifference && dw < maxDifference);
-  },
-
   onDoubleTap: function(aData) {
     let data = JSON.parse(aData);
     let element = ElementTouchHelper.anyElementFromPoint(data.x, data.y);
@@ -4484,17 +4593,27 @@ var BrowserEventHandler = {
     if (BrowserEventHandler.mReflozPref &&
        !BrowserApp.selectedTab._mReflozPoint &&
        !this._shouldSuppressReflowOnZoom(element)) {
-     let data = JSON.parse(aData);
-     let zoomPointX = data.x;
-     let zoomPointY = data.y;
 
-     BrowserApp.selectedTab._mReflozPoint = { x: zoomPointX, y: zoomPointY,
-       range: BrowserApp.selectedBrowser.contentDocument.caretPositionFromPoint(zoomPointX, zoomPointY) };
-       BrowserApp.selectedTab.probablyNeedRefloz = true;
+      // See comment above performReflowOnZoom() for a detailed description of
+      // the events happening in the reflow-on-zoom operation.
+      let data = JSON.parse(aData);
+      let zoomPointX = data.x;
+      let zoomPointY = data.y;
+
+      BrowserApp.selectedTab._mReflozPoint = { x: zoomPointX, y: zoomPointY,
+        range: BrowserApp.selectedBrowser.contentDocument.caretPositionFromPoint(zoomPointX, zoomPointY) };
+
+      // Before we perform a reflow on zoom, let's disable painting.
+      let webNav = BrowserApp.selectedTab.window.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIWebNavigation);
+      let docShell = webNav.QueryInterface(Ci.nsIDocShell);
+      let docViewer = docShell.contentViewer.QueryInterface(Ci.nsIMarkupDocumentViewer);
+      docViewer.pausePainting();
+
+      BrowserApp.selectedTab.probablyNeedRefloz = true;
     }
 
     if (!element) {
-      this._zoomOut();
+      ZoomHelper.zoomOut();
       return;
     }
 
@@ -4502,9 +4621,9 @@ var BrowserEventHandler = {
       element = element.parentNode;
 
     if (!element) {
-      this._zoomOut();
+      ZoomHelper.zoomOut();
     } else {
-      this._zoomToElement(element, data.y);
+      ZoomHelper.zoomToElement(element, data.y);
     }
   },
 
@@ -4530,117 +4649,20 @@ var BrowserEventHandler = {
     return false;
   },
 
-  /* Zoom to an element, optionally keeping a particular part of it
-   * in view if it is really tall.
-   */
-  _zoomToElement: function(aElement, aClickY = -1, aCanZoomOut = true, aCanScrollHorizontally = true) {
-    const margin = 15;
-    let rect = ElementTouchHelper.getBoundingContentRect(aElement);
-
-    let viewport = BrowserApp.selectedTab.getViewport();
-    let bRect = new Rect(aCanScrollHorizontally ? Math.max(viewport.cssPageLeft, rect.x - margin) : viewport.cssX,
-                         rect.y,
-                         aCanScrollHorizontally ? rect.w + 2 * margin : viewport.cssWidth,
-                         rect.h);
-    // constrict the rect to the screen's right edge
-    bRect.width = Math.min(bRect.width, viewport.cssPageRight - bRect.x);
-
-    // if the rect is already taking up most of the visible area and is stretching the
-    // width of the page, then we want to zoom out instead.
-    if (BrowserEventHandler.mReflozPref) {
-      let zoomFactor = BrowserApp.selectedTab.getZoomToMinFontSize(aElement);
-
-      bRect.width = zoomFactor <= 1.0 ? bRect.width : gScreenWidth / zoomFactor;
-      bRect.height = zoomFactor <= 1.0 ? bRect.height : bRect.height / zoomFactor;
-      if (zoomFactor == 1.0 || this._isRectZoomedIn(bRect, viewport)) {
-        if (aCanZoomOut) {
-          this._zoomOut();
-        }
-        return;
-      }
-    } else if (this._isRectZoomedIn(bRect, viewport)) {
-      if (aCanZoomOut) {
-        this._zoomOut();
-      }
+  onPinchFinish: function(aData) {
+    let data = {};
+    try {
+      data = JSON.parse(aData);
+    } catch(ex) {
+      console.log(ex);
       return;
     }
 
-    rect.type = "Browser:ZoomToRect";
-    rect.x = bRect.x;
-    rect.y = bRect.y;
-    rect.w = bRect.width;
-    rect.h = Math.min(bRect.width * viewport.cssHeight / viewport.cssWidth, bRect.height);
-
-    if (aClickY >= 0) {
-      // if the block we're zooming to is really tall, and we want to keep a particular
-      // part of it in view, then adjust the y-coordinate of the target rect accordingly.
-      // the 1.2 multiplier is just a little fuzz to compensate for bRect including horizontal
-      // margins but not vertical ones.
-      let cssTapY = viewport.cssY + aClickY;
-      if ((bRect.height > rect.h) && (cssTapY > rect.y + (rect.h * 1.2))) {
-        rect.y = cssTapY - (rect.h / 2);
-      }
-    }
-
-    if (rect.w > viewport.cssWidth || rect.h > viewport.cssHeight) {
+    if (BrowserEventHandler.mReflozPref &&
+        data.zoomDelta < 0.0) {
       BrowserEventHandler.resetMaxLineBoxWidth();
     }
-
-    sendMessageToJava(rect);
   },
-
-  _zoomInAndSnapToRange: function(aRange) {
-    if (!aRange) {
-      Cu.reportError("aRange is null in zoomInAndSnapToRange. Unable to maintain position.");
-      return;
-    }
-
-    let viewport = BrowserApp.selectedTab.getViewport();
-    let fudge = 15; // Add a bit of fudge.
-    let boundingElement = aRange.offsetNode;
-    while (!boundingElement.getBoundingClientRect && boundingElement.parentNode) {
-      boundingElement = boundingElement.parentNode;
-    }
-
-    let rect = ElementTouchHelper.getBoundingContentRect(boundingElement);
-    let drRect = aRange.getClientRect();
-    let scrollTop =
-      BrowserApp.selectedBrowser.contentDocument.documentElement.scrollTop ||
-      BrowserApp.selectedBrowser.contentDocument.body.scrollTop;
-
-    // We subtract half the height of the viewport so that we can (ideally)
-    // center the area of interest on the screen.
-    let topPos = scrollTop + drRect.top - (viewport.cssHeight / 2.0);
-
-    // Factor in the border and padding
-    let boundingStyle = window.getComputedStyle(boundingElement);
-    let leftAdjustment = parseInt(boundingStyle.paddingLeft) +
-                         parseInt(boundingStyle.borderLeftWidth);
-
-    rect.type = "Browser:ZoomToRect";
-    rect.x = Math.max(viewport.cssPageLeft, rect.x  - fudge + leftAdjustment);
-    rect.y = Math.max(topPos, viewport.cssPageTop);
-    rect.w = viewport.cssWidth;
-    rect.h = viewport.cssHeight;
-
-    sendMessageToJava(rect);
-    BrowserApp.selectedTab._mReflozPoint = null;
-   },
-
-   onPinchFinish: function(aData) {
-     let data = {};
-     try {
-       data = JSON.parse(aData);
-     } catch(ex) {
-       console.log(ex);
-       return;
-     }
-
-     if (BrowserEventHandler.mReflozPref &&
-         data.zoomDelta < 0.0) {
-       BrowserEventHandler.resetMaxLineBoxWidth();
-     }
-   },
 
   _shouldZoomToElement: function(aElement) {
     let win = aElement.ownerDocument.defaultView;
@@ -5875,6 +5897,11 @@ var ViewportHandler = {
     let allowZoomStr = windowUtils.getDocumentMetadata("viewport-user-scalable");
     let allowZoom = !/^(0|no|false)$/.test(allowZoomStr) && (minScale != maxScale);
 
+    // Double-tap should always be disabled if allowZoom is disabled. So we initialize
+    // allowDoubleTapZoom to the same value as allowZoom and have additional conditions to
+    // disable it in updateViewportSize.
+    let allowDoubleTapZoom = allowZoom;
+
     let autoSize = true;
 
     if (isNaN(scale) && isNaN(minScale) && isNaN(maxScale) && allowZoomStr == "" && widthStr == "" && heightStr == "") {
@@ -5884,7 +5911,8 @@ var ViewportHandler = {
         return new ViewportMetadata({
           defaultZoom: 1,
           autoSize: true,
-          allowZoom: true
+          allowZoom: true,
+          allowDoubleTapZoom: false
         });
       }
 
@@ -5893,7 +5921,8 @@ var ViewportHandler = {
         return new ViewportMetadata({
           defaultZoom: 1,
           autoSize: true,
-          allowZoom: true
+          allowZoom: true,
+          allowDoubleTapZoom: false
         });
       }
 
@@ -5925,6 +5954,7 @@ var ViewportHandler = {
       height: height,
       autoSize: autoSize,
       allowZoom: allowZoom,
+      allowDoubleTapZoom: allowDoubleTapZoom,
       isSpecified: hasMetaViewport,
       isRTL: isRTL
     });
@@ -5968,6 +5998,7 @@ var ViewportHandler = {
  *   maxZoom (float): The maximum zoom level.
  *   autoSize (boolean): Resize the CSS viewport when the window resizes.
  *   allowZoom (boolean): Let the user zoom in or out.
+ *   allowDoubleTapZoom (boolean): Allow double-tap to zoom in.
  *   isSpecified (boolean): Whether the page viewport is specified or not.
  */
 function ViewportMetadata(aMetadata = {}) {
@@ -5978,6 +6009,7 @@ function ViewportMetadata(aMetadata = {}) {
   this.maxZoom = ("maxZoom" in aMetadata) ? aMetadata.maxZoom : 0;
   this.autoSize = ("autoSize" in aMetadata) ? aMetadata.autoSize : false;
   this.allowZoom = ("allowZoom" in aMetadata) ? aMetadata.allowZoom : true;
+  this.allowDoubleTapZoom = ("allowDoubleTapZoom" in aMetadata) ? aMetadata.allowDoubleTapZoom : true;
   this.isSpecified = ("isSpecified" in aMetadata) ? aMetadata.isSpecified : false;
   this.isRTL = ("isRTL" in aMetadata) ? aMetadata.isRTL : false;
   Object.seal(this);
@@ -5991,6 +6023,7 @@ ViewportMetadata.prototype = {
   maxZoom: null,
   autoSize: null,
   allowZoom: null,
+  allowDoubleTapZoom: null,
   isSpecified: null,
   isRTL: null,
 };
@@ -6608,10 +6641,10 @@ var SearchEngines = {
 
   init: function init() {
     Services.obs.addObserver(this, "SearchEngines:Add", false);
-    Services.obs.addObserver(this, "SearchEngines:Get", false);
     Services.obs.addObserver(this, "SearchEngines:GetVisible", false);
-    Services.obs.addObserver(this, "SearchEngines:SetDefault", false);
     Services.obs.addObserver(this, "SearchEngines:Remove", false);
+    Services.obs.addObserver(this, "SearchEngines:RestoreDefaults", false);
+    Services.obs.addObserver(this, "SearchEngines:SetDefault", false);
 
     let filter = {
       matches: function (aElement) {
@@ -6641,7 +6674,7 @@ var SearchEngines = {
     SelectionHandler.addAction({
       id: "search_add_action",
       label: Strings.browser.GetStringFromName("contextmenu.addSearchEngine"),
-      icon: "drawable://ic_url_bar_search",
+      icon: "drawable://ab_add_search_engine",
       selector: filter,
       action: function(aElement) {
         SearchEngines.addEngine(aElement);
@@ -6651,37 +6684,28 @@ var SearchEngines = {
 
   uninit: function uninit() {
     Services.obs.removeObserver(this, "SearchEngines:Add");
-    Services.obs.removeObserver(this, "SearchEngines:Get");
     Services.obs.removeObserver(this, "SearchEngines:GetVisible");
-    Services.obs.removeObserver(this, "SearchEngines:SetDefault");
     Services.obs.removeObserver(this, "SearchEngines:Remove");
+    Services.obs.removeObserver(this, "SearchEngines:RestoreDefaults");
+    Services.obs.removeObserver(this, "SearchEngines:SetDefault");
     if (this._contextMenuId != null)
       NativeWindow.contextmenus.remove(this._contextMenuId);
   },
 
   // Fetch list of search engines. all ? All engines : Visible engines only.
-  _handleSearchEnginesGet: function _handleSearchEnginesGet(rv, all) {
+  _handleSearchEnginesGetVisible: function _handleSearchEnginesGetVisible(rv, all) {
     if (!Components.isSuccessCode(rv)) {
       Cu.reportError("Could not initialize search service, bailing out.");
       return;
     }
-    let engineData;
-    if (all) {
-      engineData = Services.search.getEngines({});
-    } else {
-      engineData = Services.search.getVisibleEngines({});
-    }
 
-    // These engines are the bundled ones - they may not be uninstalled.
-    let immutableEngines = Services.search.getDefaultEngines();
-
+    let engineData = Services.search.getVisibleEngines({});
     let searchEngines = engineData.map(function (engine) {
       return {
         name: engine.name,
         identifier: engine.identifier,
         iconURI: (engine.iconURI ? engine.iconURI.spec : null),
-        hidden: engine.hidden,
-        immutable: immutableEngines.indexOf(engine) != -1
+        hidden: engine.hidden
       };
     });
 
@@ -6718,13 +6742,6 @@ var SearchEngines = {
     } catch (e) {}
   },
 
-  _handleSearchEnginesGetAll: function _handleSearchEnginesGetAll(rv) {
-    this._handleSearchEnginesGet(rv, true);
-  },
-  _handleSearchEnginesGetVisible: function _handleSearchEnginesGetVisible(rv) {
-    this._handleSearchEnginesGet(rv, false)
-  },
-
   // Helper method to extract the engine name from a JSON. Simplifies the observe function.
   _extractEngineFromJSON: function _extractEngineFromJSON(aData) {
     let data = JSON.parse(aData);
@@ -6740,16 +6757,6 @@ var SearchEngines = {
       case "SearchEngines:GetVisible":
         Services.search.init(this._handleSearchEnginesGetVisible.bind(this));
         break;
-      case "SearchEngines:Get":
-        // Return a list of all engines, including "Hidden" ones.
-        Services.search.init(this._handleSearchEnginesGetAll.bind(this));
-        break;
-      case "SearchEngines:SetDefault":
-        engine = this._extractEngineFromJSON(aData);
-        // Move the new default search engine to the top of the search engine list.
-        Services.search.moveEngine(engine, 0);
-        Services.search.defaultEngine = engine;
-        break;
       case "SearchEngines:Remove":
         // Make sure the engine isn't hidden before removing it, to make sure it's
         // visible if the user later re-adds it (works around bug 341833)
@@ -6757,6 +6764,17 @@ var SearchEngines = {
         engine.hidden = false;
         Services.search.removeEngine(engine);
         break;
+      case "SearchEngines:RestoreDefaults":
+        // Un-hides all default engines.
+        Services.search.restoreDefaultEngines();
+        break;
+      case "SearchEngines:SetDefault":
+        engine = this._extractEngineFromJSON(aData);
+        // Move the new default search engine to the top of the search engine list.
+        Services.search.moveEngine(engine, 0);
+        Services.search.defaultEngine = engine;
+        break;
+
       default:
         dump("Unexpected message type observed: " + aTopic);
         break;
@@ -6885,7 +6903,9 @@ var SearchEngines = {
       mDBConn.executeAsync(stmts, stmts.length, {
         handleResult: function (results) {
           let bytes = results.getNextRow().getResultByName("favicon");
-          favicon = "data:image/png;base64," + btoa(String.fromCharCode.apply(null, bytes));
+          if (bytes && bytes.length) {
+            favicon = "data:image/x-icon;base64," + btoa(String.fromCharCode.apply(null, bytes));
+          }
         },
         handleCompletion: function (reason) {
           // if there's already an engine with this name, add a number to
@@ -6937,6 +6957,7 @@ var ActivityObserver = {
   }
 };
 
+#ifndef MOZ_ANDROID_SYNTHAPKS
 var WebappsUI = {
   init: function init() {
     Cu.import("resource://gre/modules/Webapps.jsm");
@@ -6956,6 +6977,7 @@ var WebappsUI = {
     Services.obs.removeObserver(this, "webapps-install-error");
   },
 
+  DEFAULT_ICON: "chrome://browser/skin/images/default-app-icon.png",
   DEFAULT_PREFS_FILENAME: "default-prefs.js",
 
   observe: function observe(aSubject, aTopic, aData) {
@@ -6990,61 +7012,30 @@ var WebappsUI = {
         break;
       case "webapps-uninstall":
         sendMessageToJava({
-          type: "WebApps:Uninstall",
+          type: "Webapps:Uninstall",
           origin: data.origin
         });
         break;
     }
   },
 
-  getBiggestIcon: function getBiggestIcon(aIcons, aOrigin) {
-    const DEFAULT_ICON = "chrome://browser/skin/images/default-app-icon.png";
-    if (!aIcons)
-      return DEFAULT_ICON;
-  
-    let iconSizes = Object.keys(aIcons);
-    if (iconSizes.length == 0)
-      return DEFAULT_ICON;
-    iconSizes.sort(function(a, b) a - b);
-
-    let biggestIcon = aIcons[iconSizes.pop()];
-    let iconURI = null;
-    try {
-      iconURI = Services.io.newURI(biggestIcon, null, null);
-      if (iconURI.scheme == "data") {
-        return iconURI.spec;
-      }
-    } catch (ex) {
-      // we don't have a biggestIcon or its not a valid url
-    }
-
-    // if we have an origin, try to resolve biggestIcon as a relative url
-    if (!iconURI && aOrigin) {
-      try {
-        iconURI = Services.io.newURI(aOrigin.resolve(biggestIcon), null, null);
-      } catch (ex) {
-        console.log("Could not resolve url: " + aOrigin.spec + " " + biggestIcon + " - " + ex);
-      }
-    }
-
-    return iconURI ? iconURI.spec : DEFAULT_ICON;
-  },
-
   doInstall: function doInstall(aData) {
     let jsonManifest = aData.isPackage ? aData.app.updateManifest : aData.app.manifest;
     let manifest = new ManifestHelper(jsonManifest, aData.app.origin);
-    let showPrompt = true;
 
-    if (!showPrompt || Services.prompt.confirm(null, Strings.browser.GetStringFromName("webapps.installTitle"), manifest.name + "\n" + aData.app.origin)) {
+    if (Services.prompt.confirm(null, Strings.browser.GetStringFromName("webapps.installTitle"), manifest.name + "\n" + aData.app.origin)) {
       // Get a profile for the app to be installed in. We'll download everything before creating the icons.
       let origin = aData.app.origin;
-      let profilePath = sendMessageToJava({
-        type: "WebApps:PreInstall",
-        name: manifest.name,
-        manifestURL: aData.app.manifestURL,
-        origin: origin
-      });
-      if (profilePath) {
+      sendMessageToJava({
+         type: "Webapps:Preinstall",
+         name: manifest.name,
+         manifestURL: aData.app.manifestURL,
+         origin: origin
+      }, (data) => {
+        let profilePath = JSON.parse(data).profile;
+        if (!profilePath)
+          return;
+
         let file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsILocalFile);
         file.initWithPath(profilePath);
 
@@ -7055,7 +7046,7 @@ var WebappsUI = {
 
             // the manifest argument is the manifest from within the zip file,
             // TODO so now would be a good time to ask about permissions.
-            self.makeBase64Icon(self.getBiggestIcon(manifest.icons, Services.io.newURI(aData.app.origin, null, null)),
+            self.makeBase64Icon(localeManifest.biggestIconURL || this.DEFAULT_ICON,
               function(scaledIcon, fullsizeIcon) {
                 // if java returned a profile path to us, try to use it to pre-populate the app cache
                 // also save the icon so that it can be used in the splash screen
@@ -7071,7 +7062,7 @@ var WebappsUI = {
 
                   // aData.app.origin may now point to the app: url that hosts this app
                   sendMessageToJava({
-                    type: "WebApps:PostInstall",
+                    type: "Webapps:Postinstall",
                     name: localeManifest.name,
                     manifestURL: aData.app.manifestURL,
                     originalOrigin: origin,
@@ -7139,7 +7130,7 @@ var WebappsUI = {
 
   openURL: function openURL(aManifestURL, aOrigin) {
     sendMessageToJava({
-      type: "WebApps:Open",
+      type: "Webapps:Open",
       manifestURL: aManifestURL,
       origin: aOrigin
     });
@@ -7185,9 +7176,8 @@ var WebappsUI = {
 
       // if the image failed to load, and it was not our default icon, attempt to
       // use our default as a fallback
-      let uri = Services.io.newURI(favicon.src, null, null);
-      if (!/^chrome$/.test(uri.scheme)) {
-        favicon.src = WebappsUI.getBiggestIcon(null);
+      if (favicon.src != WebappsUI.DEFAULT_ICON) {
+        favicon.src = WebappsUI.DEFAULT_ICON;
       }
     };
   
@@ -7205,6 +7195,7 @@ var WebappsUI = {
     });
   }
 }
+#endif
 
 var RemoteDebugger = {
   init: function rd_init() {
@@ -7466,6 +7457,13 @@ let Reader = {
       case "Reader:Remove": {
         this.removeArticleFromCache(aData, function(success) {
           this.log("Reader:Remove success=" + success + ", url=" + aData);
+
+          if (success) {
+            sendMessageToJava({
+              type: "Reader:Removed",
+              url: aData
+            });
+          }
         }.bind(this));
         break;
       }
@@ -7860,7 +7858,7 @@ let Reader = {
 };
 
 var ExternalApps = {
-  _contextMenuId: -1,
+  _contextMenuId: null,
 
   // extend _getLink to pickup html5 media links.
   _getMediaLink: function(aElement) {
@@ -7892,7 +7890,10 @@ var ExternalApps = {
   },
 
   uninit: function helper_uninit() {
-    NativeWindow.contextmenus.remove(this._contextMenuId);
+    if (this._contextMenuId !== null) {
+      NativeWindow.contextmenus.remove(this._contextMenuId);
+    }
+    this._contextMenuId = null;
   },
 
   filter: {
@@ -7911,17 +7912,29 @@ var ExternalApps = {
     HelperApps.launchUri(uri);
   },
 
-  updatePageAction: function updatePageAction(uri) {
-    let apps = HelperApps.getAppsForUri(uri);
+  shouldCheckUri: function(uri) {
+    if (!(uri.schemeIs("http") || uri.schemeIs("https") || uri.schemeIs("file"))) {
+      return false;
+    }
 
-    if (apps.length > 0)
-      this._setUriForPageAction(uri, apps);
-    else
-      this._removePageAction();
+    return true;
+  },
+
+  updatePageAction: function updatePageAction(uri) {
+    HelperApps.getAppsForUri(uri, { filterHttp: true }, (apps) => {
+      if (apps.length > 0)
+        this._setUriForPageAction(uri, apps);
+      else
+        this._removePageAction();
+    });
+  },
+
+  updatePageActionUri: function updatePageActionUri(uri) {
+    this._pageActionUri = uri;
   },
 
   _setUriForPageAction: function setUriForPageAction(uri, apps) {
-    this._pageActionUri = uri;
+    this.updatePageActionUri(uri);
 
     // If the pageaction is already added, simply update the URI to be launched when 'onclick' is triggered.
     if (this._pageActionId != undefined)
@@ -7930,11 +7943,8 @@ var ExternalApps = {
     this._pageActionId = NativeWindow.pageactions.add({
       title: Strings.browser.GetStringFromName("openInApp.pageAction"),
       icon: "drawable://icon_openinapp",
-      clickCallback: (function() {
-        let callback = function(app) {
-          app.launch(uri);
-        }
 
+      clickCallback: () => {
         if (apps.length > 1) {
           // Use the HelperApps prompt here to filter out any Http handlers
           HelperApps.prompt(apps, {
@@ -7943,16 +7953,16 @@ var ExternalApps = {
               Strings.browser.GetStringFromName("openInApp.ok"),
               Strings.browser.GetStringFromName("openInApp.cancel")
             ]
-          }, function(result) {
-            if (result.button != 0)
+          }, (result) => {
+            if (result.button != 0) {
               return;
-
-            callback(apps[result.icongrid0]);
+            }
+            apps[result.icongrid0].launch(this._pageActionUri);
           });
         } else {
-          callback(apps[0]);
+          apps[0].launch(this._pageActionUri);
         }
-      }).bind(this)
+      }
     });
   },
 
@@ -8132,6 +8142,7 @@ var Tabs = {
     Services.obs.addObserver(this, "Session:Prefetch", false);
 
     BrowserApp.deck.addEventListener("pageshow", this, false);
+    BrowserApp.deck.addEventListener("TabOpen", this, false);
   },
 
   uninit: function() {
@@ -8144,14 +8155,20 @@ var Tabs = {
     Services.obs.removeObserver(this, "Session:Prefetch");
 
     BrowserApp.deck.removeEventListener("pageshow", this);
+    BrowserApp.deck.removeEventListener("TabOpen", this);
   },
 
   observe: function(aSubject, aTopic, aData) {
     switch (aTopic) {
       case "memory-pressure":
         if (aData != "heap-minimize") {
+          // We received a low-memory related notification. This will enable
+          // expirations.
           this._enableTabExpiration = true;
           Services.obs.removeObserver(this, "memory-pressure");
+        } else {
+          // Use "heap-minimize" as a trigger to expire the most stale tab.
+          this.expireLruTab();
         }
         break;
       case "Session:Prefetch":
@@ -8174,11 +8191,11 @@ var Tabs = {
         // Clear the domain cache whenever a page get loaded into any browser.
         this._domains.clear();
         break;
+      case "TabOpen":
+        // Use opening a new tab as a trigger to expire the most stale tab.
+        this.expireLruTab();
+        break;
     }
-  },
-
-  touch: function(aTab) {
-    aTab.lastTouchedAt = Date.now();
   },
 
   // Manage the most-recently-used list of tabs. Each tab has a timestamp

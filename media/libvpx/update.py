@@ -20,6 +20,8 @@ PLATFORMS= [
   'x86-darwin9-gcc',
   'x86_64-darwin9-gcc',
   'armv7-android-gcc',
+  'x86-win32-gcc',
+  'x86_64-win64-gcc',
 ]
 
 
@@ -284,9 +286,6 @@ def prepare_upstream(prefix, commit=None):
             configure += ['--enable-pic']
         if 'linux' in target:
             configure += ['--enable-pic']
-            # mozilla linux toolchain currently does not support avx2,
-            # remove once gcc is updated
-            configure += ['--disable-avx2']
         # x86inc.asm is not compatible with pic 32bit builds
         if target == 'x86-linux-gcc':
             configure += ['--disable-use-x86inc']
@@ -453,6 +452,7 @@ def apply_patches():
     # Patch to permit vpx users to specify their own <stdint.h> types.
     os.system("patch -p3 < stdint.patch")
     os.system("patch -p3 < unified.patch")
+    os.system("patch -p3 < mingw.patch")
 
 def update_readme(commit):
     with open('README_MOZILLA') as f:

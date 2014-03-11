@@ -106,6 +106,7 @@ AudioTrackEncoder::AppendAudioSegment(const AudioSegment& aSegment)
 static const int AUDIO_PROCESSING_FRAMES = 640; /* > 10ms of 48KHz audio */
 static const uint8_t gZeroChannel[MAX_AUDIO_SAMPLE_SIZE*AUDIO_PROCESSING_FRAMES] = {0};
 
+/*static*/
 void
 AudioTrackEncoder::InterleaveTrackData(AudioChunk& aChunk,
                                        int32_t aDuration,
@@ -119,11 +120,25 @@ AudioTrackEncoder::InterleaveTrackData(AudioChunk& aChunk,
 
   if (aChunk.mChannelData.Length() > aOutputChannels) {
     DownmixAndInterleave(aChunk.mChannelData, aChunk.mBufferFormat, aDuration,
-                         aChunk.mVolume, mChannels, aOutput);
+                         aChunk.mVolume, aOutputChannels, aOutput);
   } else {
     InterleaveAndConvertBuffer(aChunk.mChannelData.Elements(),
                                aChunk.mBufferFormat, aDuration, aChunk.mVolume,
-                               mChannels, aOutput);
+                               aOutputChannels, aOutput);
+  }
+}
+
+/*static*/
+void
+AudioTrackEncoder::DeInterleaveTrackData(AudioDataValue* aInput,
+                                         int32_t aDuration,
+                                         int32_t aChannels,
+                                         AudioDataValue* aOutput)
+{
+  for (int32_t i = 0; i < aChannels; ++i) {
+    for(int32_t j = 0; j < aDuration; ++j) {
+      aOutput[i * aDuration + j] = aInput[i + j * aChannels];
+    }
   }
 }
 
@@ -148,7 +163,10 @@ VideoTrackEncoder::NotifyQueuedTrackChanges(MediaStreamGraph* aGraph,
       VideoChunk chunk = *iter;
       if (!chunk.IsNull()) {
         gfx::IntSize imgsize = chunk.mFrame.GetImage()->GetSize();
-        nsresult rv = Init(imgsize.width, imgsize.height, aTrackRate);
+        gfxIntSize intrinsicSize = chunk.mFrame.GetIntrinsicSize();
+        nsresult rv = Init(imgsize.width, imgsize.height,
+                           intrinsicSize.width, intrinsicSize.height,
+                           aTrackRate);
         if (NS_FAILED(rv)) {
           LOG("[VideoTrackEncoder]: Fail to initialize the encoder!");
           NotifyCancel();
@@ -182,7 +200,7 @@ VideoTrackEncoder::AppendVideoSegment(const VideoSegment& aSegment)
     VideoChunk chunk = *iter;
     nsRefPtr<layers::Image> image = chunk.mFrame.GetImage();
     mRawSegment.AppendFrame(image.forget(), chunk.GetDuration(),
-                            chunk.mFrame.GetIntrinsicSize());
+                            chunk.mFrame.GetIntrinsicSize().ToIntSize());
     iter.Next();
   }
 
@@ -199,7 +217,8 @@ VideoTrackEncoder::NotifyEndOfStream()
   // If source video track is muted till the end of encoding, initialize the
   // encoder with default frame width, frame height, and track rate.
   if (!mCanceled && !mInitialized) {
-    Init(DEFAULT_FRAME_WIDTH, DEFAULT_FRAME_HEIGHT, DEFAULT_TRACK_RATE);
+    Init(DEFAULT_FRAME_WIDTH, DEFAULT_FRAME_HEIGHT,
+         DEFAULT_FRAME_WIDTH, DEFAULT_FRAME_HEIGHT, DEFAULT_TRACK_RATE);
   }
 
   ReentrantMonitorAutoEnter mon(mReentrantMonitor);

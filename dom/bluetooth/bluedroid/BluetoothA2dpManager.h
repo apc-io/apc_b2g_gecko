@@ -15,8 +15,6 @@ BEGIN_BLUETOOTH_NAMESPACE
 class BluetoothA2dpManager : public BluetoothProfileManagerBase
 {
 public:
-  NS_DECL_ISUPPORTS
-  NS_DECL_NSIOBSERVER
   BT_DECL_PROFILE_MGR_BASE
   virtual void GetName(nsACString& aName)
   {
@@ -45,8 +43,8 @@ public:
   void UpdateMetaData(const nsAString& aTitle,
                       const nsAString& aArtist,
                       const nsAString& aAlbum,
-                      uint32_t aMediaNumber,
-                      uint32_t aTotalMediaCount,
+                      uint64_t aMediaNumber,
+                      uint64_t aTotalMediaCount,
                       uint32_t aDuration);
   void UpdatePlayStatus(uint32_t aDuration,
                         uint32_t aPosition,
@@ -56,10 +54,11 @@ public:
   uint32_t GetDuration();
   ControlPlayStatus GetPlayStatus();
   uint32_t GetPosition();
-  uint32_t GetMediaNumber();
-  uint32_t GetTotalMediaNumber();
+  uint64_t GetMediaNumber();
+  uint64_t GetTotalMediaNumber();
   void GetTitle(nsAString& aTitle);
   void GetArtist(nsAString& aArtist);
+
 private:
   class SinkPropertyChangedHandler;
   BluetoothA2dpManager();
@@ -80,8 +79,8 @@ private:
   nsString mArtist;
   nsString mTitle;
   uint32_t mDuration;
-  uint32_t mMediaNumber;
-  uint32_t mTotalMediaCount;
+  uint64_t mMediaNumber;
+  uint64_t mTotalMediaCount;
   uint32_t mPosition;
   /*
    * mPlaybackInterval specifies the time interval (in seconds) at which

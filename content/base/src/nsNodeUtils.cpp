@@ -61,7 +61,7 @@ using mozilla::AutoJSContext;
     }                                                             \
     ShadowRoot* shadow = ShadowRoot::FromNode(node);              \
     if (shadow) {                                                 \
-      node = shadow->GetHost();                                   \
+      node = shadow->GetPoolHost();                               \
     } else {                                                      \
       node = node->GetParentNode();                               \
     }                                                             \
@@ -502,6 +502,9 @@ nsNodeUtils::CloneAndAdopt(nsINode *aNode, bool aClone, bool aDeep,
           }
           if (elm->MayHaveMouseEnterLeaveEventListener()) {
             window->SetHasMouseEnterLeaveEventListeners();
+          }
+          if (elm->MayHavePointerEnterLeaveEventListener()) {
+            window->SetHasPointerEnterLeaveEventListeners();
           }
         }
       }

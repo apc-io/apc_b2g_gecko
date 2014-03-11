@@ -494,7 +494,7 @@ static const float    kDefaultSmartLimitRatio =     .4f;
 #endif
 
 QuotaManager* gInstance = nullptr;
-mozilla::Atomic<uint32_t> gShutdown(0);
+mozilla::Atomic<bool> gShutdown(false);
 
 int32_t gStorageQuotaMB = kDefaultQuotaMB;
 
@@ -1000,7 +1000,7 @@ QuotaManager::FactoryCreate()
 bool
 QuotaManager::IsShuttingDown()
 {
-  return !!gShutdown;
+  return gShutdown;
 }
 
 nsresult
@@ -1341,9 +1341,7 @@ QuotaManager::GetQuotaObject(PersistenceType aPersistenceType,
     fileSize = 0;
   }
 
-  // We need this extra raw pointer because we can't assign to the smart
-  // pointer directly since QuotaObject::AddRef needs to acquire the same mutex.
-  QuotaObject* quotaObject;
+  nsRefPtr<QuotaObject> result;
   {
     MutexAutoLock lock(mQuotaMutex);
 
@@ -1364,16 +1362,26 @@ QuotaManager::GetQuotaObject(PersistenceType aPersistenceType,
       return nullptr;
     }
 
+    // We need this extra raw pointer because we can't assign to the smart
+    // pointer directly since QuotaObject::AddRef would try to acquire the same
+    // mutex.
+    QuotaObject* quotaObject;
     if (!originInfo->mQuotaObjects.Get(path, &quotaObject)) {
+      // Create a new QuotaObject.
       quotaObject = new QuotaObject(originInfo, path, fileSize);
+
+      // Put it to the hashtable. The hashtable is not responsible to delete
+      // the QuotaObject.
       originInfo->mQuotaObjects.Put(path, quotaObject);
-      // The hashtable is not responsible to delete the QuotaObject.
     }
+
+    // Addref the QuotaObject and move the ownership to the result. This must
+    // happen before we unlock!
+    result = quotaObject->LockedAddRef();
   }
 
   // The caller becomes the owner of the QuotaObject, that is, the caller is
   // is responsible to delete it when the last reference is removed.
-  nsRefPtr<QuotaObject> result = quotaObject;
   return result.forget();
 }
 
@@ -2368,14 +2376,14 @@ QuotaManager::Reset()
 NS_IMETHODIMP
 QuotaManager::Observe(nsISupports* aSubject,
                       const char* aTopic,
-                      const PRUnichar* aData)
+                      const char16_t* aData)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 
   if (!strcmp(aTopic, PROFILE_BEFORE_CHANGE_OBSERVER_ID)) {
     // Setting this flag prevents the service from being recreated and prevents
     // further storagess from being created.
-    if (gShutdown.exchange(1)) {
+    if (gShutdown.exchange(true)) {
       NS_ERROR("Shutdown more than once?!");
     }
 
@@ -2415,22 +2423,6 @@ QuotaManager::Observe(nsISupports* aSubject,
         }
       }
 
-      // Give clients a chance to cleanup IO thread only objects.
-      nsCOMPtr<nsIRunnable> runnable =
-        NS_NewRunnableMethod(this, &QuotaManager::ReleaseIOThreadObjects);
-      if (!runnable) {
-        NS_WARNING("Failed to create runnable!");
-      }
-
-      if (NS_FAILED(mIOThread->Dispatch(runnable, NS_DISPATCH_NORMAL))) {
-        NS_WARNING("Failed to dispatch runnable!");
-      }
-
-      // Make sure to join with our IO thread.
-      if (NS_FAILED(mIOThread->Shutdown())) {
-        NS_WARNING("Failed to shutdown IO thread!");
-      }
-
       // Kick off the shutdown timer.
       if (NS_FAILED(mShutdownTimer->Init(this, DEFAULT_SHUTDOWN_TIMER_MS,
                                          nsITimer::TYPE_ONE_SHOT))) {
@@ -2446,6 +2438,22 @@ QuotaManager::Observe(nsISupports* aSubject,
       // Cancel the timer regardless of whether it actually fired.
       if (NS_FAILED(mShutdownTimer->Cancel())) {
         NS_WARNING("Failed to cancel shutdown timer!");
+      }
+
+      // Give clients a chance to cleanup IO thread only objects.
+      nsCOMPtr<nsIRunnable> runnable =
+        NS_NewRunnableMethod(this, &QuotaManager::ReleaseIOThreadObjects);
+      if (!runnable) {
+        NS_WARNING("Failed to create runnable!");
+      }
+
+      if (NS_FAILED(mIOThread->Dispatch(runnable, NS_DISPATCH_NORMAL))) {
+        NS_WARNING("Failed to dispatch runnable!");
+      }
+
+      // Make sure to join with our IO thread.
+      if (NS_FAILED(mIOThread->Shutdown())) {
+        NS_WARNING("Failed to shutdown IO thread!");
       }
     }
 
@@ -3772,7 +3780,7 @@ AsyncUsageRunnable::Run()
 NS_IMETHODIMP
 AsyncUsageRunnable::Cancel()
 {
-  if (mCanceled.exchange(1)) {
+  if (mCanceled.exchange(true)) {
     NS_WARNING("Canceled more than once?!");
     return NS_ERROR_UNEXPECTED;
   }

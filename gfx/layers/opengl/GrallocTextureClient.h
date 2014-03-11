@@ -9,6 +9,7 @@
 
 #include "mozilla/layers/TextureClient.h"
 #include "ISurfaceAllocator.h" // For IsSurfaceDescriptorValid
+#include "mozilla/layers/FenceUtils.h" // for FenceHandle
 #include "mozilla/layers/ShadowLayerUtilsGralloc.h"
 #include <ui/GraphicBuffer.h>
 
@@ -36,7 +37,7 @@ public:
   GrallocTextureClientOGL(GrallocBufferActor* aActor,
                           gfx::IntSize aSize,
                           TextureFlags aFlags = TEXTURE_FLAGS_DEFAULT);
-  GrallocTextureClientOGL(CompositableClient* aCompositable,
+  GrallocTextureClientOGL(ISurfaceAllocator* aAllocator,
                           gfx::SurfaceFormat aFormat,
                           TextureFlags aFlags = TEXTURE_FLAGS_DEFAULT);
 
@@ -48,13 +49,26 @@ public:
 
   virtual bool ImplementsLocking() const MOZ_OVERRIDE { return true; }
 
+  virtual bool HasInternalBuffer() const MOZ_OVERRIDE { return false; }
+
   virtual bool IsAllocated() const MOZ_OVERRIDE;
 
   virtual bool ToSurfaceDescriptor(SurfaceDescriptor& aOutDescriptor) MOZ_OVERRIDE;
 
+  virtual bool UpdateSurface(gfxASurface* aSurface) MOZ_OVERRIDE;
+
   virtual TextureClientData* DropTextureData() MOZ_OVERRIDE;
 
+  virtual void SetReleaseFenceHandle(FenceHandle aReleaseFenceHandle) MOZ_OVERRIDE;
+
+  const FenceHandle& GetReleaseFenceHandle() const
+  {
+    return mReleaseFenceHandle;
+  }
+
   void InitWith(GrallocBufferActor* aActor, gfx::IntSize aSize);
+
+  void SetTextureFlags(TextureFlags aFlags) { AddFlags(aFlags); }
 
   gfx::IntSize GetSize() const MOZ_OVERRIDE { return mSize; }
 
@@ -68,17 +82,11 @@ public:
     return mGraphicBuffer->getPixelFormat();
   }
 
-  /**
-   * These flags are important for performances because they'll let the driver
-   * optimize for the right usage.
-   * Be sure to specify them before calling Lock.
-   */
-  void SetGrallocOpenFlags(uint32_t aFlags)
-  {
-    mGrallocFlags = aFlags;
-  }
-
   virtual uint8_t* GetBuffer() const MOZ_OVERRIDE;
+
+  virtual TemporaryRef<gfx::DrawTarget> GetAsDrawTarget() MOZ_OVERRIDE;
+
+  virtual already_AddRefed<gfxASurface> GetAsSurface() MOZ_OVERRIDE;
 
   virtual bool AllocateForSurface(gfx::IntSize aSize,
                                   TextureAllocationFlags aFlags = ALLOC_DEFAULT) MOZ_OVERRIDE;
@@ -86,6 +94,8 @@ public:
   virtual bool AllocateForYCbCr(gfx::IntSize aYSize,
                                 gfx::IntSize aCbCrSize,
                                 StereoMode aStereoMode) MOZ_OVERRIDE;
+
+  bool AllocateForGLRendering(gfx::IntSize aSize);
 
   bool AllocateGralloc(gfx::IntSize aYSize, uint32_t aAndroidFormat, uint32_t aUsage);
 
@@ -96,7 +106,6 @@ public:
   void SetGraphicBufferLocked(GraphicBufferLocked* aBufferLocked);
 
 protected:
-
   /**
    * Unfortunately, until bug 879681 is fixed we need to use a GrallocBufferActor.
    */
@@ -107,14 +116,13 @@ protected:
   android::sp<android::GraphicBuffer> mGraphicBuffer;
 
   /**
-   * Flags that are used when locking the gralloc buffer
-   */
-  uint32_t mGrallocFlags;
-  /**
    * Points to a mapped gralloc buffer between calls to lock and unlock.
    * Should be null outside of the lock-unlock pair.
    */
   uint8_t* mMappedBuffer;
+
+  RefPtr<gfx::DrawTarget> mDrawTarget;
+
   /**
    * android::GraphicBuffer has a size information. But there are cases
    * that GraphicBuffer's size and actual video's size are different.

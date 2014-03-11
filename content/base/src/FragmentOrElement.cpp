@@ -24,7 +24,6 @@
 #include "nsIDocumentInlines.h"
 #include "nsIDocumentEncoder.h"
 #include "nsIDOMNodeList.h"
-#include "nsIDOMDocument.h"
 #include "nsIContentIterator.h"
 #include "nsEventListenerManager.h"
 #include "nsFocusManager.h"
@@ -45,7 +44,7 @@
 #include "nsIServiceManager.h"
 #include "nsIDOMCSSStyleDeclaration.h"
 #include "nsDOMCSSAttrDeclaration.h"
-#include "nsINameSpaceManager.h"
+#include "nsNameSpaceManager.h"
 #include "nsContentList.h"
 #include "nsDOMTokenList.h"
 #include "nsXBLPrototypeBinding.h"
@@ -53,8 +52,8 @@
 #include "nsDOMString.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsIDOMMutationEvent.h"
+#include "mozilla/InternalMutationEvent.h"
 #include "mozilla/MouseEvents.h"
-#include "mozilla/MutationEvent.h"
 #include "nsNodeUtils.h"
 #include "nsDocument.h"
 #include "nsAttrValueOrString.h"
@@ -87,7 +86,6 @@
 
 #include "nsNodeInfoManager.h"
 #include "nsICategoryManager.h"
-#include "nsIDOMDocumentType.h"
 #include "nsIDOMUserDataHandler.h"
 #include "nsGenericHTMLElement.h"
 #include "nsIEditor.h"
@@ -565,6 +563,12 @@ FragmentOrElement::nsDOMSlots::Traverse(nsCycleCollectionTraversalCallback &cb, 
 
   NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mSlots->mClassList");
   cb.NoteXPCOMChild(mClassList.get());
+
+  if (mCustomElementData) {
+    for (uint32_t i = 0; i < mCustomElementData->mCallbackQueue.Length(); i++) {
+      mCustomElementData->mCallbackQueue[i]->Traverse(cb);
+    }
+  }
 }
 
 void
@@ -584,6 +588,7 @@ FragmentOrElement::nsDOMSlots::Unlink(bool aIsXUL)
   mContainingShadow = nullptr;
   mChildrenList = nullptr;
   mUndoManager = nullptr;
+  mCustomElementData = nullptr;
   if (mClassList) {
     mClassList->DropReference();
     mClassList = nullptr;
@@ -703,7 +708,9 @@ nsIContent::PreHandleEvent(nsEventChainPreVisitor& aVisitor)
   // inside chrome access only content.
   bool isAnonForEvents = IsRootOfChromeAccessOnlySubtree();
   if ((aVisitor.mEvent->message == NS_MOUSE_ENTER_SYNTH ||
-       aVisitor.mEvent->message == NS_MOUSE_EXIT_SYNTH) &&
+       aVisitor.mEvent->message == NS_MOUSE_EXIT_SYNTH ||
+       aVisitor.mEvent->message == NS_POINTER_OVER ||
+       aVisitor.mEvent->message == NS_POINTER_OUT) &&
       // Check if we should stop event propagation when event has just been
       // dispatched or when we're about to propagate from
       // chrome access only subtree.
@@ -1011,6 +1018,24 @@ FragmentOrElement::SetXBLInsertionParent(nsIContent* aContent)
     SetFlags(NODE_MAY_BE_IN_BINDING_MNGR);
   }
   slots->mXBLInsertionParent = aContent;
+}
+
+CustomElementData*
+FragmentOrElement::GetCustomElementData() const
+{
+  nsDOMSlots *slots = GetExistingDOMSlots();
+  if (slots) {
+    return slots->mCustomElementData;
+  }
+  return nullptr;
+}
+
+void
+FragmentOrElement::SetCustomElementData(CustomElementData* aData)
+{
+  nsDOMSlots *slots = DOMSlots();
+  MOZ_ASSERT(!slots->mCustomElementData, "Custom element data may not be changed once set.");
+  slots->mCustomElementData = aData;
 }
 
 nsresult
@@ -1737,7 +1762,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(FragmentOrElement)
       classes.AppendLiteral(" class='");
       nsAutoString classString;
       classAttrValue->ToString(classString);
-      classString.ReplaceChar(PRUnichar('\n'), PRUnichar(' '));
+      classString.ReplaceChar(char16_t('\n'), char16_t(' '));
       classes.Append(classString);
       classes.AppendLiteral("'");
     }
@@ -1866,7 +1891,7 @@ FragmentOrElement::TextLength() const
 }
 
 nsresult
-FragmentOrElement::SetText(const PRUnichar* aBuffer, uint32_t aLength,
+FragmentOrElement::SetText(const char16_t* aBuffer, uint32_t aLength,
                           bool aNotify)
 {
   NS_ERROR("called FragmentOrElement::SetText");
@@ -1875,7 +1900,7 @@ FragmentOrElement::SetText(const PRUnichar* aBuffer, uint32_t aLength,
 }
 
 nsresult
-FragmentOrElement::AppendText(const PRUnichar* aBuffer, uint32_t aLength,
+FragmentOrElement::AppendText(const char16_t* aBuffer, uint32_t aLength,
                              bool aNotify)
 {
   NS_ERROR("called FragmentOrElement::AppendText");
@@ -2114,8 +2139,8 @@ private:
 
   void EncodeAttrString(const nsAutoString& aValue, nsAString& aOut)
   {
-    const PRUnichar* c = aValue.BeginReading();
-    const PRUnichar* end = aValue.EndReading();
+    const char16_t* c = aValue.BeginReading();
+    const char16_t* end = aValue.EndReading();
     while (c < end) {
       switch (*c) {
       case '"':
@@ -2139,9 +2164,9 @@ private:
   {
     uint32_t len = aValue->GetLength();
     if (aValue->Is2b()) {
-      const PRUnichar* data = aValue->Get2b();
+      const char16_t* data = aValue->Get2b();
       for (uint32_t i = 0; i < len; ++i) {
-        const PRUnichar c = data[i];
+        const char16_t c = data[i];
         switch (c) {
           case '<':
             aOut.AppendLiteral("&lt;");
@@ -2200,9 +2225,9 @@ AppendEncodedCharacters(const nsTextFragment* aText, StringBuilder& aBuilder)
   uint32_t extraSpaceNeeded = 0;
   uint32_t len = aText->GetLength();
   if (aText->Is2b()) {
-    const PRUnichar* data = aText->Get2b();
+    const char16_t* data = aText->Get2b();
     for (uint32_t i = 0; i < len; ++i) {
-      const PRUnichar c = data[i];
+      const char16_t c = data[i];
       switch (c) {
         case '<':
           extraSpaceNeeded += ArrayLength("&lt;") - 2;
@@ -2253,8 +2278,8 @@ AppendEncodedCharacters(const nsTextFragment* aText, StringBuilder& aBuilder)
 static void
 AppendEncodedAttributeValue(nsAutoString* aValue, StringBuilder& aBuilder)
 {
-  const PRUnichar* c = aValue->BeginReading();
-  const PRUnichar* end = aValue->EndReading();
+  const char16_t* c = aValue->BeginReading();
+  const char16_t* end = aValue->EndReading();
 
   uint32_t extraSpaceNeeded = 0;
   while (c < end) {
@@ -2360,7 +2385,7 @@ StartElement(Element* aContent, StringBuilder& aBuilder)
           (fc->NodeType() == nsIDOMNode::TEXT_NODE ||
            fc->NodeType() == nsIDOMNode::CDATA_SECTION_NODE)) {
         const nsTextFragment* text = fc->GetText();
-        if (text && text->GetLength() && text->CharAt(0) == PRUnichar('\n')) {
+        if (text && text->GetLength() && text->CharAt(0) == char16_t('\n')) {
           aBuilder.Append("\n");
         }
       }
@@ -2618,15 +2643,15 @@ ContainsMarkup(const nsAString& aStr)
 {
   // Note: we can't use FindCharInSet because null is one of the characters we
   // want to search for.
-  const PRUnichar* start = aStr.BeginReading();
-  const PRUnichar* end = aStr.EndReading();
+  const char16_t* start = aStr.BeginReading();
+  const char16_t* end = aStr.EndReading();
 
   while (start != end) {
-    PRUnichar c = *start;
-    if (c == PRUnichar('<') ||
-        c == PRUnichar('&') ||
-        c == PRUnichar('\r') ||
-        c == PRUnichar('\0')) {
+    char16_t c = *start;
+    if (c == char16_t('<') ||
+        c == char16_t('&') ||
+        c == char16_t('\r') ||
+        c == char16_t('\0')) {
       return true;
     }
     ++start;
@@ -2704,18 +2729,15 @@ FragmentOrElement::SetInnerHTMLInternal(const nsAString& aInnerHTML, ErrorResult
     nsContentUtils::FireMutationEventsForDirectParsing(doc, target,
                                                        oldChildCount);
   } else {
-    nsCOMPtr<nsIDOMDocumentFragment> df;
-    aError = nsContentUtils::CreateContextualFragment(target, aInnerHTML,
-                                                      true,
-                                                      getter_AddRefs(df));
-    nsCOMPtr<nsINode> fragment = do_QueryInterface(df);
+    nsRefPtr<DocumentFragment> df =
+      nsContentUtils::CreateContextualFragment(target, aInnerHTML, true, aError);
     if (!aError.Failed()) {
       // Suppress assertion about node removal mutation events that can't have
       // listeners anyway, because no one has had the chance to register mutation
       // listeners on the fragment that comes from the parser.
       nsAutoScriptBlockerSuppressNodeRemoved scriptBlocker;
 
-      static_cast<nsINode*>(target)->AppendChild(*fragment, aError);
+      static_cast<nsINode*>(target)->AppendChild(*df, aError);
       mb.NodesAdded();
     }
   }

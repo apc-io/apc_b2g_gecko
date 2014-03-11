@@ -87,7 +87,7 @@ public:
   
   NS_IMETHODIMP OnStatusChange(nsIWebProgress *aWebProgress,
                                nsIRequest *aRequest, nsresult aStatus,
-                               const PRUnichar *aMessage)
+                               const char16_t *aMessage)
   {
     NS_ENSURE_TRUE(mInner, NS_ERROR_NOT_INITIALIZED);
     return mInner->OnStatusChange(aWebProgress, aRequest, aStatus, aMessage);
@@ -152,6 +152,12 @@ public:
   {
     NS_ENSURE_TRUE(mInner, NS_ERROR_NOT_INITIALIZED);
     return mInner->SetSha256Hash(aHash);
+  }
+
+  NS_IMETHODIMP SetSignatureInfo(nsIArray* aSignatureInfo)
+  {
+    NS_ENSURE_TRUE(mInner, NS_ERROR_NOT_INITIALIZED);
+    return mInner->SetSignatureInfo(aSignatureInfo);
   }
 
 private:

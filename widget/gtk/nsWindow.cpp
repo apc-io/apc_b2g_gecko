@@ -2046,13 +2046,11 @@ nsWindow::OnExposeEvent(cairo_t *cr)
     nsIntRegion &region = exposeRegion.mRegion;
 
     ClientLayerManager *clientLayers =
-        (GetLayerManager()->GetBackendType() == LAYERS_CLIENT)
+        (GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_CLIENT)
         ? static_cast<ClientLayerManager*>(GetLayerManager())
         : nullptr;
 
-    if (clientLayers && mCompositorParent &&
-        !gdk_screen_is_composited(gdk_window_get_screen(mGdkWindow)))
-    {
+    if (clientLayers && mCompositorParent) {
         // We need to paint to the screen even if nothing changed, since if we
         // don't have a compositing window manager, our pixels could be stale.
         clientLayers->SetNeedsComposite(true);
@@ -2131,7 +2129,7 @@ nsWindow::OnExposeEvent(cairo_t *cr)
     }
 
     // If this widget uses OMTC...
-    if (GetLayerManager()->GetBackendType() == LAYERS_CLIENT) {
+    if (GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_CLIENT) {
         listener->PaintWindow(this, region);
         listener->DidPaintWindow();
         return TRUE;
@@ -2146,13 +2144,13 @@ nsWindow::OnExposeEvent(cairo_t *cr)
 
     nsRefPtr<gfxContext> ctx;
     if (gfxPlatform::GetPlatform()->
-            SupportsAzureContentForType(BACKEND_CAIRO)) {
+            SupportsAzureContentForType(BackendType::CAIRO)) {
         IntSize intSize(surf->GetSize().width, surf->GetSize().height);
         ctx = new gfxContext(gfxPlatform::GetPlatform()->
             CreateDrawTargetForSurface(surf, intSize));
     } else if (gfxPlatform::GetPlatform()->
-                   SupportsAzureContentForType(BACKEND_SKIA) &&
-               surf->GetType() != gfxSurfaceTypeImage) {
+                   SupportsAzureContentForType(BackendType::SKIA) &&
+               surf->GetType() != gfxSurfaceType::Image) {
        gfxImageSurface* imgSurf = static_cast<gfxImageSurface*>(surf);
        SurfaceFormat format = ImageFormatToSurfaceFormat(imgSurf->Format());
        IntSize intSize(surf->GetSize().width, surf->GetSize().height);
@@ -2184,16 +2182,16 @@ nsWindow::OnExposeEvent(cairo_t *cr)
         // The double buffering is done here to extract the shape mask.
         // (The shape mask won't be necessary when a visual with an alpha
         // channel is used on compositing window managers.)
-        layerBuffering = mozilla::layers::BUFFER_NONE;
-        ctx->PushGroup(GFX_CONTENT_COLOR_ALPHA);
+        layerBuffering = mozilla::layers::BufferMode::BUFFER_NONE;
+        ctx->PushGroup(gfxContentType::COLOR_ALPHA);
 #ifdef MOZ_HAVE_SHMIMAGE
     } else if (nsShmImage::UseShm()) {
         // We're using an xshm mapping as a back buffer.
-        layerBuffering = mozilla::layers::BUFFER_NONE;
+        layerBuffering = mozilla::layers::BufferMode::BUFFER_NONE;
 #endif // MOZ_HAVE_SHMIMAGE
     } else {
         // Get the layer manager to do double buffering (if necessary).
-        layerBuffering = mozilla::layers::BUFFER_BUFFERED;
+        layerBuffering = mozilla::layers::BufferMode::BUFFERED;
     }
 
 #if 0
@@ -2211,7 +2209,7 @@ nsWindow::OnExposeEvent(cairo_t *cr)
 
     bool painted = false;
     {
-      if (GetLayerManager()->GetBackendType() == LAYERS_BASIC) {
+      if (GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_BASIC) {
         AutoLayerManagerSetup setupLayerManager(this, ctx, layerBuffering);
         painted = listener->PaintWindow(this, region);
       }
@@ -2273,24 +2271,23 @@ nsWindow::UpdateAlpha(gfxPattern* aPattern, nsIntRect aBoundsRect)
   if (gfxPlatform::GetPlatform()->SupportsAzureContent()) {
       // We need to create our own buffer to force the stride to match the
       // expected stride.
-      int32_t stride = GetAlignedStride<4>(BytesPerPixel(FORMAT_A8) *
+      int32_t stride = GetAlignedStride<4>(BytesPerPixel(SurfaceFormat::A8) *
                                            aBoundsRect.width);
       int32_t bufferSize = stride * aBoundsRect.height;
       nsAutoArrayPtr<uint8_t> imageBuffer(new (std::nothrow) uint8_t[bufferSize]);
       RefPtr<DrawTarget> drawTarget = gfxPlatform::GetPlatform()->
           CreateDrawTargetForData(imageBuffer, ToIntSize(aBoundsRect.Size()),
-                                  stride, FORMAT_A8);
+                                  stride, SurfaceFormat::A8);
 
       if (drawTarget) {
           drawTarget->FillRect(Rect(0, 0, aBoundsRect.width, aBoundsRect.height),
                                *aPattern->GetPattern(drawTarget),
-                               DrawOptions(1.0, OP_SOURCE));
+                               DrawOptions(1.0, CompositionOp::OP_SOURCE));
       }
       UpdateTranslucentWindowAlphaInternal(aBoundsRect, imageBuffer, stride);
   } else {
       nsRefPtr<gfxImageSurface> img =
-          new gfxImageSurface(ThebesIntSize(aBoundsRect.Size()),
-                              gfxImageFormatA8);
+          new gfxImageSurface(aBoundsRect.Size(), gfxImageFormat::A8);
       if (img && !img->CairoStatus()) {
           img->SetDeviceOffset(-aBoundsRect.TopLeft());
 
@@ -2369,8 +2366,7 @@ nsWindow::OnConfigureEvent(GtkWidget *aWidget, GdkEventConfigure *aEvent)
 
     // XXX mozilla will invalidate the entire window after this move
     // complete.  wtf?
-    if (mWidgetListener)
-      mWidgetListener->WindowMoved(this, mBounds.x, mBounds.y);
+    NotifyWindowMoved(mBounds.x, mBounds.y);
 
     return FALSE;
 }
@@ -3055,7 +3051,7 @@ nsWindow::OnKeyPressEvent(GdkEventKey *aEvent)
         }
         else {
             WidgetTextEvent textEvent(true, NS_TEXT_TEXT, this);
-            PRUnichar textString[3];
+            char16_t textString[3];
             textString[0] = H_SURROGATE(event.charCode);
             textString[1] = L_SURROGATE(event.charCode);
             textString[2] = 0;
@@ -3586,6 +3582,23 @@ nsWindow::Create(nsIWidget        *aParent,
                 gint wmd = ConvertBorderStyles(mBorderStyle);
                 if (wmd != -1)
                   gdk_window_set_decorations(gtk_widget_get_window(mShell), (GdkWMDecoration) wmd);
+            }
+
+            // If the popup ignores mouse events, set an empty input shape.
+            if (aInitData->mMouseTransparent) {
+#if (MOZ_WIDGET_GTK == 2)
+              GdkRectangle rect = { 0, 0, 0, 0 };
+              GdkRegion *region = gdk_region_rectangle(&rect);
+
+              gdk_window_input_shape_combine_region(mGdkWindow, region, 0, 0);
+              gdk_region_destroy(region);
+#else
+              cairo_rectangle_int_t rect = { 0, 0, 0, 0 };
+              cairo_region_t *region = cairo_region_create_rectangle(&rect);
+
+              gdk_window_input_shape_combine_region(mGdkWindow, region, 0, 0);
+              cairo_region_destroy(region);
+#endif
             }
         }
     }
@@ -4888,7 +4901,12 @@ get_gtk_cursor(nsCursor aCursor)
     if ((gdkcursor = gCursorCache[aCursor])) {
         return gdkcursor;
     }
+    
+    GdkDisplay *defaultDisplay = gdk_display_get_default();
 
+    // The strategy here is to use standard GDK cursors, and, if not available,
+    // load by standard name with gdk_cursor_new_from_name.
+    // Spec is here: http://www.freedesktop.org/wiki/Specifications/cursor-spec/
     switch (aCursor) {
     case eCursor_standard:
         gdkcursor = gdk_cursor_new(GDK_LEFT_PTR);
@@ -4936,25 +4954,42 @@ get_gtk_cursor(nsCursor aCursor)
         gdkcursor = gdk_cursor_new(GDK_QUESTION_ARROW);
         break;
     case eCursor_copy: // CSS3
-        newType = MOZ_CURSOR_COPY;
+        gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "copy");
+        if (!gdkcursor)
+            newType = MOZ_CURSOR_COPY;
         break;
     case eCursor_alias:
-        newType = MOZ_CURSOR_ALIAS;
+        gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "alias");
+        if (!gdkcursor)
+            newType = MOZ_CURSOR_ALIAS;
         break;
     case eCursor_context_menu:
-        newType = MOZ_CURSOR_CONTEXT_MENU;
+        gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "context-menu");
+        if (!gdkcursor)
+            newType = MOZ_CURSOR_CONTEXT_MENU;
         break;
     case eCursor_cell:
         gdkcursor = gdk_cursor_new(GDK_PLUS);
         break;
+    // Those two aren’t standardized. Trying both KDE’s and GNOME’s names
     case eCursor_grab:
-        newType = MOZ_CURSOR_HAND_GRAB;
+        gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "openhand");
+        if (!gdkcursor)
+            gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "hand1");
+        if (!gdkcursor)
+            newType = MOZ_CURSOR_HAND_GRAB;
         break;
     case eCursor_grabbing:
-        newType = MOZ_CURSOR_HAND_GRABBING;
+        gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "closedhand");
+        if (!gdkcursor)
+            gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "grabbing");
+        if (!gdkcursor)
+            newType = MOZ_CURSOR_HAND_GRABBING;
         break;
     case eCursor_spinning:
-        newType = MOZ_CURSOR_SPINNING;
+        gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "progress");
+        if (!gdkcursor)
+            newType = MOZ_CURSOR_SPINNING;
         break;
     case eCursor_zoom_in:
         newType = MOZ_CURSOR_ZOOM_IN;
@@ -4963,8 +4998,20 @@ get_gtk_cursor(nsCursor aCursor)
         newType = MOZ_CURSOR_ZOOM_OUT;
         break;
     case eCursor_not_allowed:
+        gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "not-allowed");
+        if (!gdkcursor) // nonstandard, yet common
+            gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "crossed_circle");
+        if (!gdkcursor)
+            newType = MOZ_CURSOR_NOT_ALLOWED;
+        break;
     case eCursor_no_drop:
-        newType = MOZ_CURSOR_NOT_ALLOWED;
+        gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "no-drop");
+        if (!gdkcursor) // this nonstandard sequence makes it work on KDE and GNOME
+            gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "forbidden");
+        if (!gdkcursor)
+            gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "circle");
+        if (!gdkcursor)
+            newType = MOZ_CURSOR_NOT_ALLOWED;
         break;
     case eCursor_vertical_text:
         newType = MOZ_CURSOR_VERTICAL_TEXT;
@@ -4973,18 +5020,31 @@ get_gtk_cursor(nsCursor aCursor)
         gdkcursor = gdk_cursor_new(GDK_FLEUR);
         break;
     case eCursor_nesw_resize:
-        newType = MOZ_CURSOR_NESW_RESIZE;
+        gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "size_bdiag");
+        if (!gdkcursor)
+            newType = MOZ_CURSOR_NESW_RESIZE;
         break;
     case eCursor_nwse_resize:
-        newType = MOZ_CURSOR_NWSE_RESIZE;
+        gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "size_fdiag");
+        if (!gdkcursor)
+            newType = MOZ_CURSOR_NWSE_RESIZE;
         break;
     case eCursor_ns_resize:
-    case eCursor_row_resize:
         gdkcursor = gdk_cursor_new(GDK_SB_V_DOUBLE_ARROW);
         break;
     case eCursor_ew_resize:
-    case eCursor_col_resize:
         gdkcursor = gdk_cursor_new(GDK_SB_H_DOUBLE_ARROW);
+        break;
+    // Here, two better fitting cursors exist in some cursor themes. Try those first
+    case eCursor_row_resize:
+        gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "split_v");
+        if (!gdkcursor)
+            gdkcursor = gdk_cursor_new(GDK_SB_V_DOUBLE_ARROW);
+        break;
+    case eCursor_col_resize:
+        gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "split_h");
+        if (!gdkcursor)
+            gdkcursor = gdk_cursor_new(GDK_SB_H_DOUBLE_ARROW);
         break;
     case eCursor_none:
         newType = MOZ_CURSOR_NONE;
@@ -5000,8 +5060,7 @@ get_gtk_cursor(nsCursor aCursor)
     // custom bitmap, as libXcursor has some magic to convert bitmapped cursors
     // to themed cursors
     if (newType != 0xFF && GtkCursors[newType].hash) {
-        gdkcursor = gdk_cursor_new_from_name(gdk_display_get_default(),
-                                             GtkCursors[newType].hash);
+        gdkcursor = gdk_cursor_new_from_name(defaultDisplay, GtkCursors[newType].hash);
     }
 
     // If we still don't have a xcursor, we now really create a bitmap cursor
@@ -5849,10 +5908,10 @@ nsChildWindow::~nsChildWindow()
 }
 
 NS_IMETHODIMP
-nsWindow::NotifyIME(NotificationToIME aNotification)
+nsWindow::NotifyIME(const IMENotification& aIMENotification)
 {
     if (MOZ_UNLIKELY(!mIMModule)) {
-        switch (aNotification) {
+        switch (aIMENotification.mMessage) {
             case NOTIFY_IME_OF_CURSOR_POS_CHANGED:
             case REQUEST_TO_COMMIT_COMPOSITION:
             case REQUEST_TO_CANCEL_COMPOSITION:
@@ -5863,7 +5922,7 @@ nsWindow::NotifyIME(NotificationToIME aNotification)
               break;
         }
     }
-    switch (aNotification) {
+    switch (aIMENotification.mMessage) {
         // TODO: We should replace NOTIFY_IME_OF_CURSOR_POS_CHANGED with
         //       NOTIFY_IME_OF_SELECTION_CHANGE.  The required behavior is
         //       really different from committing composition.
@@ -5877,6 +5936,9 @@ nsWindow::NotifyIME(NotificationToIME aNotification)
             return NS_OK;
         case NOTIFY_IME_OF_BLUR:
             mIMModule->OnFocusChangeInGecko(false);
+            return NS_OK;
+        case NOTIFY_IME_OF_COMPOSITION_UPDATE:
+            mIMModule->OnUpdateComposition();
             return NS_OK;
         default:
             return NS_ERROR_NOT_IMPLEMENTED;
@@ -6202,7 +6264,7 @@ void
 nsWindow::ClearCachedResources()
 {
     if (mLayerManager &&
-        mLayerManager->GetBackendType() == mozilla::layers::LAYERS_BASIC) {
+        mLayerManager->GetBackendType() == mozilla::layers::LayersBackend::LAYERS_BASIC) {
         mLayerManager->ClearCachedResources();
     }
 

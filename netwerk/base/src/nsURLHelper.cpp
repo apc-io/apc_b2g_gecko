@@ -393,7 +393,7 @@ net_ResolveRelativePath(const nsACString &relativePath,
     bool needsDelim = false;
 
     if ( !path.IsEmpty() ) {
-        PRUnichar last = path.Last();
+        char16_t last = path.Last();
         needsDelim = !(last == '/');
     }
 
@@ -614,7 +614,7 @@ net_FilterURIString(const char *str, nsACString& result)
     return writing;
 }
 
-#if defined(XP_WIN) || defined(XP_OS2)
+#if defined(XP_WIN)
 bool
 net_NormalizeFileURL(const nsACString &aURL, nsCString &aResultBuf)
 {

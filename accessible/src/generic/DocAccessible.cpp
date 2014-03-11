@@ -6,6 +6,7 @@
 #include "Accessible-inl.h"
 #include "AccIterator.h"
 #include "DocAccessible-inl.h"
+#include "HTMLImageMapAccessible.h"
 #include "nsAccCache.h"
 #include "nsAccessiblePivot.h"
 #include "nsAccUtils.h"
@@ -22,7 +23,6 @@
 #include "nsIDOMAttr.h"
 #include "nsIDOMCharacterData.h"
 #include "nsIDOMDocument.h"
-#include "nsIDOMDocumentType.h"
 #include "nsIDOMXULDocument.h"
 #include "nsIDOMMutationEvent.h"
 #include "nsPIDOMWindow.h"
@@ -31,7 +31,7 @@
 #include "nsEventStateManager.h"
 #include "nsIFrame.h"
 #include "nsIInterfaceRequestorUtils.h"
-#include "nsINameSpaceManager.h"
+#include "nsImageFrame.h"
 #include "nsIPersistentProperties2.h"
 #include "nsIPresShell.h"
 #include "nsIServiceManager.h"
@@ -41,7 +41,10 @@
 #include "nsIURI.h"
 #include "nsIWebNavigation.h"
 #include "nsFocusManager.h"
+#include "nsNameSpaceManager.h"
+#include "mozilla/ArrayUtils.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/dom/DocumentType.h"
 #include "mozilla/dom/Element.h"
 
 #ifdef MOZ_XUL
@@ -65,7 +68,7 @@ static nsIAtom** kRelationAttrs[] =
   &nsGkAtoms::control
 };
 
-static const uint32_t kRelationAttrsLen = NS_ARRAY_LENGTH(kRelationAttrs);
+static const uint32_t kRelationAttrsLen = ArrayLength(kRelationAttrs);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Constructor/desctructor
@@ -189,8 +192,7 @@ DocAccessible::NativeRole()
   if (docShell) {
     nsCOMPtr<nsIDocShellTreeItem> sameTypeRoot;
     docShell->GetSameTypeRootTreeItem(getter_AddRefs(sameTypeRoot));
-    int32_t itemType;
-    docShell->GetItemType(&itemType);
+    int32_t itemType = docShell->ItemType();
     if (sameTypeRoot == docShell) {
       // Root of content or chrome tree
       if (itemType == nsIDocShellTreeItem::typeChrome)
@@ -353,29 +355,27 @@ DocAccessible::GetURL(nsAString& aURL)
 NS_IMETHODIMP
 DocAccessible::GetTitle(nsAString& aTitle)
 {
-  nsCOMPtr<nsIDOMDocument> domDocument = do_QueryInterface(mDocumentNode);
-  if (!domDocument) {
+  if (!mDocumentNode) {
     return NS_ERROR_FAILURE;
   }
-  return domDocument->GetTitle(aTitle);
+  nsString title;
+  mDocumentNode->GetTitle(title);
+  aTitle = title;
+  return NS_OK;
 }
 
 NS_IMETHODIMP
 DocAccessible::GetMimeType(nsAString& aMimeType)
 {
-  nsCOMPtr<nsIDOMDocument> domDocument = do_QueryInterface(mDocumentNode);
-  if (!domDocument) {
+  if (!mDocumentNode) {
     return NS_ERROR_FAILURE;
   }
-  return domDocument->GetContentType(aMimeType);
+  return mDocumentNode->GetContentType(aMimeType);
 }
 
 NS_IMETHODIMP
 DocAccessible::GetDocType(nsAString& aDocType)
 {
-  nsCOMPtr<nsIDOMDocument> domDoc(do_QueryInterface(mDocumentNode));
-  nsCOMPtr<nsIDOMDocumentType> docType;
-
 #ifdef MOZ_XUL
   nsCOMPtr<nsIXULDocument> xulDoc(do_QueryInterface(mDocumentNode));
   if (xulDoc) {
@@ -383,8 +383,11 @@ DocAccessible::GetDocType(nsAString& aDocType)
     return NS_OK;
   } else
 #endif
-  if (domDoc && NS_SUCCEEDED(domDoc->GetDoctype(getter_AddRefs(docType))) && docType) {
-    return docType->GetPublicId(aDocType);
+  if (mDocumentNode) {
+    dom::DocumentType* docType = mDocumentNode->GetDoctype();
+    if (docType) {
+      return docType->GetPublicId(aDocType);
+    }
   }
 
   return NS_ERROR_FAILURE;
@@ -394,8 +397,7 @@ NS_IMETHODIMP
 DocAccessible::GetNameSpaceURIForID(int16_t aNameSpaceID, nsAString& aNameSpaceURI)
 {
   if (mDocumentNode) {
-    nsCOMPtr<nsINameSpaceManager> nameSpaceManager =
-        do_GetService(NS_NAMESPACEMANAGER_CONTRACTID);
+    nsNameSpaceManager* nameSpaceManager = nsNameSpaceManager::GetInstance();
     if (nameSpaceManager)
       return nameSpaceManager->GetNameSpaceURI(aNameSpaceID, aNameSpaceURI);
   }
@@ -692,9 +694,7 @@ DocAccessible::AddEventListeners()
 
   // We want to add a command observer only if the document is content and has
   // an editor.
-  int32_t itemType;
-  docShellTreeItem->GetItemType(&itemType);
-  if (itemType == nsIDocShellTreeItem::typeContent) {
+  if (docShellTreeItem->ItemType() == nsIDocShellTreeItem::typeContent) {
     nsCOMPtr<nsICommandManager> commandManager = do_GetInterface(docShellTreeItem);
     if (commandManager)
       commandManager->AddCommandObserver(this, "obs_documentCreated");
@@ -724,9 +724,7 @@ DocAccessible::RemoveEventListeners()
     NS_ASSERTION(docShellTreeItem, "doc should support nsIDocShellTreeItem.");
 
     if (docShellTreeItem) {
-      int32_t itemType;
-      docShellTreeItem->GetItemType(&itemType);
-      if (itemType == nsIDocShellTreeItem::typeContent) {
+      if (docShellTreeItem->ItemType() == nsIDocShellTreeItem::typeContent) {
         nsCOMPtr<nsICommandManager> commandManager = do_GetInterface(docShellTreeItem);
         if (commandManager) {
           commandManager->RemoveCommandObserver(this, "obs_documentCreated");
@@ -796,7 +794,7 @@ DocAccessible::ScrollPositionDidChange(nscoord aX, nscoord aY)
 
 NS_IMETHODIMP
 DocAccessible::Observe(nsISupports* aSubject, const char* aTopic,
-                       const PRUnichar* aData)
+                       const char16_t* aData)
 {
   if (!nsCRT::strcmp(aTopic,"obs_documentCreated")) {    
     // State editable will now be set, readonly is now clear
@@ -1439,6 +1437,30 @@ DocAccessible::ProcessInvalidationList()
   mInvalidationList.Clear();
 }
 
+Accessible*
+DocAccessible::GetAccessibleEvenIfNotInMap(nsINode* aNode) const
+{
+if (!aNode->IsContent() || !aNode->AsContent()->IsHTML(nsGkAtoms::area))
+    return GetAccessible(aNode);
+
+  // XXX Bug 135040, incorrect when multiple images use the same map.
+  nsIFrame* frame = aNode->AsContent()->GetPrimaryFrame();
+  nsImageFrame* imageFrame = do_QueryFrame(frame);
+  if (imageFrame) {
+    Accessible* parent = GetAccessible(imageFrame->GetContent());
+    if (parent) {
+      Accessible* area =
+        parent->AsImageMap()->GetChildAccessibleFor(aNode);
+      if (area)
+        return area;
+
+      return nullptr;
+    }
+  }
+
+  return GetAccessible(aNode);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Accessible protected
 
@@ -1786,7 +1808,7 @@ DocAccessible::UpdateTree(Accessible* aContainer, nsIContent* aChildNode,
     updateFlags |= UpdateTreeInternal(child, aIsInsert, reorderEvent);
   } else {
     if (aIsInsert) {
-      TreeWalker walker(aContainer, aChildNode, true);
+      TreeWalker walker(aContainer, aChildNode, TreeWalker::eWalkCache);
 
       while ((child = walker.NextChild()))
         updateFlags |= UpdateTreeInternal(child, aIsInsert, reorderEvent);
@@ -1803,8 +1825,9 @@ DocAccessible::UpdateTree(Accessible* aContainer, nsIContent* aChildNode,
         Accessible* child = aContainer->ContentChildAt(idx);
 
         // If accessible doesn't have its own content then we assume parent
-        // will handle its update.
-        if (!child->HasOwnContent()) {
+        // will handle its update.  If child is DocAccessible then we don't
+        // handle updating it here either.
+        if (!child->HasOwnContent() || child->IsDoc()) {
           idx++;
           continue;
         }
@@ -1920,8 +1943,10 @@ DocAccessible::UpdateTreeInternal(Accessible* aChild, bool aIsInsert,
 
   // XXX: do we really want to send focus to focused DOM node not taking into
   // account active item?
-  if (focusedAcc)
+  if (focusedAcc) {
     FocusMgr()->DispatchFocusEvent(this, focusedAcc);
+    SelectionMgr()->SetControlSelectionListener(focusedAcc->GetNode()->AsElement());
+  }
 
   return updateFlags;
 }
@@ -2027,9 +2052,7 @@ DocAccessible::IsLoadEventTarget() const
   }
 
   // It's content (not chrome) root document.
-  int32_t contentType;
-  treeItem->GetItemType(&contentType);
-  return (contentType == nsIDocShellTreeItem::typeContent);
+  return (treeItem->ItemType() == nsIDocShellTreeItem::typeContent);
 }
 
 PLDHashOperator

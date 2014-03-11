@@ -34,6 +34,7 @@ public:
   virtual FilterPrimitiveDescription
     GetPrimitiveDescription(nsSVGFilterInstance* aInstance,
                             const IntRect& aFilterSubregion,
+                            const nsTArray<bool>& aInputsAreTainted,
                             nsTArray<mozilla::RefPtr<SourceSurface>>& aInputImages) MOZ_OVERRIDE;
   virtual bool AttributeAffectsRendering(
           int32_t aNameSpaceID, nsIAtom* aAttribute) const MOZ_OVERRIDE;
@@ -48,8 +49,6 @@ public:
   already_AddRefed<SVGAnimatedNumber> Dy();
 
 protected:
-  nsIntPoint GetOffset(const nsSVGFilterInstance& aInstance);
-
   virtual NumberAttributesInfo GetNumberInfo() MOZ_OVERRIDE;
   virtual StringAttributesInfo GetStringInfo() MOZ_OVERRIDE;
 

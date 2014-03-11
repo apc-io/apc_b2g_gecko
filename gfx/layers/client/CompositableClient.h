@@ -15,7 +15,7 @@
 #include "mozilla/layers/CompositorTypes.h"
 #include "mozilla/layers/LayersTypes.h"  // for LayersBackend
 #include "mozilla/layers/PCompositableChild.h"  // for PCompositableChild
-#include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
+#include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "gfxASurface.h"                // for gfxContentType
 
 namespace mozilla {
@@ -72,7 +72,8 @@ class TextureClientData;
 class CompositableClient : public AtomicRefCounted<CompositableClient>
 {
 public:
-  CompositableClient(CompositableForwarder* aForwarder);
+  MOZ_DECLARE_REFCOUNTED_TYPENAME(CompositableClient)
+  CompositableClient(CompositableForwarder* aForwarder, TextureFlags aFlags = 0);
 
   virtual ~CompositableClient();
 
@@ -82,9 +83,9 @@ public:
 
   TemporaryRef<DeprecatedTextureClient>
   CreateDeprecatedTextureClient(DeprecatedTextureClientType aDeprecatedTextureClientType,
-                                gfxContentType aContentType = GFX_CONTENT_SENTINEL);
+                                gfxContentType aContentType = gfxContentType::SENTINEL);
 
-  virtual TemporaryRef<BufferTextureClient>
+  TemporaryRef<BufferTextureClient>
   CreateBufferTextureClient(gfx::SurfaceFormat aFormat,
                             TextureFlags aFlags = TEXTURE_FLAGS_DEFAULT);
 
@@ -142,9 +143,18 @@ public:
    */
   virtual void OnDetach() {}
 
+  /**
+   * Clear any resources that are not immediately necessary. This may be called
+   * in low-memory conditions.
+   */
+  virtual void ClearCachedResources() {}
+
 protected:
   CompositableChild* mCompositableChild;
   CompositableForwarder* mForwarder;
+  // Some layers may want to enforce some flags to all their textures
+  // (like disallowing tiling)
+  TextureFlags mTextureFlags;
 
   friend class CompositableChild;
 };

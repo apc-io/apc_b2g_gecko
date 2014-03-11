@@ -70,7 +70,7 @@ JS_FRIEND_API(JSString *)
 JS_GetAnonymousString(JSRuntime *rt)
 {
     JS_ASSERT(rt->hasContexts());
-    return rt->atomState.anonymous;
+    return rt->commonNames->anonymous;
 }
 
 JS_FRIEND_API(void)
@@ -394,6 +394,12 @@ js::GetGlobalForObjectCrossCompartment(JSObject *obj)
 }
 
 JS_FRIEND_API(void)
+js::SetPendingExceptionCrossContext(JSContext *cx, JS::HandleValue v)
+{
+    cx->setPendingException(v);
+}
+
+JS_FRIEND_API(void)
 js::AssertSameCompartment(JSContext *cx, JSObject *obj)
 {
     assertSameCompartment(cx, obj);
@@ -441,12 +447,6 @@ JS_FRIEND_API(bool)
 js::RunningWithTrustedPrincipals(JSContext *cx)
 {
     return cx->runningWithTrustedPrincipals();
-}
-
-JS_FRIEND_API(bool)
-js::IsOriginalScriptFunction(JSFunction *fun)
-{
-    return fun->nonLazyScript()->function() == fun;
 }
 
 JS_FRIEND_API(JSScript *)
@@ -547,6 +547,7 @@ JS_FRIEND_API(void)
 js::SetFunctionNativeReserved(JSObject *fun, size_t which, const Value &val)
 {
     JS_ASSERT(fun->as<JSFunction>().isNative());
+    MOZ_ASSERT_IF(val.isObject(), val.toObject().compartment() == fun->compartment());
     fun->as<JSFunction>().setExtendedSlot(which, val);
 }
 
@@ -591,12 +592,6 @@ void
 js::SetPreserveWrapperCallback(JSRuntime *rt, PreserveWrapperCallback callback)
 {
     rt->preserveWrapperCallback = callback;
-}
-
-JS_FRIEND_API(JSErrorReport*)
-js::ErrorFromException(Value val)
-{
-    return js_ErrorFromException(val);
 }
 
 /*
@@ -941,11 +936,18 @@ JS::DisableIncrementalGC(JSRuntime *rt)
     rt->gcIncrementalEnabled = false;
 }
 
-extern JS_FRIEND_API(void)
-JS::DisableGenerationalGC(JSRuntime *rt)
+JS::AutoDisableGenerationalGC::AutoDisableGenerationalGC(JSRuntime *rt)
+  : runtime(rt)
+#if defined(JSGC_GENERATIONAL) && defined(JS_GC_ZEAL)
+  , restartVerifier(rt->gcVerifyPostData)
+#endif
 {
 #ifdef JSGC_GENERATIONAL
     if (IsGenerationalGCEnabled(rt)) {
+#ifdef JS_GC_ZEAL
+        if (restartVerifier)
+            gc::EndVerifyPostBarriers(rt);
+#endif
         MinorGC(rt, JS::gcreason::API);
         rt->gcNursery.disable();
         rt->gcStoreBuffer.disable();
@@ -954,15 +956,18 @@ JS::DisableGenerationalGC(JSRuntime *rt)
     ++rt->gcGenerationalDisabled;
 }
 
-extern JS_FRIEND_API(void)
-JS::EnableGenerationalGC(JSRuntime *rt)
+JS::AutoDisableGenerationalGC::~AutoDisableGenerationalGC()
 {
-    JS_ASSERT(rt->gcGenerationalDisabled > 0);
-    --rt->gcGenerationalDisabled;
+    JS_ASSERT(runtime->gcGenerationalDisabled > 0);
+    --runtime->gcGenerationalDisabled;
 #ifdef JSGC_GENERATIONAL
-    if (IsGenerationalGCEnabled(rt)) {
-        rt->gcNursery.enable();
-        rt->gcStoreBuffer.enable();
+    if (runtime->gcGenerationalDisabled == 0) {
+        runtime->gcNursery.enable();
+        runtime->gcStoreBuffer.enable();
+#ifdef JS_GC_ZEAL
+        if (restartVerifier)
+            gc::StartVerifyPostBarriers(runtime);
+#endif
     }
 #endif
 }
@@ -1066,7 +1071,7 @@ JS::ObjectPtr::trace(JSTracer *trc, const char *name)
 JS_FRIEND_API(JSObject *)
 js::GetTestingFunctions(JSContext *cx)
 {
-    RootedObject obj(cx, JS_NewObject(cx, nullptr, nullptr, nullptr));
+    RootedObject obj(cx, JS_NewObject(cx, nullptr, NullPtr(), NullPtr()));
     if (!obj)
         return nullptr;
 
@@ -1151,6 +1156,14 @@ js::SetDefaultJSContextCallback(JSRuntime *rt, DefaultJSContextCallback cb)
     rt->defaultJSContextCallback = cb;
 }
 
+#ifdef DEBUG
+JS_FRIEND_API(void)
+js::Debug_SetActiveJSContext(JSRuntime *rt, JSContext *cx)
+{
+    rt->activeContext = cx;
+}
+#endif
+
 JS_FRIEND_API(void)
 js::SetCTypesActivityCallback(JSRuntime *rt, CTypesActivityCallback cb)
 {
@@ -1213,7 +1226,7 @@ js_DefineOwnProperty(JSContext *cx, JSObject *objArg, jsid idArg,
 }
 
 JS_FRIEND_API(bool)
-js_ReportIsNotFunction(JSContext *cx, const JS::Value& v)
+js_ReportIsNotFunction(JSContext *cx, JS::HandleValue v)
 {
     return ReportIsNotFunction(cx, v);
 }
@@ -1233,17 +1246,21 @@ js::IsInRequest(JSContext *cx)
 #ifdef JSGC_GENERATIONAL
 JS_FRIEND_API(void)
 JS_StoreObjectPostBarrierCallback(JSContext* cx,
-                                  void (*callback)(JSTracer *trc, void *key, void *data),
+                                  void (*callback)(JSTracer *trc, JSObject *key, void *data),
                                   JSObject *key, void *data)
 {
-    cx->runtime()->gcStoreBuffer.putCallback(callback, key, data);
+    JSRuntime *rt = cx->runtime();
+    if (IsInsideNursery(rt, key))
+        rt->gcStoreBuffer.putCallback(callback, key, data);
 }
 
 extern JS_FRIEND_API(void)
 JS_StoreStringPostBarrierCallback(JSContext* cx,
-                                  void (*callback)(JSTracer *trc, void *key, void *data),
+                                  void (*callback)(JSTracer *trc, JSString *key, void *data),
                                   JSString *key, void *data)
 {
-    cx->runtime()->gcStoreBuffer.putCallback(callback, key, data);
+    JSRuntime *rt = cx->runtime();
+    if (IsInsideNursery(rt, key))
+        rt->gcStoreBuffer.putCallback(callback, key, data);
 }
 #endif /* JSGC_GENERATIONAL */

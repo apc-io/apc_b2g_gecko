@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "nsINameSpaceManager.h"
+#include "nsNameSpaceManager.h"
 #include "nsGkAtoms.h"
 #include "nsIBoxObject.h"
 #include "nsTreeUtils.h"
@@ -674,19 +674,19 @@ nsTreeContentView::SetCellText(int32_t aRow, nsITreeColumn* aCol, const nsAStrin
 }
 
 NS_IMETHODIMP
-nsTreeContentView::PerformAction(const PRUnichar* aAction)
+nsTreeContentView::PerformAction(const char16_t* aAction)
 {
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsTreeContentView::PerformActionOnRow(const PRUnichar* aAction, int32_t aRow)
+nsTreeContentView::PerformActionOnRow(const char16_t* aAction, int32_t aRow)
 {
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsTreeContentView::PerformActionOnCell(const PRUnichar* aAction, int32_t aRow, nsITreeColumn* aCol)
+nsTreeContentView::PerformActionOnCell(const char16_t* aAction, int32_t aRow, nsITreeColumn* aCol)
 {
   return NS_OK;
 }

@@ -19,6 +19,12 @@
 #include "mozilla/gfx/Types.h"          // for SurfaceFormat
 
 namespace mozilla {
+namespace gfx {
+class SharedSurface;
+}
+}
+
+namespace mozilla {
 namespace layers {
 
 class ClientCanvasLayer;
@@ -44,12 +50,14 @@ public:
                                                        TextureFlags aFlags);
 
   CanvasClient(CompositableForwarder* aFwd, TextureFlags aFlags)
-    : CompositableClient(aFwd)
+    : CompositableClient(aFwd, aFlags)
   {
     mTextureInfo.mTextureFlags = aFlags;
   }
 
   virtual ~CanvasClient() {}
+
+  virtual void Clear() {};
 
   virtual void Update(gfx::IntSize aSize, ClientCanvasLayer* aLayer) = 0;
 
@@ -74,6 +82,11 @@ public:
     return TextureInfo(COMPOSITABLE_IMAGE);
   }
 
+  virtual void Clear() MOZ_OVERRIDE
+  {
+    mBuffer = nullptr;
+  }
+
   virtual void Update(gfx::IntSize aSize, ClientCanvasLayer* aLayer) MOZ_OVERRIDE;
 
   virtual bool AddTextureClient(TextureClient* aTexture) MOZ_OVERRIDE
@@ -82,9 +95,33 @@ public:
     return CompositableClient::AddTextureClient(aTexture);
   }
 
-  virtual TemporaryRef<BufferTextureClient>
-  CreateBufferTextureClient(gfx::SurfaceFormat aFormat,
-                            TextureFlags aFlags = TEXTURE_FLAGS_DEFAULT) MOZ_OVERRIDE;
+  virtual void OnDetach() MOZ_OVERRIDE
+  {
+    mBuffer = nullptr;
+  }
+
+private:
+  RefPtr<TextureClient> mBuffer;
+};
+
+// Used for GL canvases where we don't need to do any readback, i.e., with a
+// GL backend.
+class CanvasClientSurfaceStream : public CanvasClient
+{
+public:
+  CanvasClientSurfaceStream(CompositableForwarder* aLayerForwarder, TextureFlags aFlags);
+
+  TextureInfo GetTextureInfo() const
+  {
+    return TextureInfo(COMPOSITABLE_IMAGE);
+  }
+
+  virtual void Clear() MOZ_OVERRIDE
+  {
+    mBuffer = nullptr;
+  }
+
+  virtual void Update(gfx::IntSize aSize, ClientCanvasLayer* aLayer) MOZ_OVERRIDE;
 
   virtual void OnDetach() MOZ_OVERRIDE
   {

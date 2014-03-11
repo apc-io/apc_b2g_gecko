@@ -40,6 +40,12 @@
 #include "nsRect.h"
 #include "nsMathUtils.h"
 #include "gfxWindowsPlatform.h"
+#include "mozilla/gfx/2D.h"
+#include "mozilla/gfx/DataSurfaceHelpers.h"
+#include "mozilla/gfx/Tools.h"
+
+using namespace mozilla;
+using namespace mozilla::gfx;
 
 //-------------------------------------------------------------------------
 //
@@ -75,11 +81,11 @@ nsDragService::CreateDragImage(nsIDOMNode *aDOMNode,
 
   // Prepare the drag image
   nsIntRect dragRect;
-  nsRefPtr<gfxASurface> surface;
+  RefPtr<SourceSurface> surface;
   nsPresContext* pc;
   DrawDrag(aDOMNode, aRegion,
            mScreenX, mScreenY,
-           &dragRect, getter_AddRefs(surface), &pc);
+           &dragRect, &surface, &pc);
   if (!surface)
     return false;
 
@@ -90,19 +96,33 @@ nsDragService::CreateDragImage(nsIDOMNode *aDOMNode,
 
   psdi->crColorKey = CLR_NONE;
 
-  nsRefPtr<gfxImageSurface> imgSurface = new gfxImageSurface(
-    gfxIntSize(bmWidth, bmHeight), 
-    gfxImageFormatARGB32);
-  if (!imgSurface)
-    return false;
+  RefPtr<DataSourceSurface> dataSurface =
+    Factory::CreateDataSourceSurface(IntSize(bmWidth, bmHeight),
+                                     SurfaceFormat::B8G8R8A8);
+  NS_ENSURE_TRUE(dataSurface, false);
 
-  nsRefPtr<gfxContext> context = new gfxContext(imgSurface);
-  if (!context)
+  DataSourceSurface::MappedSurface map;
+  if (!dataSurface->Map(DataSourceSurface::MapType::READ_WRITE, &map)) {
     return false;
+  }
 
-  context->SetOperator(gfxContext::OPERATOR_SOURCE);
-  context->SetSource(surface);
-  context->Paint();
+  RefPtr<DrawTarget> dt =
+    Factory::CreateDrawTargetForData(BackendType::CAIRO,
+                                     map.mData,
+                                     dataSurface->GetSize(),
+                                     map.mStride,
+                                     dataSurface->GetFormat());
+  if (!dt) {
+    dataSurface->Unmap();
+    return false;
+  }
+
+  dt->DrawSurface(surface,
+                  Rect(0, 0, dataSurface->GetSize().width, dataSurface->GetSize().height),
+                  Rect(0, 0, surface->GetSize().width, surface->GetSize().height),
+                  DrawSurfaceOptions(),
+                  DrawOptions(1.0f, CompositionOp::OP_SOURCE));
+  dt->Flush();
 
   BITMAPV5HEADER bmih;
   memset((void*)&bmih, 0, sizeof(BITMAPV5HEADER));
@@ -124,7 +144,9 @@ nsDragService::CreateDragImage(nsIDOMNode *aDOMNode,
     ::CreateDIBSection(hdcSrc, (BITMAPINFO*)&bmih, DIB_RGB_COLORS,
                        (void**)&lpBits, nullptr, 0);
     if (psdi->hbmpDragImage && lpBits) {
-      memcpy(lpBits,imgSurface->Data(),(bmWidth*bmHeight*4));
+      CopySurfaceDataToPackedArray(map.mData, static_cast<uint8_t*>(lpBits),
+                                   dataSurface->GetSize(), map.mStride,
+                                   BytesPerPixel(dataSurface->GetFormat()));
     }
 
     psdi->sizeDragImage.cx = bmWidth;
@@ -143,6 +165,8 @@ nsDragService::CreateDragImage(nsIDOMNode *aDOMNode,
 
     DeleteDC(hdcSrc);
   }
+
+  dataSurface->Unmap();
 
   return psdi->hbmpDragImage != nullptr;
 }

@@ -239,7 +239,7 @@ this.OnRefTestLoad = function OnRefTestLoad(win)
     var prefs = Components.classes["@mozilla.org/preferences-service;1"].
                 getService(Components.interfaces.nsIPrefBranch);
     try {
-        gBrowserIsRemote = prefs.getBoolPref("browser.tabs.remote");
+        gBrowserIsRemote = prefs.getBoolPref("browser.tabs.remote.autostart");
     } catch (e) {
         gBrowserIsRemote = false;
     }
@@ -267,6 +267,7 @@ this.OnRefTestLoad = function OnRefTestLoad(win)
     gBrowser.setAttribute("id", "browser");
     gBrowser.setAttribute("type", "content-primary");
     gBrowser.setAttribute("remote", gBrowserIsRemote ? "true" : "false");
+    gBrowser.setAttribute("mozasyncpanzoom", "true");
     // Make sure the browser element is exactly 800x1000, no matter
     // what size our window is
     gBrowser.setAttribute("style", "min-width: 800px; min-height: 1000px; max-width: 800px; max-height: 1000px");
@@ -394,6 +395,15 @@ function InitAndStartRefTests()
     if (gRemote) {
         gServer = null;
     } else {
+        // not all gecko applications autoregister xpcom components
+        if (CC["@mozilla.org/server/jshttp;1"] === undefined) {
+            var file = CC["@mozilla.org/file/directory_service;1"].
+                        getService(CI.nsIProperties).get("ProfD", CI.nsIFile);
+            file.appendRelativePath("extensions/reftest@mozilla.org/chrome.manifest");
+
+            registrar = Components.manager.QueryInterface(CI.nsIComponentRegistrar);
+            registrar.autoRegister(file);
+        }
         gServer = CC["@mozilla.org/server/jshttp;1"].
                       createInstance(CI.nsIHttpServer);
     }
@@ -560,6 +570,7 @@ function getStreamContent(inputStream)
 function BuildConditionSandbox(aURL) {
     var sandbox = new Components.utils.Sandbox(aURL.spec);
     var xr = CC[NS_XREAPPINFO_CONTRACTID].getService(CI.nsIXULRuntime);
+    var appInfo = CC[NS_XREAPPINFO_CONTRACTID].getService(CI.nsIXULAppInfo);
     sandbox.isDebugBuild = gDebug.isDebugBuild;
     sandbox.xulRuntime = {widgetToolkit: xr.widgetToolkit, OS: xr.OS, __exposedProps__: { widgetToolkit: "r", OS: "r", XPCOMABI: "r", shell: "r" } };
 
@@ -600,6 +611,7 @@ function BuildConditionSandbox(aURL) {
 
     // Shortcuts for widget toolkits.
     sandbox.B2G = xr.widgetToolkit == "gonk";
+    sandbox.B2GDT = appInfo.name.toLowerCase() == "b2g" && !sandbox.B2G;
     sandbox.Android = xr.OS == "Android" && !sandbox.B2G;
     sandbox.cocoaWidget = xr.widgetToolkit == "cocoa";
     sandbox.gtk2Widget = xr.widgetToolkit == "gtk2";
@@ -1644,7 +1656,7 @@ function RecordResult(testRunTime, errorMsg, scriptResults)
                         result += "REFTEST   IMAGE 2 (REFERENCE): " + gCanvas2.toDataURL() + "\n";
                     } else {
                         result += "\n";
-                        gDumpLog("REFTEST   IMAGE: " + gCanvas1.toDataURL() + "\n");
+                        result += "REFTEST   IMAGE: " + gCanvas1.toDataURL() + "\n";
                     }
                 } else {
                     result += "\n";

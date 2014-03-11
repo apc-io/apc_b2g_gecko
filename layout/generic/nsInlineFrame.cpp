@@ -43,8 +43,8 @@ NS_QUERYFRAME_HEAD(nsInlineFrame)
   NS_QUERYFRAME_ENTRY(nsInlineFrame)
 NS_QUERYFRAME_TAIL_INHERITING(nsContainerFrame)
 
-#ifdef DEBUG
-NS_IMETHODIMP
+#ifdef DEBUG_FRAME_DUMP
+nsresult
 nsInlineFrame::GetFrameName(nsAString& aResult) const
 {
   return MakeFrameName(NS_LITERAL_STRING("Inline"), aResult);
@@ -63,7 +63,7 @@ nsInlineFrame::InvalidateFrame(uint32_t aDisplayItemKey)
   if (IsSVGText()) {
     nsIFrame* svgTextFrame =
       nsLayoutUtils::GetClosestFrameOfType(GetParent(),
-                                           nsGkAtoms::svgTextFrame2);
+                                           nsGkAtoms::svgTextFrame);
     svgTextFrame->InvalidateFrame();
     return;
   }
@@ -76,7 +76,7 @@ nsInlineFrame::InvalidateFrameWithRect(const nsRect& aRect, uint32_t aDisplayIte
   if (IsSVGText()) {
     nsIFrame* svgTextFrame =
       nsLayoutUtils::GetClosestFrameOfType(GetParent(),
-                                           nsGkAtoms::svgTextFrame2);
+                                           nsGkAtoms::svgTextFrame);
     svgTextFrame->InvalidateFrame();
     return;
   }
@@ -115,7 +115,7 @@ nsInlineFrame::IsSelfEmpty()
     !nsLayoutUtils::IsPaddingZero(padding->mPadding.GetLeft()) ||
     !IsMarginZero(margin->mMargin.GetLeft());
   if (haveLeft || haveRight) {
-    if (GetStateBits() & NS_FRAME_IS_SPECIAL) {
+    if (GetStateBits() & NS_FRAME_PART_OF_IBSPLIT) {
       bool haveStart, haveEnd;
       if (NS_STYLE_DIRECTION_LTR == StyleVisibility()->mDirection) {
         haveStart = haveLeft;
@@ -124,8 +124,8 @@ nsInlineFrame::IsSelfEmpty()
         haveStart = haveRight;
         haveEnd = haveLeft;
       }
-      // For special frames, ignore things we know we'll skip in GetSkipSides.
-      // XXXbz should we be doing this for non-special frames too, in a more
+      // For ib-split frames, ignore things we know we'll skip in GetSkipSides.
+      // XXXbz should we be doing this for non-ib-split frames too, in a more
       // general way?
 
       // Get the first continuation eagerly, as a performance optimization, to
@@ -289,7 +289,7 @@ ReparentChildListStyle(nsPresContext* aPresContext,
   }
 }
 
-NS_IMETHODIMP
+nsresult
 nsInlineFrame::Reflow(nsPresContext*          aPresContext,
                       nsHTMLReflowMetrics&     aMetrics,
                       const nsHTMLReflowState& aReflowState,
@@ -316,9 +316,8 @@ nsInlineFrame::Reflow(nsPresContext*          aPresContext,
     if (prevOverflowFrames) {
       // When pushing and pulling frames we need to check for whether any
       // views need to be reparented.
-      nsContainerFrame::ReparentFrameViewList(aPresContext,
-                                              *prevOverflowFrames,
-                                              prevInFlow, this);
+      nsContainerFrame::ReparentFrameViewList(*prevOverflowFrames, prevInFlow,
+                                              this);
 
       // Check if we should do the lazilySetParentPointer optimization.
       // Only do it in simple cases where we're being reflowed for the
@@ -468,9 +467,8 @@ nsInlineFrame::PullOverflowsFromPrevInFlow()
                                         prevInFlow->StealOverflowFrames());
     if (prevOverflowFrames) {
       // Assume that our prev-in-flow has the same line container that we do.
-      nsContainerFrame::ReparentFrameViewList(presContext,
-                                              *prevOverflowFrames,
-                                              prevInFlow, this);
+      nsContainerFrame::ReparentFrameViewList(*prevOverflowFrames, prevInFlow,
+                                              this);
       mFrames.InsertFrames(this, nullptr, *prevOverflowFrames);
     }
   }
@@ -494,16 +492,16 @@ nsInlineFrame::ReflowFrames(nsPresContext* aPresContext,
   // Don't offset by our start borderpadding if we have a prev continuation or
   // if we're in a part of an {ib} split other than the first one.
   if (!GetPrevContinuation() && !FrameIsNonFirstInIBSplit()) {
-    leftEdge = ltr ? aReflowState.mComputedBorderPadding.left
-                   : aReflowState.mComputedBorderPadding.right;
+    leftEdge = ltr ? aReflowState.ComputedPhysicalBorderPadding().left
+                   : aReflowState.ComputedPhysicalBorderPadding().right;
   }
-  nscoord availableWidth = aReflowState.availableWidth;
+  nscoord availableWidth = aReflowState.AvailableWidth();
   NS_ASSERTION(availableWidth != NS_UNCONSTRAINEDSIZE,
                "should no longer use available widths");
   // Subtract off left and right border+padding from availableWidth
   availableWidth -= leftEdge;
-  availableWidth -= ltr ? aReflowState.mComputedBorderPadding.right
-                        : aReflowState.mComputedBorderPadding.left;
+  availableWidth -= ltr ? aReflowState.ComputedPhysicalBorderPadding().right
+                        : aReflowState.ComputedPhysicalBorderPadding().left;
   lineLayout->BeginSpan(this, &aReflowState, leftEdge,
                         leftEdge + availableWidth, &mBaseline);
 
@@ -648,7 +646,7 @@ nsInlineFrame::ReflowFrames(nsPresContext* aPresContext,
   // line-height calculations. However, continuations of an inline
   // that are empty we force to empty so that things like collapsed
   // whitespace in an inline element don't affect the line-height.
-  aMetrics.width = lineLayout->EndSpan(this);
+  aMetrics.Width() = lineLayout->EndSpan(this);
 
   // Compute final width.
 
@@ -656,8 +654,8 @@ nsInlineFrame::ReflowFrames(nsPresContext* aPresContext,
   // continuation or if we're in a part of an {ib} split other than the first
   // one.
   if (!GetPrevContinuation() && !FrameIsNonFirstInIBSplit()) {
-    aMetrics.width += ltr ? aReflowState.mComputedBorderPadding.left
-                          : aReflowState.mComputedBorderPadding.right;
+    aMetrics.Width() += ltr ? aReflowState.ComputedPhysicalBorderPadding().left
+                          : aReflowState.ComputedPhysicalBorderPadding().right;
   }
 
   /*
@@ -670,8 +668,8 @@ nsInlineFrame::ReflowFrames(nsPresContext* aPresContext,
   if (NS_FRAME_IS_COMPLETE(aStatus) &&
       !LastInFlow()->GetNextContinuation() &&
       !FrameIsNonLastInIBSplit()) {
-    aMetrics.width += ltr ? aReflowState.mComputedBorderPadding.right
-                          : aReflowState.mComputedBorderPadding.left;
+    aMetrics.Width() += ltr ? aReflowState.ComputedPhysicalBorderPadding().right
+                          : aReflowState.ComputedPhysicalBorderPadding().left;
   }
 
   nsRefPtr<nsFontMetrics> fm;
@@ -690,15 +688,15 @@ nsInlineFrame::ReflowFrames(nsPresContext* aPresContext,
     // The height of our box is the sum of our font size plus the top
     // and bottom border and padding. The height of children do not
     // affect our height.
-    aMetrics.ascent = fm->MaxAscent();
-    aMetrics.height = fm->MaxHeight();
+    aMetrics.SetTopAscent(fm->MaxAscent());
+    aMetrics.Height() = fm->MaxHeight();
   } else {
     NS_WARNING("Cannot get font metrics - defaulting sizes to 0");
-    aMetrics.ascent = aMetrics.height = 0;
+    aMetrics.SetTopAscent(aMetrics.Height() = 0);
   }
-  aMetrics.ascent += aReflowState.mComputedBorderPadding.top;
-  aMetrics.height += aReflowState.mComputedBorderPadding.top +
-    aReflowState.mComputedBorderPadding.bottom;
+  aMetrics.SetTopAscent(aMetrics.TopAscent() + aReflowState.ComputedPhysicalBorderPadding().top);
+  aMetrics.Height() += aReflowState.ComputedPhysicalBorderPadding().top +
+    aReflowState.ComputedPhysicalBorderPadding().bottom;
 
   // For now our overflow area is zero. The real value will be
   // computed in |nsLineLayout::RelativePositionFrames|.
@@ -707,7 +705,7 @@ nsInlineFrame::ReflowFrames(nsPresContext* aPresContext,
 #ifdef NOISY_FINAL_SIZE
   ListTag(stdout);
   printf(": metrics=%d,%d ascent=%d\n",
-         aMetrics.width, aMetrics.height, aMetrics.ascent);
+         aMetrics.Width(), aMetrics.Height(), aMetrics.TopAscent());
 #endif
 
   return rv;
@@ -750,7 +748,7 @@ nsInlineFrame::ReflowInlineFrame(nsPresContext* aPresContext,
   // Create a next-in-flow if needed.
   if (!NS_FRAME_IS_FULLY_COMPLETE(aStatus)) {
     nsIFrame* newFrame;
-    rv = CreateNextInFlow(aPresContext, aFrame, newFrame);
+    rv = CreateNextInFlow(aFrame, newFrame);
     if (NS_FAILED(rv)) {
       return rv;
     }
@@ -804,7 +802,7 @@ nsInlineFrame::PullOneFrame(nsPresContext* aPresContext,
         frame = overflowFrames->RemoveFirstChild();
         if (overflowFrames->IsEmpty()) {
           // We're stealing the only frame - delete the overflow list.
-          nextInFlow->DestroyOverflowList(aPresContext);
+          nextInFlow->DestroyOverflowList();
         } else {
           // We leave the remaining frames on the overflow list (rather than
           // putting them on nextInFlow's principal list) so we don't have to
@@ -834,7 +832,7 @@ nsInlineFrame::PullOneFrame(nsPresContext* aPresContext,
       if (irs.mLineLayout) {
         irs.mLineLayout->SetDirtyNextLine();
       }
-      nsContainerFrame::ReparentFrameView(aPresContext, frame, nextInFlow, this);
+      nsContainerFrame::ReparentFrameView(frame, nextInFlow, this);
       break;
     }
     nextInFlow = static_cast<nsInlineFrame*>(nextInFlow->GetNextInFlow());
@@ -862,7 +860,7 @@ nsInlineFrame::PushFrames(nsPresContext* aPresContext,
 
   // Add the frames to our overflow list (let our next in flow drain
   // our overflow list when it is ready)
-  SetOverflowFrames(aPresContext, mFrames.RemoveFramesAfter(aPrevSibling));
+  SetOverflowFrames(mFrames.RemoveFramesAfter(aPrevSibling));
   if (aState.mLineLayout) {
     aState.mLineLayout->SetDirtyNextLine();
   }
@@ -902,7 +900,7 @@ nsInlineFrame::GetSkipSides(const nsHTMLReflowState* aReflowState) const
     }
   }
 
-  if (GetStateBits() & NS_FRAME_IS_SPECIAL) {
+  if (GetStateBits() & NS_FRAME_PART_OF_IBSPLIT) {
     // All but the last part of an {ib} split should skip the "end" side (as
     // determined by this frame's direction) and all but the first part of such
     // a split should skip the "start" side.  But figuring out which part of
@@ -990,8 +988,8 @@ nsFirstLineFrame::Init(nsIContent* aContent, nsIFrame* aParent,
   }
 }
 
-#ifdef DEBUG
-NS_IMETHODIMP
+#ifdef DEBUG_FRAME_DUMP
+nsresult
 nsFirstLineFrame::GetFrameName(nsAString& aResult) const
 {
   return MakeFrameName(NS_LITERAL_STRING("Line"), aResult);
@@ -1018,7 +1016,7 @@ nsFirstLineFrame::PullOneFrame(nsPresContext* aPresContext, InlineReflowState& i
   return frame;
 }
 
-NS_IMETHODIMP
+nsresult
 nsFirstLineFrame::Reflow(nsPresContext* aPresContext,
                          nsHTMLReflowMetrics& aMetrics,
                          const nsHTMLReflowState& aReflowState,

@@ -24,7 +24,7 @@ interface nsIVariant;
  * @see <http://www.whatwg.org/html/#window>
  */
 
-[scriptable, uuid(b0ebb526-ed69-43c6-8242-b381a1fe79da)]
+[scriptable, uuid(8c115ab3-cf96-492c-850c-3b18056b45e2)]
 interface nsIDOMWindow : nsISupports
 {
   // the current browsing context
@@ -374,11 +374,9 @@ interface nsIDOMWindow : nsISupports
   readonly attribute boolean                            closed;
 
   readonly attribute nsIDOMCrypto                       crypto;
-  readonly attribute nsIDOMPkcs11                       pkcs11;
 
-  // XXX Shouldn't this be in nsIDOMChromeWindow?
-  /* [replaceable] controllers */
-  readonly attribute nsIControllers                     controllers;
+  // Note: this is [ChromeOnly] scriptable via WebIDL.
+  [noscript] readonly attribute nsIControllers          controllers;
 
   readonly attribute float                              mozInnerScreenX;
   readonly attribute float                              mozInnerScreenY;
@@ -506,6 +504,11 @@ interface nsIDOMWindow : nsISupports
 
   [implicit_jscontext] attribute jsval onmouseenter;
   [implicit_jscontext] attribute jsval onmouseleave;
+
+  /**
+   * Console API
+   */
+  [implicit_jscontext] attribute jsval console;
 };
 
 [scriptable, uuid(2146c906-57f7-486c-a1b4-8cdb57ef577f)]

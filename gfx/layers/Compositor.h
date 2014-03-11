@@ -14,7 +14,7 @@
 #include "mozilla/gfx/Types.h"          // for Float
 #include "mozilla/layers/CompositorTypes.h"  // for DiagnosticTypes, etc
 #include "mozilla/layers/LayersTypes.h"  // for LayersBackend
-#include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
+#include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "nsRegion.h"
 #include <vector>
 
@@ -104,12 +104,12 @@
  */
 
 class nsIWidget;
-struct gfxMatrix;
 struct nsIntSize;
 class nsIntRegion;
 
 namespace mozilla {
 namespace gfx {
+class Matrix;
 class Matrix4x4;
 class DrawTarget;
 }
@@ -130,6 +130,23 @@ enum SurfaceInitMode
 {
   INIT_MODE_NONE,
   INIT_MODE_CLEAR
+};
+
+/**
+ * A base class for a platform-dependent helper for use by TextureHost.
+ */
+class CompositorBackendSpecificData : public RefCounted<CompositorBackendSpecificData>
+{
+public:
+  MOZ_DECLARE_REFCOUNTED_TYPENAME(CompositorBackendSpecificData)
+  CompositorBackendSpecificData()
+  {
+    MOZ_COUNT_CTOR(CompositorBackendSpecificData);
+  }
+  virtual ~CompositorBackendSpecificData()
+  {
+    MOZ_COUNT_DTOR(CompositorBackendSpecificData);
+  }
 };
 
 /**
@@ -179,6 +196,7 @@ enum SurfaceInitMode
 class Compositor : public RefCounted<Compositor>
 {
 public:
+  MOZ_DECLARE_REFCOUNTED_TYPENAME(Compositor)
   Compositor(PCompositorParent* aParent = nullptr)
     : mCompositorID(0)
     , mDiagnosticTypes(DIAGNOSTIC_NONE)
@@ -303,6 +321,11 @@ public:
                          gfx::Float aOpacity, const gfx::Matrix4x4 &aTransform)
   { /* Should turn into pure virtual once implemented in D3D */ }
 
+  /*
+   * Clear aRect on FrameBuffer.
+   */
+  virtual void clearFBRect(const gfx::Rect* aRect) { }
+
   /**
    * Start a new frame.
    *
@@ -324,7 +347,7 @@ public:
    */
   virtual void BeginFrame(const nsIntRegion& aInvalidRegion,
                           const gfx::Rect* aClipRectIn,
-                          const gfxMatrix& aTransform,
+                          const gfx::Matrix& aTransform,
                           const gfx::Rect& aRenderBounds,
                           gfx::Rect* aClipRectOut = nullptr,
                           gfx::Rect* aRenderBoundsOut = nullptr) = 0;
@@ -339,7 +362,7 @@ public:
    * e.g., by Composer2D.
    * aTransform is the transform from user space to window space.
    */
-  virtual void EndFrameForExternalComposition(const gfxMatrix& aTransform) = 0;
+  virtual void EndFrameForExternalComposition(const gfx::Matrix& aTransform) = 0;
 
   /**
    * Tidy up if BeginFrame has been called, but EndFrame won't be.
@@ -357,7 +380,7 @@ public:
    * coordinate space.
    */
   virtual void PrepareViewport(const gfx::IntSize& aSize,
-                               const gfxMatrix& aWorldTransform) = 0;
+                               const gfx::Matrix& aWorldTransform) = 0;
 
   /**
    * Whether textures created by this compositor can receive partial updates.
@@ -384,6 +407,7 @@ public:
   virtual const char* Name() const = 0;
 #endif // MOZ_DUMP_PAINTING
 
+  virtual LayersBackend GetBackendType() const = 0;
 
   /**
    * Each Compositor has a unique ID.
@@ -401,13 +425,6 @@ public:
     MOZ_ASSERT(mCompositorID == 0, "The compositor ID must be set only once.");
     mCompositorID = aID;
   }
-
-  /**
-   * Notify the compositor that a layers transaction has occured. This is only
-   * used for FPS information at the moment.
-   * XXX: surely there is a better way to do this?
-   */
-  virtual void NotifyLayersTransaction() = 0;
 
   /**
    * Notify the compositor that composition is being paused. This allows the
@@ -432,12 +449,6 @@ public:
   // these methods properly.
   virtual nsIWidget* GetWidget() const { return nullptr; }
 
-  // Call before and after any rendering not done by this compositor but which
-  // might affect the compositor's internal state or the state of any APIs it
-  // uses. For example, internal GL state.
-  virtual void SaveState() {}
-  virtual void RestoreState() {}
-
   /**
    * Debug-build assertion that can be called to ensure code is running on the
    * compositor thread.
@@ -454,6 +465,21 @@ public:
    */
   static LayersBackend GetBackend();
 
+  size_t GetFillRatio() {
+    float fillRatio = 0;
+    if (mPixelsFilled > 0 && mPixelsPerFrame > 0) {
+      fillRatio = 100.0f * float(mPixelsFilled) / float(mPixelsPerFrame);
+      if (fillRatio > 999.0f) {
+        fillRatio = 999.0f;
+      }
+    }
+    return fillRatio;
+  }
+
+  virtual CompositorBackendSpecificData* GetCompositorBackendSpecificData() {
+    return nullptr;
+  }
+
 protected:
   void DrawDiagnosticsInternal(DiagnosticFlags aFlags,
                                const gfx::Rect& aVisibleRect,
@@ -462,8 +488,12 @@ protected:
 
   bool ShouldDrawDiagnostics(DiagnosticFlags);
 
+  /**
+   * Set the global Compositor backend, checking that one isn't already set.
+   */
+  static void SetBackend(LayersBackend backend);
+
   uint32_t mCompositorID;
-  static LayersBackend sBackend;
   DiagnosticTypes mDiagnosticTypes;
   PCompositorParent* mParent;
 
@@ -474,6 +504,10 @@ protected:
    */
   size_t mPixelsPerFrame;
   size_t mPixelsFilled;
+
+private:
+  static LayersBackend sBackend;
+
 };
 
 } // namespace layers

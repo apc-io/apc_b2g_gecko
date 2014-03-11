@@ -162,7 +162,7 @@ public:
   NS_DECL_ISUPPORTS
 
   NS_IMETHOD
-  Handle(const nsAString& aName, const JS::Value& aResult)
+  Handle(const nsAString& aName, JS::Handle<JS::Value> aResult)
   {
     MOZ_ASSERT(NS_IsMainThread());
 
@@ -194,7 +194,7 @@ NS_IMPL_ISUPPORTS1(BluetoothHfpManager::GetVolumeTask,
 NS_IMETHODIMP
 BluetoothHfpManager::Observe(nsISupports* aSubject,
                              const char* aTopic,
-                             const PRUnichar* aData)
+                             const char16_t* aData)
 {
   if (!strcmp(aTopic, MOZSETTINGS_CHANGED_ID)) {
     HandleVolumeChanged(nsDependentString(aData));
@@ -342,7 +342,7 @@ Call::IsActive()
 /**
  *  BluetoothHfpManager
  */
-BluetoothHfpManager::BluetoothHfpManager() : mController(nullptr)
+BluetoothHfpManager::BluetoothHfpManager()
 {
 #ifdef MOZ_B2G_RIL
   mPhoneType = PhoneType::NONE;
@@ -384,15 +384,7 @@ BluetoothHfpManager::Reset()
   mCCWA = false;
   mCLIP = false;
   mDialingRequestProcessed = true;
-#endif
-  mCMEE = false;
-  mCMER = false;
-  mConnectScoRequest = false;
-  mSlcConnected = false;
-  mHspConnected = false;
-  mReceiveVgsFlag = false;
 
-#ifdef MOZ_B2G_RIL
   // We disable BSIR by default as it requires OEM implement BT SCO + SPEAKER
   // output audio path in audio driver. OEM can enable BSIR by setting
   // mBSIR=true here.
@@ -402,6 +394,13 @@ BluetoothHfpManager::Reset()
 
   ResetCallArray();
 #endif
+  mCMEE = false;
+  mCMER = false;
+  mConnectScoRequest = false;
+  mSlcConnected = false;
+  mIsHsp = false;
+  mReceiveVgsFlag = false;
+  mController = nullptr;
 }
 
 bool
@@ -433,7 +432,7 @@ BluetoothHfpManager::Init()
   NS_ENSURE_TRUE(settings, false);
 
   nsCOMPtr<nsISettingsServiceLock> settingsLock;
-  nsresult rv = settings->CreateLock(getter_AddRefs(settingsLock));
+  nsresult rv = settings->CreateLock(nullptr, getter_AddRefs(settingsLock));
   NS_ENSURE_SUCCESS(rv, false);
 
   nsRefPtr<GetVolumeTask> callback = new GetVolumeTask();
@@ -620,14 +619,12 @@ BluetoothHfpManager::HandleVoiceConnectionChanged(uint32_t aClientId)
   }
   UpdateCIND(CINDType::SERVICE, service);
 
-  uint8_t signal;
-  JS::Value value;
+  JSContext* cx = nsContentUtils::GetSafeJSContext();
+  NS_ENSURE_TRUE_VOID(cx);
+  JS::Rooted<JS::Value> value(cx);
   voiceInfo->GetRelSignalStrength(&value);
-  if (!value.isNumber()) {
-    BT_WARNING("Failed to get relSignalStrength in BluetoothHfpManager");
-    return;
-  }
-  signal = ceil(value.toNumber() / 20.0);
+  NS_ENSURE_TRUE_VOID(value.isNumber());
+  uint8_t signal = ceil(value.toNumber() / 20.0);
   UpdateCIND(CINDType::SIGNAL, signal);
 
   /**
@@ -1073,15 +1070,15 @@ BluetoothHfpManager::Connect(const nsAString& aDeviceAddress,
 
   BluetoothService* bs = BluetoothService::Get();
   if (!bs || sInShutdown) {
-    aController->OnConnect(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
+    aController->NotifyCompletion(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
     return;
   }
 
   if (mSocket) {
     if (mDeviceAddress == aDeviceAddress) {
-      aController->OnConnect(NS_LITERAL_STRING(ERR_ALREADY_CONNECTED));
+      aController->NotifyCompletion(NS_LITERAL_STRING(ERR_ALREADY_CONNECTED));
     } else {
-      aController->OnConnect(NS_LITERAL_STRING(ERR_REACHED_CONNECTION_LIMIT));
+      aController->NotifyCompletion(NS_LITERAL_STRING(ERR_REACHED_CONNECTION_LIMIT));
     }
     return;
   }
@@ -1090,7 +1087,7 @@ BluetoothHfpManager::Connect(const nsAString& aDeviceAddress,
   BluetoothUuidHelper::GetString(BluetoothServiceClass::HANDSFREE, uuid);
 
   if (NS_FAILED(bs->GetServiceChannel(aDeviceAddress, uuid, this))) {
-    aController->OnConnect(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
+    aController->NotifyCompletion(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
     return;
   }
 
@@ -1161,7 +1158,7 @@ BluetoothHfpManager::Disconnect(BluetoothProfileController* aController)
 
   if (!mSocket) {
     if (aController) {
-      aController->OnDisconnect(NS_LITERAL_STRING(ERR_ALREADY_DISCONNECTED));
+      aController->NotifyCompletion(NS_LITERAL_STRING(ERR_ALREADY_DISCONNECTED));
     }
     return;
   }
@@ -1642,13 +1639,14 @@ BluetoothHfpManager::OnSocketConnectSuccess(BluetoothSocket* aSocket)
    */
   if (aSocket == mHandsfreeSocket) {
     MOZ_ASSERT(!mSocket);
+    mIsHsp = false;
     mHandsfreeSocket.swap(mSocket);
 
     mHeadsetSocket->Disconnect();
     mHeadsetSocket = nullptr;
   } else if (aSocket == mHeadsetSocket) {
     MOZ_ASSERT(!mSocket);
-    mHspConnected = true;
+    mIsHsp = true;
     mHeadsetSocket.swap(mSocket);
 
     mHandsfreeSocket->Disconnect();
@@ -1743,6 +1741,8 @@ BluetoothHfpManager::OnGetServiceChannel(const nsAString& aDeviceAddress,
     } else if (NS_FAILED(bs->GetServiceChannel(aDeviceAddress,
                                                hspUuid, this))) {
       OnConnect(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
+    } else {
+      mIsHsp = true;
     }
 
     return;
@@ -1829,7 +1829,7 @@ BluetoothHfpManager::ConnectSco(BluetoothReplyRunnable* aRunnable)
 
   // If we are not using HSP, we have to make sure Service Level Connection
   // established before we start to set up SCO (synchronous connection).
-  if (!mSlcConnected && !mHspConnected) {
+  if (!mSlcConnected && !mIsHsp) {
     mConnectScoRequest = true;
     BT_WARNING("ConnectSco called before Service Level Connection established");
     return false;
@@ -1912,7 +1912,7 @@ BluetoothHfpManager::OnConnect(const nsAString& aErrorStr)
   NS_ENSURE_TRUE_VOID(mController);
 
   nsRefPtr<BluetoothProfileController> controller = mController.forget();
-  controller->OnConnect(aErrorStr);
+  controller->NotifyCompletion(aErrorStr);
 }
 
 void
@@ -1931,7 +1931,8 @@ BluetoothHfpManager::OnDisconnect(const nsAString& aErrorStr)
   NS_ENSURE_TRUE_VOID(mController);
 
   nsRefPtr<BluetoothProfileController> controller = mController.forget();
-  controller->OnDisconnect(aErrorStr);
+  controller->NotifyCompletion(aErrorStr);
 }
 
 NS_IMPL_ISUPPORTS1(BluetoothHfpManager, nsIObserver)
+

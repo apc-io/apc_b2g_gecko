@@ -483,7 +483,7 @@ nsPrintEngine::DoCommonPrint(bool                    aIsPrintPreview,
 
   if (mNoMarginBoxes) {
     // Set the footer/header to blank.
-    const PRUnichar* emptyString = EmptyString().get();
+    const char16_t* emptyString = EmptyString().get();
     mPrt->mPrintSettings->SetHeaderStrLeft(emptyString);
     mPrt->mPrintSettings->SetHeaderStrCenter(emptyString);
     mPrt->mPrintSettings->SetHeaderStrRight(emptyString);
@@ -893,7 +893,7 @@ nsPrintEngine::GetPrintPreviewNumPages(int32_t *aPrintPreviewNumPages)
 // Enumerate all the documents for their titles
 NS_IMETHODIMP
 nsPrintEngine::EnumerateDocumentNames(uint32_t* aCount,
-                                      PRUnichar*** aResult)
+                                      char16_t*** aResult)
 {
   NS_ENSURE_ARG(aCount);
   NS_ENSURE_ARG_POINTER(aResult);
@@ -902,7 +902,7 @@ nsPrintEngine::EnumerateDocumentNames(uint32_t* aCount,
   *aResult = nullptr;
 
   int32_t     numDocs = mPrt->mPrintDocList.Length();
-  PRUnichar** array   = (PRUnichar**) nsMemory::Alloc(numDocs * sizeof(PRUnichar*));
+  char16_t** array   = (char16_t**) nsMemory::Alloc(numDocs * sizeof(char16_t*));
   if (!array)
     return NS_ERROR_OUT_OF_MEMORY;
 
@@ -1159,7 +1159,7 @@ nsPrintEngine::IsParentAFrameSet(nsIDocShell * aParent)
 // Recursively build a list of sub documents to be printed
 // that mirrors the document tree
 void
-nsPrintEngine::BuildDocTree(nsIDocShellTreeNode *      aParentNode,
+nsPrintEngine::BuildDocTree(nsIDocShell *      aParentNode,
                             nsTArray<nsPrintObject*> * aDocList,
                             nsPrintObject *            aPO)
 {
@@ -1180,17 +1180,15 @@ nsPrintEngine::BuildDocTree(nsIDocShellTreeNode *      aParentNode,
       if (viewer) {
         nsCOMPtr<nsIContentViewerFile> viewerFile(do_QueryInterface(viewer));
         if (viewerFile) {
-          nsCOMPtr<nsIDocShell> childDocShell(do_QueryInterface(child));
-          nsCOMPtr<nsIDocShellTreeNode> childNode(do_QueryInterface(child));
-          nsCOMPtr<nsIDOMDocument> doc = do_GetInterface(childDocShell);
+          nsCOMPtr<nsIDOMDocument> doc = do_GetInterface(childAsShell);
           nsPrintObject * po = new nsPrintObject();
           po->mParent = aPO;
-          nsresult rv = po->Init(childDocShell, doc, aPO->mPrintPreview);
+          nsresult rv = po->Init(childAsShell, doc, aPO->mPrintPreview);
           if (NS_FAILED(rv))
             NS_NOTREACHED("Init failed?");
           aPO->mKids.AppendElement(po);
           aDocList->AppendElement(po);
-          BuildDocTree(childNode, aDocList, po);
+          BuildDocTree(childAsShell, aDocList, po);
         }
       }
     }
@@ -1445,8 +1443,8 @@ nsPrintEngine::GetDisplayTitleAndURL(nsPrintObject*   aPO,
   // First check to see if the PrintSettings has defined an alternate title
   // and use that if it did
   if (mPrt->mPrintSettings) {
-    PRUnichar * docTitleStrPS = nullptr;
-    PRUnichar * docURLStrPS   = nullptr;
+    char16_t * docTitleStrPS = nullptr;
+    char16_t * docURLStrPS   = nullptr;
     mPrt->mPrintSettings->GetTitle(&docTitleStrPS);
     mPrt->mPrintSettings->GetDocURL(&docURLStrPS);
 
@@ -1560,7 +1558,6 @@ nsPrintEngine::ShowPrintErrorDialog(nsresult aPrintError, bool aIsPrinting)
     ENTITY_FOR_ERROR(GFX_PRINTER_ENDDOC);
     ENTITY_FOR_ERROR(GFX_PRINTER_STARTPAGE);
     ENTITY_FOR_ERROR(GFX_PRINTER_DOC_IS_BUSY);
-    ENTITY_FOR_ERROR(GFX_PRINTER_NO_XUL);  // bug 136185 / bug 240490
 
     ENTITY_FOR_ERROR(ABORT);
     ENTITY_FOR_ERROR(NOT_AVAILABLE);
@@ -1627,7 +1624,7 @@ nsPrintEngine::ShowPrintErrorDialog(nsresult aPrintError, bool aIsPrinting)
 nsresult
 nsPrintEngine::ReconstructAndReflow(bool doSetPixelScale)
 {
-#if (defined(XP_WIN) || defined(XP_OS2)) && defined(EXTENDED_DEBUG_PRINTING)
+#if defined(XP_WIN) && defined(EXTENDED_DEBUG_PRINTING)
   // We need to clear all the output files here
   // because they will be re-created with second reflow of the docs
   if (kPrintingLogMod && kPrintingLogMod->level == DUMP_LAYOUT_LEVEL) {
@@ -1759,7 +1756,7 @@ nsPrintEngine::SetupToPrintContent()
     mPrt->OnStartPrinting();    
   }
 
-  PRUnichar* fileName = nullptr;
+  char16_t* fileName = nullptr;
   // check to see if we are printing to a file
   bool isPrintToFile = false;
   mPrt->mPrintSettings->GetPrintToFile(&isPrintToFile);
@@ -1964,7 +1961,7 @@ NS_IMETHODIMP
 nsPrintEngine::OnStatusChange(nsIWebProgress *aWebProgress,
                               nsIRequest *aRequest,
                               nsresult aStatus,
-                              const PRUnichar *aMessage)
+                              const char16_t *aMessage)
 {
   NS_NOTREACHED("notification excluded in AddProgressListener(...)");
   return NS_OK;
@@ -2036,6 +2033,18 @@ nsPrintEngine::UpdateSelectionAndShrinkPrintObject(nsPrintObject* aPO,
     nsIPageSequenceFrame* pageSequence = aPO->mPresShell->GetPageSequenceFrame();
     NS_ENSURE_STATE(pageSequence);
     pageSequence->GetSTFPercent(aPO->mShrinkRatio);
+    // Limit the shrink-to-fit scaling for some text-ish type of documents.
+    nsAutoString contentType;
+    aPO->mPresShell->GetDocument()->GetContentType(contentType);
+    if (contentType.EqualsLiteral("application/xhtml+xml") ||
+        StringBeginsWith(contentType, NS_LITERAL_STRING("text/"))) {
+      int32_t limitPercent = 
+        Preferences::GetInt("print.shrink-to-fit.scale-limit-percent", 20);
+      limitPercent = std::max(0, limitPercent);
+      limitPercent = std::min(100, limitPercent);
+      float minShrinkRatio = float(limitPercent) / 100;
+      aPO->mShrinkRatio = std::max(aPO->mShrinkRatio, minShrinkRatio);
+    }
   }
   return NS_OK;
 }
@@ -3014,7 +3023,7 @@ void nsPrintEngine::SetIsPrintPreview(bool aIsPrintPreview)
 
 //---------------------------------------------------------------------
 void
-nsPrintEngine::CleanupDocTitleArray(PRUnichar**& aArray, int32_t& aCount)
+nsPrintEngine::CleanupDocTitleArray(char16_t**& aArray, int32_t& aCount)
 {
   for (int32_t i = aCount - 1; i >= 0; i--) {
     nsMemory::Free(aArray[i]);
@@ -3573,7 +3582,7 @@ nsPrintEngine::StartPagePrintTimer(nsPrintObject* aPO)
 
 /*=============== nsIObserver Interface ======================*/
 NS_IMETHODIMP 
-nsPrintEngine::Observe(nsISupports *aSubject, const char *aTopic, const PRUnichar *aData)
+nsPrintEngine::Observe(nsISupports *aSubject, const char *aTopic, const char16_t *aData)
 {
   nsresult rv = NS_ERROR_FAILURE;
 
@@ -3596,7 +3605,7 @@ public:
     NS_ASSERTION(mDocViewerPrint, "mDocViewerPrint is null.");
   }
 
-  NS_IMETHOD Run() {
+  NS_IMETHOD Run() MOZ_OVERRIDE {
     if (mDocViewerPrint)
       mDocViewerPrint->OnDonePrinting();
     return NS_OK;
@@ -3620,7 +3629,7 @@ nsPrintEngine::FirePrintCompletionEvent()
 //-- Debug helper routines
 //---------------------------------------------------------------
 //---------------------------------------------------------------
-#if (defined(XP_WIN) || defined(XP_OS2)) && defined(EXTENDED_DEBUG_PRINTING)
+#if defined(XP_WIN) && defined(EXTENDED_DEBUG_PRINTING)
 #include "windows.h"
 #include "process.h"
 #include "direct.h"
@@ -3757,11 +3766,10 @@ DumpViews(nsIDocShell* aDocShell, FILE* out)
 
     // dump the views of the sub documents
     int32_t i, n;
-    nsCOMPtr<nsIDocShellTreeNode> docShellAsNode(do_QueryInterface(aDocShell));
-    docShellAsNode->GetChildCount(&n);
+    aDocShell->GetChildCount(&n);
     for (i = 0; i < n; i++) {
       nsCOMPtr<nsIDocShellTreeItem> child;
-      docShellAsNode->GetChildAt(i, getter_AddRefs(child));
+      aDocShell->GetChildAt(i, getter_AddRefs(child));
       nsCOMPtr<nsIDocShell> childAsShell(do_QueryInterface(child));
       if (childAsShell) {
         DumpViews(childAsShell, out);

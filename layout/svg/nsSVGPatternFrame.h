@@ -16,6 +16,7 @@ class gfxContext;
 class nsIFrame;
 class nsSVGElement;
 class nsSVGLength2;
+class nsSVGPathGeometryFrame;
 class nsSVGViewBox;
 
 namespace mozilla {
@@ -31,8 +32,6 @@ typedef nsSVGPaintServerFrame  nsSVGPatternFrameBase;
  */
 class nsSVGPatternFrame : public nsSVGPatternFrameBase
 {
-  typedef mozilla::gfx::Matrix Matrix;
-
 public:
   NS_DECL_FRAMEARENA_HELPERS
 
@@ -57,9 +56,9 @@ public:
                                 nsIFrame* aTransformRoot = nullptr) MOZ_OVERRIDE;
 
   // nsIFrame interface:
-  NS_IMETHOD AttributeChanged(int32_t         aNameSpaceID,
-                              nsIAtom*        aAttribute,
-                              int32_t         aModType) MOZ_OVERRIDE;
+  virtual nsresult AttributeChanged(int32_t         aNameSpaceID,
+                                    nsIAtom*        aAttribute,
+                                    int32_t         aModType) MOZ_OVERRIDE;
 
 #ifdef DEBUG
   virtual void Init(nsIContent*      aContent,
@@ -74,8 +73,8 @@ public:
    */
   virtual nsIAtom* GetType() const MOZ_OVERRIDE;
 
-#ifdef DEBUG
-  NS_IMETHOD GetFrameName(nsAString& aResult) const MOZ_OVERRIDE
+#ifdef DEBUG_FRAME_DUMP
+  virtual nsresult GetFrameName(nsAString& aResult) const MOZ_OVERRIDE
   {
     return MakeFrameName(NS_LITERAL_STRING("SVGPattern"), aResult);
   }
@@ -133,7 +132,7 @@ private:
   // this is a *temporary* reference to the frame of the element currently
   // referencing our pattern.  This must be temporary because different
   // referencing frames will all reference this one frame
-  nsSVGGeometryFrame               *mSource;
+  nsSVGPathGeometryFrame           *mSource;
   nsAutoPtr<gfxMatrix>              mCTM;
 
 protected:

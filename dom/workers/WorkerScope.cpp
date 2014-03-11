@@ -10,6 +10,7 @@
 #include "mozilla/dom/FunctionBinding.h"
 #include "mozilla/dom/DedicatedWorkerGlobalScopeBinding.h"
 #include "mozilla/dom/SharedWorkerGlobalScopeBinding.h"
+#include "mozilla/dom/Console.h"
 
 #ifdef ANDROID
 #include <android/log.h>
@@ -41,8 +42,7 @@ WorkerGlobalScope::WorkerGlobalScope(WorkerPrivate* aWorkerPrivate)
 
 WorkerGlobalScope::~WorkerGlobalScope()
 {
-  // Matches the HoldJSObjects in CreateGlobal.
-  mozilla::DropJSObjects(this);
+  mWorkerPrivate->AssertIsOnWorkerThread();
 }
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(WorkerGlobalScope)
@@ -77,6 +77,19 @@ WorkerGlobalScope::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aScope)
   MOZ_CRASH("We should never get here!");
 }
 
+already_AddRefed<Console>
+WorkerGlobalScope::GetConsole()
+{
+  mWorkerPrivate->AssertIsOnWorkerThread();
+
+  if (!mConsole) {
+    mConsole = new Console(nullptr);
+    MOZ_ASSERT(mConsole);
+  }
+
+  return mConsole.forget();
+}
+
 already_AddRefed<WorkerLocation>
 WorkerGlobalScope::Location()
 {
@@ -99,9 +112,18 @@ WorkerGlobalScope::Navigator()
   mWorkerPrivate->AssertIsOnWorkerThread();
 
   if (!mNavigator) {
-    mNavigator = WorkerNavigator::Create();
+    mNavigator = WorkerNavigator::Create(mWorkerPrivate->OnLine());
     MOZ_ASSERT(mNavigator);
   }
+
+  nsRefPtr<WorkerNavigator> navigator = mNavigator;
+  return navigator.forget();
+}
+
+already_AddRefed<WorkerNavigator>
+WorkerGlobalScope::GetExistingNavigator() const
+{
+  mWorkerPrivate->AssertIsOnWorkerThread();
 
   nsRefPtr<WorkerNavigator> navigator = mNavigator;
   return navigator.forget();
@@ -157,8 +179,10 @@ WorkerGlobalScope::SetTimeout(JSContext* aCx,
 }
 
 int32_t
-WorkerGlobalScope::SetTimeout(const nsAString& aHandler,
+WorkerGlobalScope::SetTimeout(JSContext* /* unused */,
+                              const nsAString& aHandler,
                               const int32_t aTimeout,
+                              const Sequence<JS::Value>& /* unused */,
                               ErrorResult& aRv)
 {
   mWorkerPrivate->AssertIsOnWorkerThread();
@@ -190,8 +214,10 @@ WorkerGlobalScope::SetInterval(JSContext* aCx,
 }
 
 int32_t
-WorkerGlobalScope::SetInterval(const nsAString& aHandler,
+WorkerGlobalScope::SetInterval(JSContext* /* unused */,
+                               const nsAString& aHandler,
                                const Optional<int32_t>& aTimeout,
+                               const Sequence<JS::Value>& /* unused */,
                                ErrorResult& aRv)
 {
   mWorkerPrivate->AssertIsOnWorkerThread();
@@ -288,7 +314,7 @@ DedicatedWorkerGlobalScope::PostMessage(JSContext* aCx,
 }
 
 SharedWorkerGlobalScope::SharedWorkerGlobalScope(WorkerPrivate* aWorkerPrivate,
-                                                 const nsString& aName)
+                                                 const nsCString& aName)
 : WorkerGlobalScope(aWorkerPrivate), mName(aName)
 {
 }

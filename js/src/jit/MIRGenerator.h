@@ -10,6 +10,8 @@
 // This file declares the data structures used to build a control-flow graph
 // containing MIR.
 
+#include "mozilla/Atomics.h"
+
 #include <stdarg.h>
 
 #include "jscntxt.h"
@@ -34,7 +36,8 @@ class OptimizationInfo;
 class MIRGenerator
 {
   public:
-    MIRGenerator(CompileCompartment *compartment, TempAllocator *alloc, MIRGraph *graph,
+    MIRGenerator(CompileCompartment *compartment, const JitCompileOptions &options,
+                 TempAllocator *alloc, MIRGraph *graph,
                  CompileInfo *info, const OptimizationInfo *optimizationInfo);
 
     TempAllocator &alloc() {
@@ -58,6 +61,8 @@ class MIRGenerator
 
     template <typename T>
     T * allocate(size_t count = 1) {
+        if (count & mozilla::tl::MulOverflowMask<sizeof(T)>::value)
+            return nullptr;
         return reinterpret_cast<T *>(alloc().allocate(sizeof(T) * count));
     }
 
@@ -79,7 +84,7 @@ class MIRGenerator
         return cancelBuild_;
     }
     void cancel() {
-        cancelBuild_ = 1;
+        cancelBuild_ = true;
     }
 
     bool compilingAsmJS() const {
@@ -127,6 +132,10 @@ class MIRGenerator
         return asmJSGlobalAccesses_;
     }
 
+    bool modifiesFrameArguments() const {
+        return modifiesFrameArguments_;
+    }
+
   public:
     CompileCompartment *compartment;
 
@@ -138,7 +147,7 @@ class MIRGenerator
     uint32_t nslots_;
     MIRGraph *graph_;
     bool error_;
-    size_t cancelBuild_;
+    mozilla::Atomic<bool, mozilla::Relaxed> cancelBuild_;
 
     uint32_t maxAsmJSStackArgBytes_;
     bool performsAsmJSCall_;
@@ -146,12 +155,20 @@ class MIRGenerator
     AsmJSGlobalAccessVector asmJSGlobalAccesses_;
     uint32_t minAsmJSHeapLength_;
 
+    // Keep track of whether frame arguments are modified during execution.
+    // RegAlloc needs to know this as spilling values back to their register
+    // slots is not compatible with that.
+    bool modifiesFrameArguments_;
+
 #if defined(JS_ION_PERF)
     AsmJSPerfSpewer asmJSPerfSpewer_;
 
   public:
     AsmJSPerfSpewer &perfSpewer() { return asmJSPerfSpewer_; }
 #endif
+
+  public:
+    const JitCompileOptions options;
 };
 
 } // namespace jit

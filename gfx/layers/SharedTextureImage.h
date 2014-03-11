@@ -9,7 +9,6 @@
 #include "GLContextProvider.h"          // for GLContextProvider
 #include "ImageContainer.h"             // for Image
 #include "ImageTypes.h"                 // for ImageFormat::SHARED_TEXTURE
-#include "gfxPoint.h"                   // for gfxIntSize
 #include "nsCOMPtr.h"                   // for already_AddRefed
 #include "mozilla/gfx/Point.h"          // for IntSize
 
@@ -36,11 +35,16 @@ public:
 
   gfx::IntSize GetSize() { return mData.mSize; }
 
-  virtual already_AddRefed<gfxASurface> GetAsSurface() {
+  virtual already_AddRefed<gfxASurface> DeprecatedGetAsSurface() {
     return nullptr;
   }
 
-  SharedTextureImage() : Image(nullptr, SHARED_TEXTURE) {}
+  virtual TemporaryRef<gfx::SourceSurface> GetAsSourceSurface() MOZ_OVERRIDE
+  {
+    return nullptr;
+  }
+
+  SharedTextureImage() : Image(nullptr, ImageFormat::SHARED_TEXTURE) {}
 
 private:
   Data mData;

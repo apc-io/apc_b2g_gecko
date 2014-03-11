@@ -1009,7 +1009,7 @@ mozInlineSpellChecker::IgnoreWord(const nsAString &word)
 // mozInlineSpellChecker::IgnoreWords
 
 NS_IMETHODIMP
-mozInlineSpellChecker::IgnoreWords(const PRUnichar **aWordsToIgnore,
+mozInlineSpellChecker::IgnoreWords(const char16_t **aWordsToIgnore,
                                    uint32_t aCount)
 {
   NS_ENSURE_TRUE(mSpellCheck, NS_ERROR_NOT_INITIALIZED);
@@ -1947,7 +1947,7 @@ nsresult mozInlineSpellChecker::MouseClick(nsIDOMEvent *aMouseEvent)
 
   // ignore any errors from HandleNavigationEvent as we don't want to prevent 
   // anyone else from seeing this event.
-  uint16_t button;
+  int16_t button;
   mouseEvent->GetButton(&button);
   HandleNavigationEvent(button != 0);
   return NS_OK;

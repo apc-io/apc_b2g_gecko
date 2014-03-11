@@ -29,6 +29,17 @@ nestegg_tstamp_scale
 nestegg_has_cues
 nestegg_sniff
 #endif
+#ifdef MOZ_WEBM_ENCODER
+writeSimpleBlock
+writeHeader
+writeSegmentInformation
+writeVideoTrack
+writeAudioTrack
+Ebml_Serialize
+Ebml_SerializeUnsigned
+Ebml_StartSubElement
+Ebml_EndSubElement
+#endif
 #ifdef MOZ_VPX
 #ifndef MOZ_NATIVE_LIBVPX
 vpx_codec_control_
@@ -56,6 +67,7 @@ vpx_codec_encode
 ogg_page_bos
 ogg_page_granulepos
 ogg_page_serialno
+ogg_set_mem_functions
 ogg_stream_check
 ogg_stream_clear
 ogg_stream_eos
@@ -116,6 +128,7 @@ speex_resampler_get_output_stride
 speex_resampler_get_input_latency
 speex_resampler_get_output_latency
 speex_resampler_skip_zeros
+speex_resampler_set_skip_frac_num
 speex_resampler_reset_mem
 speex_resampler_strerror
 cubeb_destroy
@@ -129,7 +142,6 @@ cubeb_stream_init
 cubeb_stream_start
 cubeb_stream_stop
 cubeb_stream_get_latency
-#ifdef MOZ_OGG
 th_comment_clear
 th_comment_init
 th_decode_alloc
@@ -143,7 +155,6 @@ th_info_init
 th_packet_isheader
 th_packet_iskeyframe
 th_setup_free
-#endif
 #ifdef MOZ_OPUS
 opus_decoder_create
 opus_decoder_destroy
@@ -257,6 +268,8 @@ jpeg_abort_decompress
 jpeg_read_raw_data
 #endif
 qcms_enable_iccv4
+qcms_data_from_unicode_path
+qcms_data_from_path
 qcms_profile_create_rgb_with_gamma
 qcms_profile_from_memory
 qcms_profile_from_path
@@ -365,6 +378,7 @@ _moz_cairo_mask_surface
 _moz_cairo_matrix_init
 _moz_cairo_matrix_init_identity
 _moz_cairo_matrix_init_scale
+_moz_cairo_matrix_init_translate
 _moz_cairo_matrix_invert
 _moz_cairo_matrix_multiply
 _moz_cairo_matrix_rotate
@@ -403,6 +417,7 @@ _moz_cairo_pattern_status
 _moz_cairo_pdf_surface_create_for_stream
 _moz_cairo_pop_group
 _moz_cairo_pop_group_to_source
+_moz_cairo_push_group
 _moz_cairo_push_group_with_content
 _moz_cairo_rectangle
 _moz_cairo_rectangle_list_destroy
@@ -582,6 +597,7 @@ hb_ot_layout_script_get_language_tags
 hb_ot_layout_table_choose_script
 hb_ot_layout_table_get_script_tags
 hb_ot_tag_to_language
+hb_ot_tag_to_script
 hb_ot_tags_from_script
 hb_set_add
 hb_set_clear

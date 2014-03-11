@@ -7,7 +7,7 @@
 
 const { Cc, Ci, Cu, Cr } = require("chrome");
 const promise = require("sdk/core/promise");
-const EventEmitter = require("devtools/shared/event-emitter");
+const EventEmitter = require("devtools/toolkit/event-emitter");
 
 const { DevToolsUtils } = Cu.import("resource://gre/modules/devtools/DevToolsUtils.jsm", {});
 
@@ -20,6 +20,7 @@ function DebuggerPanel(iframeWindow, toolbox) {
   this._controller = this.panelWin.DebuggerController;
   this._view._hostType = this._toolbox.hostType;
   this._controller._target = this.target;
+  this._controller._toolbox = this._toolbox;
 
   this.handleHostChanged = this.handleHostChanged.bind(this);
   this.highlightWhenPaused = this.highlightWhenPaused.bind(this);

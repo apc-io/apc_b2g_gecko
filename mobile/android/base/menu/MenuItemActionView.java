@@ -5,20 +5,19 @@
 
 package org.mozilla.gecko.menu;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.mozilla.gecko.R;
 
 import android.annotation.TargetApi;
 import android.content.Context;
-import android.content.res.Resources;
 import android.graphics.drawable.Drawable;
 import android.util.AttributeSet;
 import android.view.LayoutInflater;
 import android.view.View;
-import android.widget.LinearLayout;
 import android.widget.ImageButton;
-
-import java.util.ArrayList;
-import java.util.List;
+import android.widget.LinearLayout;
 
 public class MenuItemActionView extends LinearLayout
                                 implements GeckoMenuItem.Layout {
@@ -68,24 +67,9 @@ public class MenuItemActionView extends LinearLayout
         if (item == null)
             return;
 
-        setTitle(item.getTitle());
-        setIcon(item.getIcon());
+        mMenuItem.initialize(item);
+        mMenuButton.initialize(item);
         setEnabled(item.isEnabled());
-    }
-
-    private void setIcon(Drawable icon) {
-        mMenuItem.setIcon(icon);
-        mMenuButton.setIcon(icon);
-    }
-
-    private void setIcon(int icon) {
-        mMenuItem.setIcon(icon);
-        mMenuButton.setIcon(icon);
-    }
-
-    private void setTitle(CharSequence title) {
-        mMenuItem.setTitle(title);
-        mMenuButton.setTitle(title);
     }
 
     @Override

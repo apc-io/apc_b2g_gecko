@@ -780,22 +780,17 @@ InMemoryDataSource::InMemoryDataSource(nsISupports* aOuter)
 nsresult
 InMemoryDataSource::Init()
 {
-    if (!PL_DHashTableInit(&mForwardArcs,
-                           PL_DHashGetStubOps(),
-                           nullptr,
-                           sizeof(Entry),
-                           PL_DHASH_MIN_SIZE)) {
-        mForwardArcs.ops = nullptr;
-        return NS_ERROR_OUT_OF_MEMORY;
-    }
-    if (!PL_DHashTableInit(&mReverseArcs,
-                           PL_DHashGetStubOps(),
-                           nullptr,
-                           sizeof(Entry),
-                           PL_DHASH_MIN_SIZE)) {
-        mReverseArcs.ops = nullptr;
-        return NS_ERROR_OUT_OF_MEMORY;
-    }
+    PL_DHashTableInit(&mForwardArcs,
+                      PL_DHashGetStubOps(),
+                      nullptr,
+                      sizeof(Entry),
+                      PL_DHASH_MIN_SIZE);
+
+    PL_DHashTableInit(&mReverseArcs,
+                      PL_DHashGetStubOps(),
+                      nullptr,
+                      sizeof(Entry),
+                      PL_DHASH_MIN_SIZE);
 
 #ifdef PR_LOGGING
     if (! gLog)
@@ -1741,7 +1736,7 @@ InMemoryDataSource::EnsureFastContainment(nsIRDFResource* aSource)
     // Add the datasource's owning reference.
     hashAssertion->AddRef();
 
-    register Assertion *first = GetForwardArcs(aSource);
+    Assertion *first = GetForwardArcs(aSource);
     SetForwardArcs(aSource, hashAssertion);
 
     // mutate references of existing forward assertions into this hash

@@ -83,7 +83,7 @@ AddFeature(const uint32_t& aTag, uint32_t& aValue, void *aUserArg)
 
 bool
 gfxGraphiteShaper::ShapeText(gfxContext      *aContext,
-                             const PRUnichar *aText,
+                             const char16_t *aText,
                              uint32_t         aOffset,
                              uint32_t         aLength,
                              int32_t          aScript,
@@ -183,7 +183,7 @@ gfxGraphiteShaper::SetGlyphsFromSegment(gfxContext      *aContext,
                                         gfxShapedText   *aShapedText,
                                         uint32_t         aOffset,
                                         uint32_t         aLength,
-                                        const PRUnichar *aText,
+                                        const char16_t *aText,
                                         gr_segment      *aSegment)
 {
     int32_t dev2appUnits = aShapedText->GetAppUnitsPerDevUnit();
@@ -192,10 +192,10 @@ gfxGraphiteShaper::SetGlyphsFromSegment(gfxContext      *aContext,
     uint32_t glyphCount = gr_seg_n_slots(aSegment);
 
     // identify clusters; graphite may have reordered/expanded/ligated glyphs.
-    nsAutoTArray<Cluster,SMALL_GLYPH_RUN> clusters;
-    nsAutoTArray<uint16_t,SMALL_GLYPH_RUN> gids;
-    nsAutoTArray<float,SMALL_GLYPH_RUN> xLocs;
-    nsAutoTArray<float,SMALL_GLYPH_RUN> yLocs;
+    AutoFallibleTArray<Cluster,SMALL_GLYPH_RUN> clusters;
+    AutoFallibleTArray<uint16_t,SMALL_GLYPH_RUN> gids;
+    AutoFallibleTArray<float,SMALL_GLYPH_RUN> xLocs;
+    AutoFallibleTArray<float,SMALL_GLYPH_RUN> yLocs;
 
     if (!clusters.SetLength(aLength) ||
         !gids.SetLength(glyphCount) ||

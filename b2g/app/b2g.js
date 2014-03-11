@@ -4,8 +4,8 @@
 
 #filter substitution
 
-pref("toolkit.defaultChromeURI", "chrome://browser/content/shell.html");
-pref("browser.chromeURL", "chrome://browser/content/");
+pref("toolkit.defaultChromeURI", "chrome://b2g/content/shell.html");
+pref("browser.chromeURL", "chrome://b2g/content/");
 
 // Bug 945235: Prevent all bars to be considered visible:
 pref("toolkit.defaultChromeFeatures", "chrome,dialog=no,close,resizable,scrollbars,extrachrome");
@@ -68,6 +68,10 @@ pref("network.http.spdy.push-allowance", 32768);
 pref("network.buffer.cache.count", 24);
 pref("network.buffer.cache.size",  16384);
 
+// predictive actions
+pref("network.seer.max-db-size", 2097152); // bytes
+pref("network.seer.preserve", 50); // percentage of seer data to keep when cleaning up
+
 /* session history */
 pref("browser.sessionhistory.max_total_viewers", 1);
 pref("browser.sessionhistory.max_entries", 50);
@@ -84,7 +88,7 @@ pref("mozilla.widget.force-24bpp", true);
 pref("mozilla.widget.use-buffer-pixmap", true);
 pref("mozilla.widget.disable-native-theme", true);
 pref("layout.reflow.synthMouseMove", false);
-pref("layers.enable-tiles", false);
+pref("layers.enable-tiles", true);
 /*
    Cross Process Mutex is not supported on Mac OS X so progressive
    paint can not be enabled for B2G on Mac OS X desktop
@@ -132,9 +136,6 @@ pref("accessibility.typeaheadfind.timeout", 5000);
 pref("accessibility.typeaheadfind.flashBar", 1);
 pref("accessibility.typeaheadfind.linksonly", false);
 pref("accessibility.typeaheadfind.casesensitive", 0);
-
-// pointer to the default engine name
-pref("browser.search.defaultenginename", "chrome://browser/locale/region.properties");
 
 // SSL error page behaviour
 pref("browser.ssl_override_behavior", 2);
@@ -184,11 +185,9 @@ pref("privacy.item.geolocation", true);
 pref("privacy.item.siteSettings", true);
 pref("privacy.item.syncAccount", true);
 
-// URL to the Learn More link XXX this is the firefox one.  Bug 495578 fixes this.
-pref("browser.geolocation.warning.infoURL", "http://www.mozilla.com/%LOCALE%/firefox/geolocation/");
-
 // base url for the wifi geolocation network provider
-pref("geo.wifi.uri", "https://maps.googleapis.com/maps/api/browserlocation/json");
+pref("geo.provider.use_mls", false);
+pref("geo.wifi.uri", "https://location.services.mozilla.com/v1/geolocate?key=%MOZILLA_API_KEY%");
 
 // enable geo
 pref("geo.enabled", true);
@@ -243,20 +242,22 @@ pref("ui.buttonshadow", "#aea194");
 pref("ui.buttontext", "#101010");
 pref("ui.captiontext", "#101010");
 pref("ui.graytext", "#b1a598");
-pref("ui.highlight", "#fad184");
 pref("ui.highlighttext", "#1a1a1a");
-pref("ui.infobackground", "#f5f5b5");
-pref("ui.infotext", "#000");
-pref("ui.menu", "#f7f5f3");
-pref("ui.menutext", "#101010");
 pref("ui.threeddarkshadow", "#000");
 pref("ui.threedface", "#ece7e2");
 pref("ui.threedhighlight", "#fff");
 pref("ui.threedlightshadow", "#ece7e2");
 pref("ui.threedshadow", "#aea194");
-pref("ui.window", "#efebe7");
-pref("ui.windowtext", "#101010");
 pref("ui.windowframe", "#efebe7");
+
+// Themable via mozSettings
+pref("ui.menu", "#f97c17");
+pref("ui.menutext", "#ffffff");
+pref("ui.infobackground", "#343e40");
+pref("ui.infotext", "#686868");
+pref("ui.window", "#ffffff");
+pref("ui.windowtext", "#000000");
+pref("ui.highlight", "#b2f2ff");
 
 // replace newlines with spaces on paste into single-line text boxes
 pref("editor.singleLine.pasteNewlines", 2);
@@ -306,12 +307,10 @@ pref("image.onload.decode.limit", 24); /* don't decode more than 24 images eager
 
 // XXX this isn't a good check for "are touch events supported", but
 // we don't really have a better one at the moment.
-#ifdef MOZ_WIDGET_GONK
 // enable touch events interfaces
 pref("dom.w3c_touch_events.enabled", 1);
 pref("dom.w3c_touch_events.safetyX", 0); // escape borders in units of 1/240"
 pref("dom.w3c_touch_events.safetyY", 120); // escape borders in units of 1/240"
-#endif
 
 #ifdef MOZ_SAFE_BROWSING
 // Safe browsing does nothing unless this pref is set
@@ -321,15 +320,14 @@ pref("browser.safebrowsing.enabled", true);
 pref("browser.safebrowsing.malware.enabled", true);
 
 // Non-enhanced mode (local url lists) URL list to check for updates
-pref("browser.safebrowsing.provider.0.updateURL", "http://safebrowsing.clients.google.com/safebrowsing/downloads?client={moz:client}&appver={moz:version}&pver=2.2");
+pref("browser.safebrowsing.provider.0.updateURL", "https://safebrowsing.google.com/safebrowsing/downloads?client={moz:client}&appver={moz:version}&pver=2.2&key=%GOOGLE_API_KEY%");
 
 pref("browser.safebrowsing.dataProvider", 0);
 
 // Does the provider name need to be localizable?
 pref("browser.safebrowsing.provider.0.name", "Google");
-pref("browser.safebrowsing.provider.0.keyURL", "https://sb-ssl.google.com/safebrowsing/newkey?client={moz:client}&appver={moz:version}&pver=2.2");
-pref("browser.safebrowsing.provider.0.reportURL", "http://safebrowsing.clients.google.com/safebrowsing/report?");
-pref("browser.safebrowsing.provider.0.gethashURL", "http://safebrowsing.clients.google.com/safebrowsing/gethash?client={moz:client}&appver={moz:version}&pver=2.2");
+pref("browser.safebrowsing.provider.0.reportURL", "https://safebrowsing.google.com/safebrowsing/report?");
+pref("browser.safebrowsing.provider.0.gethashURL", "https://safebrowsing.google.com/safebrowsing/gethash?client={moz:client}&appver={moz:version}&pver=2.2");
 
 // HTML report pages
 pref("browser.safebrowsing.provider.0.reportGenericURL", "http://{moz:locale}.phish-generic.mozilla.com/?hl={moz:locale}");
@@ -339,7 +337,6 @@ pref("browser.safebrowsing.provider.0.reportMalwareURL", "http://{moz:locale}.ma
 pref("browser.safebrowsing.provider.0.reportMalwareErrorURL", "http://{moz:locale}.malware-error.mozilla.com/?hl={moz:locale}");
 
 // FAQ URLs
-pref("browser.geolocation.warning.infoURL", "http://www.mozilla.com/%LOCALE%/%APP%/geolocation/");
 
 // Name of the about: page contributed by safebrowsing to handle display of error
 // pages on phishing/malware hits.  (bug 399233)
@@ -354,7 +351,7 @@ pref("urlclassifier.gethashnoise", 4);
 pref("urlclassifier.max-complete-age", 2700);
 
 // URL for checking the reason for a malware warning.
-pref("browser.safebrowsing.malware.reportURL", "http://safebrowsing.clients.google.com/safebrowsing/diagnostic?client=%NAME%&hl=%LOCALE%&site=");
+pref("browser.safebrowsing.malware.reportURL", "https://safebrowsing.google.com/safebrowsing/diagnostic?client=%NAME%&hl=%LOCALE%&site=");
 #endif
 
 // True if this is the first time we are showing about:firstrun
@@ -402,6 +399,7 @@ pref("dom.mozBrowserFramesEnabled", true);
 pref("dom.ipc.processCount", 100000);
 
 pref("dom.ipc.browser_frames.oop_by_default", false);
+pref("dom.browser_frames.useAsyncPanZoom", true);
 
 // SMS/MMS
 pref("dom.sms.enabled", true);
@@ -578,6 +576,7 @@ pref("dom.sysmsg.enabled", true);
 pref("media.plugins.enabled", false);
 pref("media.omx.enabled", true);
 pref("media.rtsp.enabled", true);
+pref("media.rtsp.video.enabled", false);
 
 // Disable printing (particularly, window.print())
 pref("dom.disable_window_print", true);
@@ -620,9 +619,11 @@ pref("ui.useOverlayScrollbars", 1);
 
 // Enable the ProcessPriorityManager, and give processes with no visible
 // documents a 1s grace period before they're eligible to be marked as
-// background.
+// background. Background processes that are perceivable due to playing
+// media are given a longer grace period to accomodate changing tracks, etc.
 pref("dom.ipc.processPriorityManager.enabled", true);
 pref("dom.ipc.processPriorityManager.backgroundGracePeriodMS", 1000);
+pref("dom.ipc.processPriorityManager.backgroundPerceivableGracePeriodMS", 5000);
 pref("dom.ipc.processPriorityManager.temporaryPriorityLockMS", 5000);
 
 // Number of different background levels for background processes.  We use
@@ -641,48 +642,48 @@ pref("dom.ipc.processPriorityManager.backgroundLRUPoolLevels", 5);
 // /still/ have the same niceness; we'd effectively have erased NSPR's thread
 // priorities.
 
-// The kernel can only accept 6 (OomScoreAdjust, KillUnderMB) pairs. But it is
+// The kernel can only accept 6 (OomScoreAdjust, KillUnderKB) pairs. But it is
 // okay, kernel will still kill processes with larger OomScoreAdjust first even
-// its OomScoreAdjust don't have a corresponding KillUnderMB.
+// its OomScoreAdjust don't have a corresponding KillUnderKB.
 
 pref("hal.processPriorityManager.gonk.MASTER.OomScoreAdjust", 0);
-pref("hal.processPriorityManager.gonk.MASTER.KillUnderMB", 4);
+pref("hal.processPriorityManager.gonk.MASTER.KillUnderKB", 4096);
 pref("hal.processPriorityManager.gonk.MASTER.Nice", 0);
 
 pref("hal.processPriorityManager.gonk.FOREGROUND_HIGH.OomScoreAdjust", 67);
-pref("hal.processPriorityManager.gonk.FOREGROUND_HIGH.KillUnderMB", 5);
+pref("hal.processPriorityManager.gonk.FOREGROUND_HIGH.KillUnderKB", 5120);
 pref("hal.processPriorityManager.gonk.FOREGROUND_HIGH.Nice", 0);
 
 pref("hal.processPriorityManager.gonk.FOREGROUND.OomScoreAdjust", 134);
-pref("hal.processPriorityManager.gonk.FOREGROUND.KillUnderMB", 6);
+pref("hal.processPriorityManager.gonk.FOREGROUND.KillUnderKB", 6144);
 pref("hal.processPriorityManager.gonk.FOREGROUND.Nice", 1);
 
 pref("hal.processPriorityManager.gonk.FOREGROUND_KEYBOARD.OomScoreAdjust", 200);
 pref("hal.processPriorityManager.gonk.FOREGROUND_KEYBOARD.Nice", 1);
 
 pref("hal.processPriorityManager.gonk.BACKGROUND_PERCEIVABLE.OomScoreAdjust", 400);
-pref("hal.processPriorityManager.gonk.BACKGROUND_PERCEIVABLE.KillUnderMB", 7);
+pref("hal.processPriorityManager.gonk.BACKGROUND_PERCEIVABLE.KillUnderKB", 7168);
 pref("hal.processPriorityManager.gonk.BACKGROUND_PERCEIVABLE.Nice", 7);
 
 pref("hal.processPriorityManager.gonk.BACKGROUND_HOMESCREEN.OomScoreAdjust", 534);
-pref("hal.processPriorityManager.gonk.BACKGROUND_HOMESCREEN.KillUnderMB", 8);
+pref("hal.processPriorityManager.gonk.BACKGROUND_HOMESCREEN.KillUnderKB", 8192);
 pref("hal.processPriorityManager.gonk.BACKGROUND_HOMESCREEN.Nice", 18);
 
 pref("hal.processPriorityManager.gonk.BACKGROUND.OomScoreAdjust", 667);
-pref("hal.processPriorityManager.gonk.BACKGROUND.KillUnderMB", 20);
+pref("hal.processPriorityManager.gonk.BACKGROUND.KillUnderKB", 20480);
 pref("hal.processPriorityManager.gonk.BACKGROUND.Nice", 18);
 
 // Processes get this niceness when they have low CPU priority.
 pref("hal.processPriorityManager.gonk.LowCPUNice", 18);
 
 // Fire a memory pressure event when the system has less than Xmb of memory
-// remaining.  You should probably set this just above Y.KillUnderMB for
+// remaining.  You should probably set this just above Y.KillUnderKB for
 // the highest priority class Y that you want to make an effort to keep alive.
 // (For example, we want BACKGROUND_PERCEIVABLE to stay alive.)  If you set
 // this too high, then we'll send out a memory pressure event every Z seconds
 // (see below), even while we have processes that we would happily kill in
 // order to free up memory.
-pref("hal.processPriorityManager.gonk.notifyLowMemUnderMB", 14);
+pref("hal.processPriorityManager.gonk.notifyLowMemUnderKB", 14336);
 
 // We wait this long before polling the memory-pressure fd after seeing one
 // memory pressure event.  (When we're not under memory pressure, we sit
@@ -756,6 +757,9 @@ pref("memory.free_dirty_pages", true);
 // Enable the Linux-specific, system-wide memory reporter.
 pref("memory.system_memory_reporter", true);
 
+// Don't dump memory reports on OOM, by default.
+pref("memory.dump_reports_on_oom", false);
+
 pref("layout.imagevisibility.enabled", true);
 pref("layout.imagevisibility.numscrollportwidths", 1);
 pref("layout.imagevisibility.numscrollportheights", 1);
@@ -812,15 +816,8 @@ pref("network.sntp.pools", // Servers separated by ';'.
 pref("network.sntp.port", 123);
 pref("network.sntp.timeout", 30); // In seconds.
 
-// Enable promise
-pref("dom.promise.enabled", false);
-
 // Enable dataStore
-#ifdef RELEASE_BUILD
-pref("dom.datastore.enabled", false);
-#else
 pref("dom.datastore.enabled", true);
-#endif
 
 // DOM Inter-App Communication API.
 pref("dom.inter-app-communication-api.enabled", true);
@@ -866,11 +863,38 @@ pref("dom.downloads.max_retention_days", 7);
 // Inactivity time in milliseconds after which we shut down the OS.File worker.
 pref("osfile.reset_worker_delay", 5000);
 
-// The URL of the Firefox Accounts auth server backend
-pref("identity.fxaccounts.auth.uri", "https://api-accounts.dev.lcip.org/v1");
-
 // APZC preferences.
 //
 // Gaia relies heavily on scroll events for now, so lets fire them
 // more often than the default value (100).
 pref("apz.asyncscroll.throttle", 40);
+pref("apz.pan_repaint_interval", 16);
+
+// Maximum fling velocity in px/ms.  Slower devices may need to reduce this
+// to avoid checkerboarding.  Note, float value must be set as a string.
+pref("apz.max_velocity_pixels_per_ms", "6.0");
+
+// Tweak default displayport values to reduce the risk of running out of
+// memory when zooming in
+pref("apz.x_skate_size_multiplier", "1.25");
+pref("apz.y_skate_size_multiplier", "1.5");
+pref("apz.x_stationary_size_multiplier", "1.5");
+pref("apz.y_stationary_size_multiplier", "1.8");
+pref("apz.enlarge_displayport_when_clipped", true);
+
+// This preference allows FirefoxOS apps (and content, I think) to force
+// the use of software (instead of hardware accelerated) 2D canvases by
+// creating a context like this:
+//
+//   canvas.getContext('2d', { willReadFrequently: true })
+//
+// Using a software canvas can save memory when JS calls getImageData()
+// on the canvas frequently. See bug 884226.
+pref("gfx.canvas.willReadFrequently.enable", true);
+
+// Disable autofocus until we can have it not bring up the keyboard.
+// https://bugzilla.mozilla.org/show_bug.cgi?id=965763
+pref("browser.autofocus", false);
+
+// Enable wakelock
+pref("dom.wakelock.enabled", true);

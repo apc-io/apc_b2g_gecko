@@ -35,7 +35,7 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(CallbackObject)
 NS_IMPL_CYCLE_COLLECTION_CLASS(CallbackObject)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(CallbackObject)
-  tmp->DropCallback();
+  tmp->DropJSObjects();
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mIncumbentGlobal)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(CallbackObject)
@@ -44,12 +44,14 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(CallbackObject)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(CallbackObject)
   NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(mCallback)
+  NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(mIncumbentJSGlobal)
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
 CallbackObject::CallSetup::CallSetup(CallbackObject* aCallback,
                                      ErrorResult& aRv,
                                      ExceptionHandling aExceptionHandling,
-                                     JSCompartment* aCompartment)
+                                     JSCompartment* aCompartment,
+                                     bool aIsJSImplementedWebIDL)
   : mCx(nullptr)
   , mCompartment(aCompartment)
   , mErrorResult(aRv)
@@ -59,6 +61,14 @@ CallbackObject::CallSetup::CallSetup(CallbackObject* aCallback,
   if (mIsMainThread) {
     nsContentUtils::EnterMicroTask();
   }
+
+  // Compute the caller's subject principal (if necessary) early, before we
+  // do anything that might perturb the relevant state.
+  nsIPrincipal* webIDLCallerPrincipal = nullptr;
+  if (aIsJSImplementedWebIDL) {
+    webIDLCallerPrincipal = nsContentUtils::GetSubjectPrincipal();
+  }
+
   // We need to produce a useful JSContext here.  Ideally one that the callback
   // is in some sense associated with, so that we can sort of treat it as a
   // "script entry point".  Though once we actually have script entry points,
@@ -70,60 +80,73 @@ CallbackObject::CallSetup::CallSetup(CallbackObject* aCallback,
   JSContext* cx = nullptr;
   nsIGlobalObject* globalObject = nullptr;
 
-  if (mIsMainThread) {
-    // Now get the global and JSContext for this callback.
-    nsGlobalWindow* win = xpc::WindowGlobalOrNull(realCallback);
-    if (win) {
-      // Make sure that if this is a window it's the current inner, since the
-      // nsIScriptContext and hence JSContext are associated with the outer
-      // window.  Which means that if someone holds on to a function from a
-      // now-unloaded document we'd have the new document as the script entry
-      // point...
-      MOZ_ASSERT(win->IsInnerWindow());
-      nsPIDOMWindow* outer = win->GetOuterWindow();
-      if (!outer || win != outer->GetCurrentInnerWindow()) {
-        // Just bail out from here
+  {
+    JS::AutoAssertNoGC nogc;
+    if (mIsMainThread) {
+      // Now get the global and JSContext for this callback.
+      nsGlobalWindow* win = xpc::WindowGlobalOrNull(realCallback);
+      if (win) {
+        // Make sure that if this is a window it's the current inner, since the
+        // nsIScriptContext and hence JSContext are associated with the outer
+        // window.  Which means that if someone holds on to a function from a
+        // now-unloaded document we'd have the new document as the script entry
+        // point...
+        MOZ_ASSERT(win->IsInnerWindow());
+        nsPIDOMWindow* outer = win->GetOuterWindow();
+        if (!outer || win != outer->GetCurrentInnerWindow()) {
+          // Just bail out from here
+          return;
+        }
+        cx = win->GetContext() ? win->GetContext()->GetNativeContext()
+                               // This happens - Removing it causes
+                               // test_bug293235.xul to go orange.
+                               : nsContentUtils::GetSafeJSContext();
+        globalObject = win;
+      } else {
+        // No DOM Window. Store the global and use the SafeJSContext.
+        JSObject* glob = js::GetGlobalForObjectCrossCompartment(realCallback);
+        globalObject = xpc::GetNativeForGlobal(glob);
+        MOZ_ASSERT(globalObject);
+        cx = nsContentUtils::GetSafeJSContext();
+      }
+    } else {
+      cx = workers::GetCurrentThreadJSContext();
+      globalObject = workers::GetCurrentThreadWorkerPrivate()->GlobalScope();
+    }
+
+    // Bail out if there's no useful global. This seems to happen intermittently
+    // on gaia-ui tests, probably because nsInProcessTabChildGlobal is returning
+    // null in some kind of teardown state.
+    if (!globalObject->GetGlobalJSObject()) {
+      return;
+    }
+
+    mAutoEntryScript.construct(globalObject, mIsMainThread, cx);
+    mAutoEntryScript.ref().SetWebIDLCallerPrincipal(webIDLCallerPrincipal);
+    nsIGlobalObject* incumbent = aCallback->IncumbentGlobalOrNull();
+    if (incumbent) {
+      // The callback object traces its incumbent JS global, so in general it
+      // should be alive here. However, it's possible that we could run afoul
+      // of the same IPC global weirdness described above, wherein the
+      // nsIGlobalObject has severed its reference to the JS global. Let's just
+      // be safe here, so that nobody has to waste a day debugging gaia-ui tests.
+      if (!incumbent->GetGlobalJSObject()) {
         return;
       }
-      cx = win->GetContext() ? win->GetContext()->GetNativeContext()
-                             // This happens - Removing it causes
-                             // test_bug293235.xul to go orange.
-                             : nsContentUtils::GetSafeJSContext();
-      globalObject = win;
-    } else {
-      // No DOM Window. Store the global and use the SafeJSContext.
-      JSObject* glob = js::GetGlobalForObjectCrossCompartment(realCallback);
-      globalObject = xpc::GetNativeForGlobal(glob);
-      MOZ_ASSERT(globalObject);
-      cx = nsContentUtils::GetSafeJSContext();
+      mAutoIncumbentScript.construct(incumbent);
     }
-  } else {
-    cx = workers::GetCurrentThreadJSContext();
-    globalObject = workers::GetCurrentThreadWorkerPrivate()->GlobalScope();
-  }
 
-  // Bail out if there's no useful global. This seems to happen intermittently
-  // on gaia-ui tests, probably because nsInProcessTabChildGlobal is returning
-  // null in some kind of teardown state.
-  if (!globalObject->GetGlobalJSObject()) {
-    return;
+    // Unmark the callable (by invoking Callback() and not the CallbackPreserveColor()
+    // variant), and stick it in a Rooted before it can go gray again.
+    // Nothing before us in this function can trigger a CC, so it's safe to wait
+    // until here it do the unmark. This allows us to order the following two
+    // operations _after_ the Push() above, which lets us take advantage of the
+    // JSAutoRequest embedded in the pusher.
+    //
+    // We can do this even though we're not in the right compartment yet, because
+    // Rooted<> does not care about compartments.
+    mRootedCallable.construct(cx, aCallback->Callback());
   }
-
-  mAutoEntryScript.construct(globalObject, mIsMainThread, cx);
-  if (aCallback->IncumbentGlobalOrNull()) {
-    mAutoIncumbentScript.construct(aCallback->IncumbentGlobalOrNull());
-  }
-
-  // Unmark the callable (by invoking Callback() and not the CallbackPreserveColor()
-  // variant), and stick it in a Rooted before it can go gray again.
-  // Nothing before us in this function can trigger a CC, so it's safe to wait
-  // until here it do the unmark. This allows us to order the following two
-  // operations _after_ the Push() above, which lets us take advantage of the
-  // JSAutoRequest embedded in the pusher.
-  //
-  // We can do this even though we're not in the right compartment yet, because
-  // Rooted<> does not care about compartments.
-  mRootedCallable.construct(cx, aCallback->Callback());
 
   if (mIsMainThread) {
     // Check that it's ok to run this callback at all.
@@ -148,7 +171,7 @@ CallbackObject::CallSetup::CallSetup(CallbackObject* aCallback,
   mCx = cx;
 
   // Make sure the JS engine doesn't report exceptions we want to re-throw
-  if (mExceptionHandling == eRethrowContentExceptions ||
+  if ((mCompartment && mExceptionHandling == eRethrowContentExceptions) ||
       mExceptionHandling == eRethrowExceptions) {
     mSavedJSContextOptions = JS::ContextOptionsRef(cx);
     JS::ContextOptionsRef(cx).setDontReportUncaught(true);
@@ -184,8 +207,15 @@ CallbackObject::CallSetup::ShouldRethrowException(JS::Handle<JS::Value> aExcepti
 
 CallbackObject::CallSetup::~CallSetup()
 {
-  // First things first: if we have a JSContext, report any pending
-  // errors on it, unless we were told to re-throw them.
+  // To get our nesting right we have to destroy our JSAutoCompartment first.
+  // In particular, we want to do this before we try reporting any exceptions,
+  // so we end up reporting them while in the compartment of our entry point,
+  // not whatever cross-compartment wrappper mCallback might be.
+  // Be careful: the JSAutoCompartment might not have been constructed at all!
+  mAc.destroyIfConstructed();
+
+  // Now, if we have a JSContext, report any pending errors on it, unless we
+  // were told to re-throw them.
   if (mCx) {
     bool dealtWithPendingException = false;
     if ((mCompartment && mExceptionHandling == eRethrowContentExceptions) ||
@@ -208,13 +238,33 @@ CallbackObject::CallSetup::~CallSetup()
       // Either we're supposed to report our exceptions, or we're supposed to
       // re-throw them but we failed to JS_GetPendingException.  Either way,
       // just report the pending exception, if any.
-      nsJSUtils::ReportPendingException(mCx);
+      //
+      // We don't use nsJSUtils::ReportPendingException here because all it
+      // does at this point is JS_SaveFrameChain and enter a compartment around
+      // a JS_ReportPendingException call.  But our mAutoEntryScript should
+      // already do a JS_SaveFrameChain and we are already in the compartment
+      // we want to be in, so all nsJSUtils::ReportPendingException would do is
+      // screw up our compartment, which is exactly what we do not want.
+      //
+      // XXXbz FIXME: bug 979525 means we don't always JS_SaveFrameChain here,
+      // so we need to go ahead and do that.
+      JS::Rooted<JSObject*> oldGlobal(mCx, JS::CurrentGlobalOrNull(mCx));
+      MOZ_ASSERT(oldGlobal, "How can we not have a global here??");
+      bool saved = JS_SaveFrameChain(mCx);
+      // Make sure the JSAutoCompartment goes out of scope before the
+      // JS_RestoreFrameChain call!
+      {
+        JSAutoCompartment ac(mCx, oldGlobal);
+        MOZ_ASSERT(!JS::DescribeScriptedCaller(mCx),
+                   "Our comment above about JS_SaveFrameChain having been "
+                   "called is a lie?");
+        JS_ReportPendingException(mCx);
+      }
+      if (saved) {
+        JS_RestoreFrameChain(mCx);
+      }
     }
   }
-
-  // To get our nesting right we have to destroy our JSAutoCompartment first.
-  // But be careful: it might not have been constructed at all!
-  mAc.destroyIfConstructed();
 
   mAutoIncumbentScript.destroyIfConstructed();
   mAutoEntryScript.destroyIfConstructed();
@@ -242,8 +292,7 @@ CallbackObjectHolderBase::ToXPCOMCallback(CallbackObject* aCallback,
   JSAutoCompartment ac(cx, callback);
   nsRefPtr<nsXPCWrappedJS> wrappedJS;
   nsresult rv =
-    nsXPCWrappedJS::GetNewOrUsed(callback, aIID,
-                                 nullptr, getter_AddRefs(wrappedJS));
+    nsXPCWrappedJS::GetNewOrUsed(callback, aIID, getter_AddRefs(wrappedJS));
   if (NS_FAILED(rv) || !wrappedJS) {
     return nullptr;
   }

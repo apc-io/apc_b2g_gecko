@@ -26,10 +26,12 @@ base-updater-head_TARGET  := libs
 base-updater-head_DEST    := $(XPCSHELLTESTROOT)/unit_base_updater
 base-updater-head_FILES   := $(XPCSHELLTESTROOT)/unit_aus_update/head_update.js
 
+ifdef MOZ_MAINTENANCE_SERVICE
 INSTALL_TARGETS              += service-updater-head
 service-updater-head_TARGET  := libs
 service-updater-head_DEST    := $(XPCSHELLTESTROOT)/unit_service_updater
 service-updater-head_FILES   := $(XPCSHELLTESTROOT)/unit_aus_update/head_update.js
+endif # MOZ_MAINTENANCE_SERVICE
 
 ifndef MOZ_PROFILE_GENERATE
 ifdef COMPILE_ENVIRONMENT
@@ -50,7 +52,6 @@ chrome-shared_PATH := $(CHROMETESTROOT)/chrome
 
 _CHROME_DATA := \
   simple.mar \
-  simple_no_pib.mar \
   $(NULL)
 INSTALL_TARGETS     += chrome-data
 chrome-data_TARGET  := libs
@@ -63,12 +64,6 @@ INI_TEST_FILES = \
   TestAUSReadStrings3.ini \
   $(NULL)
 
-LOCAL_INCLUDES += \
-  -I$(srcdir) \
-  -I$(topsrcdir)/toolkit/mozapps/update \
-  -I$(topsrcdir)/toolkit/mozapps/update/common \
-  $(NULL)
-
 MOZ_WINCONSOLE = 1
 
 ifeq ($(OS_ARCH),WINNT)
@@ -77,9 +72,6 @@ else
 LIBS += $(call EXPAND_LIBNAME_PATH,updatecommon,../common)
 endif
 
-ifeq ($(OS_ARCH),WINNT)
-USE_STATIC_LIBS = 1
-endif # WINNT
 endif # Not Android
 
 include $(topsrcdir)/config/rules.mk

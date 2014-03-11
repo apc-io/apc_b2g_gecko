@@ -29,6 +29,8 @@ const EVAL_FUNCTION_TIMEOUT      = 1000; // milliseconds
 const SCRATCHPAD_L10N = "chrome://browser/locale/devtools/scratchpad.properties";
 const DEVTOOLS_CHROME_ENABLED = "devtools.chrome.enabled";
 const PREF_RECENT_FILES_MAX = "devtools.scratchpad.recentFilesMax";
+const SHOW_TRAILING_SPACE = "devtools.scratchpad.showTrailingSpace";
+const ENABLE_CODE_FOLDING = "devtools.scratchpad.enableCodeFolding";
 
 const VARIABLES_VIEW_URL = "chrome://browser/content/devtools/widgets/VariablesView.xul";
 
@@ -126,6 +128,99 @@ var Scratchpad = {
     });
 
     return obj;
+  },
+
+  /**
+   * Add the event listeners for popupshowing events.
+   */
+  _setupPopupShowingListeners: function SP_setupPopupShowing() {
+    let elementIDs = ['sp-menu_editpopup', 'scratchpad-text-popup'];
+
+    for (let elementID of elementIDs) {
+      let elem = document.getElementById(elementID);
+      if (elem) {
+        elem.addEventListener("popupshowing", function () {
+          goUpdateGlobalEditMenuItems();
+          let commands = ['cmd_undo', 'cmd_redo', 'cmd_delete', 'cmd_findAgain'];
+          commands.forEach(goUpdateCommand);
+        });
+      }
+    }
+  },
+
+  /**
+   * Add the event event listeners for command events.
+   */
+  _setupCommandListeners: function SP_setupCommands() {
+    let commands = {
+      "cmd_gotoLine": () => {
+        goDoCommand('cmd_gotoLine');
+      },
+      "sp-cmd-newWindow": () => {
+        Scratchpad.openScratchpad();
+      },
+      "sp-cmd-openFile": () => {
+        Scratchpad.openFile();
+      },
+      "sp-cmd-clearRecentFiles": () => {
+        Scratchpad.clearRecentFiles();
+      },
+      "sp-cmd-save": () => {
+        Scratchpad.saveFile();
+      },
+      "sp-cmd-saveas": () => {
+        Scratchpad.saveFileAs();
+      },
+      "sp-cmd-revert": () => {
+        Scratchpad.promptRevert();
+      },
+      "sp-cmd-close": () => {
+        Scratchpad.close();
+      },
+      "sp-cmd-run": () => {
+        Scratchpad.run();
+      },
+      "sp-cmd-inspect": () => {
+        Scratchpad.inspect();
+      },
+      "sp-cmd-display": () => {
+        Scratchpad.display();
+      },
+      "sp-cmd-pprint": () => {
+        Scratchpad.prettyPrint();
+      },
+      "sp-cmd-contentContext": () => {
+        Scratchpad.setContentContext();
+      },
+      "sp-cmd-browserContext": () => {
+        Scratchpad.setBrowserContext();
+      },
+      "sp-cmd-reloadAndRun": () => {
+        Scratchpad.reloadAndRun();
+      },
+      "sp-cmd-evalFunction": () => {
+        Scratchpad.evalTopLevelFunction();
+      },
+      "sp-cmd-errorConsole": () => {
+        Scratchpad.openErrorConsole();
+      },
+      "sp-cmd-webConsole": () => {
+        Scratchpad.openWebConsole();
+      },
+      "sp-cmd-documentationLink": () => {
+        Scratchpad.openDocumentationPage();
+      },
+      "sp-cmd-hideSidebar": () => {
+        Scratchpad.sidebar.hide();
+      }
+    }
+
+    for (let command in commands) {
+      let elem = document.getElementById(command);
+      if (elem) {
+        elem.addEventListener("command", commands[command]);
+      }
+    }
   },
 
   /**
@@ -844,10 +939,10 @@ var Scratchpad = {
 
         // Assemble the best possible stack we can given the properties we have.
         let stack;
-        if (typeof error.stack == "string") {
+        if (typeof error.stack == "string" && error.stack) {
           stack = error.stack;
         }
-        else if (typeof error.fileName == "number") {
+        else if (typeof error.fileName == "string") {
           stack = "@" + error.fileName;
           if (typeof error.lineNumber == "number") {
             stack += ":" + error.lineNumber;
@@ -980,6 +1075,7 @@ var Scratchpad = {
 
         this.editor.setText(content);
         this.editor.clearHistory();
+        this.dirty = false;
         document.getElementById("sp-cmd-revert").setAttribute("disabled", true);
       }
       else if (!aSilentError) {
@@ -1165,7 +1261,7 @@ var Scratchpad = {
           menuitem.setAttribute("disabled", true);
         }
 
-        menuitem.setAttribute("oncommand", "Scratchpad.openFile(" + i + ");");
+        menuitem.addEventListener("command", Scratchpad.openFile.bind(Scratchpad, i));
         recentFilesPopup.appendChild(menuitem);
       }
 
@@ -1483,17 +1579,21 @@ var Scratchpad = {
       this._instanceId = ScratchpadManager.createUid();
     }
 
-    this.editor = new Editor({
+    let config = {
       mode: Editor.modes.js,
       value: initialText,
       lineNumbers: true,
+      showTrailingSpace: Services.prefs.getBoolPref(SHOW_TRAILING_SPACE),
+      enableCodeFolding: Services.prefs.getBoolPref(ENABLE_CODE_FOLDING),
       contextMenu: "scratchpad-text-popup"
-    });
+    };
 
+    this.editor = new Editor(config);
     this.editor.appendTo(document.querySelector("#scratchpad-editor")).then(() => {
       var lines = initialText.split("\n");
 
       this.editor.on("change", this._onChanged);
+      this.editor.on("save", () => this.saveFile());
       this.editor.focus();
       this.editor.setCursor({ line: lines.length, ch: lines.pop().length });
 
@@ -1506,6 +1606,8 @@ var Scratchpad = {
       PreferenceObserver.init();
       CloseObserver.init();
     }).then(null, (err) => console.log(err.message));
+    this._setupCommandListeners();
+    this._setupPopupShowingListeners();
   },
 
   /**

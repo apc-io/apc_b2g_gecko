@@ -9,6 +9,7 @@
 #include "WMFUtils.h"
 #include "WMFByteStream.h"
 #include "WMFSourceReaderCallback.h"
+#include "mozilla/ArrayUtils.h"
 #include "mozilla/dom/TimeRanges.h"
 #include "mozilla/dom/HTMLMediaElement.h"
 #include "mozilla/Preferences.h"
@@ -23,7 +24,9 @@
 
 #include "MediaDecoder.h"
 #include "VideoUtils.h"
+#include "gfx2DGlue.h"
 
+using namespace mozilla::gfx;
 using mozilla::layers::Image;
 using mozilla::layers::LayerManager;
 using mozilla::layers::LayersBackend;
@@ -105,6 +108,7 @@ WMFReader::InitializeDXVA()
   if (!Preferences::GetBool("media.windows-media-foundation.use-dxva", false)) {
     return false;
   }
+  MOZ_ASSERT(mDecoder->GetImageContainer());
 
   // Extract the layer manager backend type so that we can determine
   // whether it's worthwhile using DXVA. If we're not running with a D3D
@@ -151,7 +155,8 @@ WMFReader::Init(MediaDecoderReader* aCloneDonor)
   rv = mByteStream->Init();
   NS_ENSURE_SUCCESS(rv, rv);
 
-  if (IsVideoContentType(mDecoder->GetResource()->GetContentType())) {
+  if (mDecoder->GetImageContainer() != nullptr &&
+      IsVideoContentType(mDecoder->GetResource()->GetContentType())) {
     mUseHwAccel = InitializeDXVA();
   } else {
     mUseHwAccel = false;
@@ -311,7 +316,7 @@ WMFReader::ConfigureVideoFrameGeometry(IMFMediaType* aMediaType)
   nsIntSize frameSize = nsIntSize(width, height);
   nsIntSize displaySize = nsIntSize(pictureRegion.width, pictureRegion.height);
   ScaleDisplayByAspectRatio(displaySize, float(aspectNum) / float(aspectDenom));
-  if (!VideoInfo::ValidateVideoRegion(frameSize, pictureRegion, displaySize)) {
+  if (!IsValidVideoRegion(frameSize, pictureRegion, displaySize)) {
     // Video track's frame sizes will overflow. Ignore the video track.
     return E_FAIL;
   }
@@ -345,6 +350,11 @@ WMFReader::ConfigureVideoDecoder()
     return S_OK;
   }
 
+  if (!mDecoder->GetImageContainer()) {
+    // We can't display the video, so don't bother to decode; disable the stream.
+    return mSourceReader->SetStreamSelection(MF_SOURCE_READER_FIRST_VIDEO_STREAM, FALSE);
+  }
+
   static const GUID MP4VideoTypes[] = {
     MFVideoFormat_H264
   };
@@ -352,7 +362,7 @@ WMFReader::ConfigureVideoDecoder()
                                            MF_SOURCE_READER_FIRST_VIDEO_STREAM,
                                            mUseHwAccel ? MFVideoFormat_NV12 : MFVideoFormat_YV12,
                                            MP4VideoTypes,
-                                           NS_ARRAY_LENGTH(MP4VideoTypes));
+                                           ArrayLength(MP4VideoTypes));
   if (FAILED(hr)) {
     DECODER_LOG("Failed to configured video output");
     return hr;
@@ -393,13 +403,13 @@ WMFReader::GetSupportedAudioCodecs(const GUID** aCodecs, uint32_t* aNumCodecs)
       aacOrMp3
     };
     *aCodecs = codecs;
-    *aNumCodecs = NS_ARRAY_LENGTH(codecs);
+    *aNumCodecs = ArrayLength(codecs);
   } else {
     static const GUID codecs[] = {
       MFAudioFormat_AAC
     };
     *aCodecs = codecs;
-    *aNumCodecs = NS_ARRAY_LENGTH(codecs);
+    *aNumCodecs = ArrayLength(codecs);
   }
 }
 
@@ -722,7 +732,7 @@ WMFReader::CreateBasicVideoFrame(IMFSample* aSample,
                                    b,
                                    false,
                                    -1,
-                                   mPictureRegion);
+                                   ToIntRect(mPictureRegion));
   if (twoDBuffer) {
     twoDBuffer->Unlock2D();
   } else {
@@ -765,7 +775,7 @@ WMFReader::CreateD3DVideoFrame(IMFSample* aSample,
                                             image.forget(),
                                             false,
                                             -1,
-                                            mPictureRegion);
+                                            ToIntRect(mPictureRegion));
 
   NS_ENSURE_TRUE(v, E_FAIL);
   *aOutVideoData = v;

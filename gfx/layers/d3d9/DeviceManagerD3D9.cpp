@@ -12,12 +12,13 @@
 #include "Nv3DVUtils.h"
 #include "plstr.h"
 #include <algorithm>
+#include "gfx2DGlue.h"
 #include "gfxPlatform.h"
 #include "gfxWindowsPlatform.h"
 #include "TextureD3D9.h"
 #include "mozilla/gfx/Point.h"
 
-using mozilla::gfx::IntSize;
+using namespace mozilla::gfx;
 
 namespace mozilla {
 namespace layers {
@@ -25,15 +26,6 @@ namespace layers {
 const LPCWSTR kClassName       = L"D3D9WindowClass";
 
 #define USE_D3D9EX
-
-typedef IDirect3D9* (WINAPI*Direct3DCreate9Func)(
-  UINT SDKVersion
-);
-
-typedef HRESULT (WINAPI*Direct3DCreate9ExFunc)(
-  UINT SDKVersion,
-  IDirect3D9Ex **ppD3D
-);
 
 struct vertex {
   float x, y;
@@ -154,7 +146,7 @@ SwapChainD3D9::Present(const nsIntRect &aRect)
 void
 SwapChainD3D9::Present()
 {
-  mSwapChain->Present(NULL, NULL, 0, 0, 0);
+  mSwapChain->Present(nullptr, nullptr, 0, 0, 0);
 }
 
 void
@@ -223,11 +215,11 @@ DeviceManagerD3D9::Init()
   } 
 
   HMODULE d3d9 = LoadLibraryW(L"d3d9.dll");
-  Direct3DCreate9Func d3d9Create = (Direct3DCreate9Func)
+  decltype(Direct3DCreate9)* d3d9Create = (decltype(Direct3DCreate9)*)
     GetProcAddress(d3d9, "Direct3DCreate9");
-  Direct3DCreate9ExFunc d3d9CreateEx = (Direct3DCreate9ExFunc)
+  decltype(Direct3DCreate9Ex)* d3d9CreateEx = (decltype(Direct3DCreate9Ex)*)
     GetProcAddress(d3d9, "Direct3DCreate9Ex");
-  
+
 #ifdef USE_D3D9EX
   if (d3d9CreateEx) {
     hr = d3d9CreateEx(D3D_SDK_VERSION, getter_AddRefs(mD3D9Ex));
@@ -548,21 +540,22 @@ bool
 LoadMaskTexture(Layer* aMask, IDirect3DDevice9* aDevice,
                 uint32_t aMaskTexRegister)
 {
-  gfxIntSize size;
+  IntSize size;
   nsRefPtr<IDirect3DTexture9> texture =
     static_cast<LayerD3D9*>(aMask->ImplData())->GetAsTexture(&size);
-  
+
   if (!texture) {
     return false;
   }
-  
-  gfxMatrix maskTransform;
-  bool maskIs2D = aMask->GetEffectiveTransform().CanDraw2D(&maskTransform);
+
+  Matrix maskTransform;
+  Matrix4x4 effectiveTransform = aMask->GetEffectiveTransform();
+  bool maskIs2D = effectiveTransform.CanDraw2D(&maskTransform);
   NS_ASSERTION(maskIs2D, "How did we end up with a 3D transform here?!");
-  gfxRect bounds = gfxRect(gfxPoint(), size);
+  Rect bounds = Rect(Point(), Size(size));
   bounds = maskTransform.TransformBounds(bounds);
 
-  aDevice->SetVertexShaderConstantF(DeviceManagerD3D9::sMaskQuadRegister, 
+  aDevice->SetVertexShaderConstantF(DeviceManagerD3D9::sMaskQuadRegister,
                                     ShaderConstantRect((float)bounds.x,
                                                        (float)bounds.y,
                                                        (float)bounds.width,
@@ -669,11 +662,11 @@ DeviceManagerD3D9::SetShaderMode(ShaderMode aMode, Layer* aMask, bool aIs2D)
 void
 DeviceManagerD3D9::DestroyDevice()
 {
+  ++mDeviceResetCount;
   mDeviceWasRemoved = true;
   if (!IsD3D9Ex()) {
     ReleaseTextureResources();
   }
-  LayerManagerD3D9::OnDeviceManagerDestroy(this);
   gfxWindowsPlatform::GetPlatform()->OnDeviceManagerDestroy(this);
 }
 
@@ -692,7 +685,6 @@ DeviceManagerD3D9::VerifyReadyForRendering()
 
       if (FAILED(hr)) {
         DestroyDevice();
-        ++mDeviceResetCount;
         return DeviceMustRecreate;
       }
     }
@@ -721,6 +713,11 @@ DeviceManagerD3D9::VerifyReadyForRendering()
   pp.PresentationInterval = D3DPRESENT_INTERVAL_DEFAULT;
   pp.hDeviceWindow = mFocusWnd;
 
+  // Whatever happens from now on, either we reset the device, or we should
+  // pretend we reset the device so that the layer manager or compositor
+  // doesn't ignore it.
+  ++mDeviceResetCount;
+
   // if we got this far, we know !SUCCEEDEED(hr), that means hr is one of
   // D3DERR_DEVICELOST, D3DERR_DEVICENOTRESET, D3DERR_DRIVERINTERNALERROR.
   // It is only worth resetting if we get D3DERR_DEVICENOTRESET. If we get
@@ -730,9 +727,6 @@ DeviceManagerD3D9::VerifyReadyForRendering()
     HMONITOR hMonitorWindow;
     hMonitorWindow = MonitorFromWindow(mFocusWnd, MONITOR_DEFAULTTOPRIMARY);
     if (hMonitorWindow != mDeviceMonitor) {
-      /* The monitor has changed. We have to assume that the
-       * DEVICENOTRESET will not be comming. */
-
       /* jrmuizel: I'm not sure how to trigger this case. Usually, we get
        * DEVICENOTRESET right away and Reset() succeeds without going through a
        * set of DEVICELOSTs. This is presumeably because we don't call
@@ -740,18 +734,19 @@ DeviceManagerD3D9::VerifyReadyForRendering()
        * Hopefully comparing HMONITORs is not overly aggressive.
        * See bug 626678.
        */
+      /* The monitor has changed. We have to assume that the
+       * DEVICENOTRESET will not be coming. */
+      DestroyDevice();
       return DeviceMustRecreate;
     }
-    return DeviceRetry;
+    return DeviceFail;
   }
   if (hr == D3DERR_DEVICENOTRESET) {
     hr = mDevice->Reset(&pp);
-    ++mDeviceResetCount;
   }
 
   if (FAILED(hr) || !CreateVertexBuffer()) {
     DestroyDevice();
-    ++mDeviceResetCount;
     return DeviceMustRecreate;
   }
 

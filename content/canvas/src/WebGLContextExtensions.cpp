@@ -17,17 +17,23 @@ using namespace mozilla::gl;
 
 // must match WebGLContext::WebGLExtensionID
 static const char *sExtensionNames[] = {
+    "EXT_color_buffer_half_float",
+    "EXT_frag_depth",
     "EXT_sRGB",
     "EXT_texture_filter_anisotropic",
     "OES_element_index_uint",
     "OES_standard_derivatives",
     "OES_texture_float",
     "OES_texture_float_linear",
+    "OES_texture_half_float",
+    "OES_texture_half_float_linear",
     "OES_vertex_array_object",
+    "WEBGL_color_buffer_float",
     "WEBGL_compressed_texture_atc",
     "WEBGL_compressed_texture_pvrtc",
     "WEBGL_compressed_texture_s3tc",
     "WEBGL_debug_renderer_info",
+    "WEBGL_debug_shaders",
     "WEBGL_depth_texture",
     "WEBGL_lose_context",
     "WEBGL_draw_buffers",
@@ -52,12 +58,22 @@ WebGLContext::IsExtensionEnabled(WebGLExtensionID ext) const {
 
 bool WebGLContext::IsExtensionSupported(JSContext *cx, WebGLExtensionID ext) const
 {
+    bool allowPrivilegedExts = false;
+
     // Chrome contexts need access to debug information even when
     // webgl.disable-extensions is set. This is used in the graphics
     // section of about:support.
-    if (xpc::AccessCheck::isChrome(js::GetContextCompartment(cx))) {
+    if (xpc::AccessCheck::isChrome(js::GetContextCompartment(cx)))
+        allowPrivilegedExts = true;
+
+    if (Preferences::GetBool("webgl.enable-privileged-extensions", false))
+        allowPrivilegedExts = true;
+
+    if (allowPrivilegedExts) {
         switch (ext) {
             case WEBGL_debug_renderer_info:
+                return true;
+            case WEBGL_debug_shaders:
                 return true;
             default:
                 // For warnings-as-errors.
@@ -86,6 +102,18 @@ bool WebGLContext::IsExtensionSupported(WebGLExtensionID ext) const
             return gl->IsSupported(GLFeature::texture_float);
         case OES_texture_float_linear:
             return gl->IsSupported(GLFeature::texture_float_linear);
+        case OES_texture_half_float:
+            // If we have Feature::texture_half_float, we must not be on ES2
+            // and need to translate HALF_FLOAT_OES -> HALF_FLOAT.  We do that
+            // right before making the relevant calls.
+            return gl->IsExtensionSupported(GLContext::OES_texture_half_float) ||
+                   gl->IsSupported(GLFeature::texture_half_float);
+        case OES_texture_half_float_linear:
+            return gl->IsSupported(GLFeature::texture_half_float_linear);
+        case WEBGL_color_buffer_float:
+            return WebGLExtensionColorBufferFloat::IsSupported(this);
+        case EXT_color_buffer_half_float:
+            return WebGLExtensionColorBufferHalfFloat::IsSupported(this);
         case OES_vertex_array_object:
             return WebGLExtensionVertexArray::IsSupported(this);
         case EXT_texture_filter_anisotropic:
@@ -118,6 +146,8 @@ bool WebGLContext::IsExtensionSupported(WebGLExtensionID ext) const
             return WebGLExtensionSRGB::IsSupported(this);
         case WEBGL_draw_buffers:
             return WebGLExtensionDrawBuffers::IsSupported(this);
+        case EXT_frag_depth:
+            return WebGLExtensionFragDepth::IsSupported(this);
         default:
             // For warnings-as-errors.
             break;
@@ -156,7 +186,7 @@ WebGLContext::GetExtension(JSContext *cx, const nsAString& aName, ErrorResult& r
     for (size_t i = 0; i < size_t(WebGLExtensionID_max); i++)
     {
         WebGLExtensionID extension = WebGLExtensionID(i);
-        
+
         if (CompareWebGLExtensionName(name, GetExtensionString(extension))) {
             ext = extension;
             break;
@@ -244,6 +274,9 @@ WebGLContext::EnableExtension(WebGLExtensionID ext)
         case WEBGL_debug_renderer_info:
             obj = new WebGLExtensionDebugRendererInfo(this);
             break;
+        case WEBGL_debug_shaders:
+            obj = new WebGLExtensionDebugShaders(this);
+            break;
         case WEBGL_depth_texture:
             obj = new WebGLExtensionDepthTexture(this);
             break;
@@ -252,6 +285,18 @@ WebGLContext::EnableExtension(WebGLExtensionID ext)
             break;
         case OES_texture_float_linear:
             obj = new WebGLExtensionTextureFloatLinear(this);
+            break;
+        case OES_texture_half_float:
+            obj = new WebGLExtensionTextureHalfFloat(this);
+            break;
+        case OES_texture_half_float_linear:
+            obj = new WebGLExtensionTextureHalfFloatLinear(this);
+            break;
+        case WEBGL_color_buffer_float:
+            obj = new WebGLExtensionColorBufferFloat(this);
+            break;
+        case EXT_color_buffer_half_float:
+            obj = new WebGLExtensionColorBufferHalfFloat(this);
             break;
         case WEBGL_draw_buffers:
             obj = new WebGLExtensionDrawBuffers(this);
@@ -264,6 +309,9 @@ WebGLContext::EnableExtension(WebGLExtensionID ext)
             break;
         case EXT_sRGB:
             obj = new WebGLExtensionSRGB(this);
+            break;
+        case EXT_frag_depth:
+            obj = new WebGLExtensionFragDepth(this);
             break;
         default:
             MOZ_ASSERT(false, "should not get there.");

@@ -51,7 +51,6 @@
 #include "nsPresContext.h"
 #include "nsContentUtils.h"
 #include "nsWebShellWindow.h" // get rid of this one, too...
-#include "nsDOMEvent.h"
 #include "nsGlobalWindow.h"
 
 #include "prenv.h"
@@ -59,6 +58,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/dom/BarProps.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/dom/Event.h"
 #include "mozilla/dom/ScriptSettings.h"
 
 using namespace mozilla;
@@ -230,7 +230,8 @@ NS_IMETHODIMP nsXULWindow::SetZLevel(uint32_t aLevel)
     nsCOMPtr<nsIDocument> doc = cv->GetDocument();
     if (doc) {
       ErrorResult rv;
-      nsRefPtr<nsDOMEvent> event = doc->CreateEvent(NS_LITERAL_STRING("Events"),rv);
+      nsRefPtr<dom::Event> event =
+        doc->CreateEvent(NS_LITERAL_STRING("Events"),rv);
       if (event) {
         event->InitEvent(NS_LITERAL_STRING("windowZLevel"), true, false);
 
@@ -317,7 +318,7 @@ NS_IMETHODIMP nsXULWindow::GetPrimaryContentShell(nsIDocShellTreeItem**
   return NS_OK;
 }
 
-NS_IMETHODIMP nsXULWindow::GetContentShellById(const PRUnichar* aID, 
+NS_IMETHODIMP nsXULWindow::GetContentShellById(const char16_t* aID, 
    nsIDocShellTreeItem** aDocShellTreeItem)
 {
   NS_ENSURE_ARG_POINTER(aDocShellTreeItem);
@@ -442,7 +443,7 @@ NS_IMETHODIMP nsXULWindow::Destroy()
   if (mWindow)
     mWindow->Show(false);
 
-#if defined(XP_WIN) || defined(XP_OS2)
+#if defined(XP_WIN)
   // We need to explicitly set the focus on Windows, but 
   // only if the parent is visible.
   nsCOMPtr<nsIBaseWindow> parent(do_QueryReferent(mParentWindow));
@@ -865,7 +866,7 @@ NS_IMETHODIMP nsXULWindow::SetFocus()
   return NS_OK;
 }
 
-NS_IMETHODIMP nsXULWindow::GetTitle(PRUnichar** aTitle)
+NS_IMETHODIMP nsXULWindow::GetTitle(char16_t** aTitle)
 {
   NS_ENSURE_ARG_POINTER(aTitle);
 
@@ -875,7 +876,7 @@ NS_IMETHODIMP nsXULWindow::GetTitle(PRUnichar** aTitle)
   return NS_OK;
 }
 
-NS_IMETHODIMP nsXULWindow::SetTitle(const PRUnichar* aTitle)
+NS_IMETHODIMP nsXULWindow::SetTitle(const char16_t* aTitle)
 {
   NS_ENSURE_STATE(mWindow);
   mTitle.Assign(aTitle);

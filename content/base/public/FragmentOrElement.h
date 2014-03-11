@@ -189,14 +189,14 @@ public:
   virtual already_AddRefed<nsINodeList> GetChildren(uint32_t aFilter) MOZ_OVERRIDE;
   virtual const nsTextFragment *GetText() MOZ_OVERRIDE;
   virtual uint32_t TextLength() const MOZ_OVERRIDE;
-  virtual nsresult SetText(const PRUnichar* aBuffer, uint32_t aLength,
+  virtual nsresult SetText(const char16_t* aBuffer, uint32_t aLength,
                            bool aNotify) MOZ_OVERRIDE;
   // Need to implement this here too to avoid hiding.
   nsresult SetText(const nsAString& aStr, bool aNotify)
   {
     return SetText(aStr.BeginReading(), aStr.Length(), aNotify);
   }
-  virtual nsresult AppendText(const PRUnichar* aBuffer, uint32_t aLength,
+  virtual nsresult AppendText(const char16_t* aBuffer, uint32_t aLength,
                               bool aNotify) MOZ_OVERRIDE;
   virtual bool TextIsOnlyWhitespace() MOZ_OVERRIDE;
   virtual void AppendTextTo(nsAString& aResult) MOZ_OVERRIDE;
@@ -207,9 +207,12 @@ public:
   virtual ShadowRoot *GetShadowRoot() const MOZ_OVERRIDE;
   virtual ShadowRoot *GetContainingShadow() const MOZ_OVERRIDE;
   virtual void SetShadowRoot(ShadowRoot* aBinding) MOZ_OVERRIDE;
-  virtual nsIContent *GetXBLInsertionParent() const;
-  virtual void SetXBLInsertionParent(nsIContent* aContent);
+  virtual nsIContent *GetXBLInsertionParent() const MOZ_OVERRIDE;
+  virtual void SetXBLInsertionParent(nsIContent* aContent) MOZ_OVERRIDE;
   virtual bool IsLink(nsIURI** aURI) const MOZ_OVERRIDE;
+
+  virtual CustomElementData *GetCustomElementData() const MOZ_OVERRIDE;
+  virtual void SetCustomElementData(CustomElementData* aData) MOZ_OVERRIDE;
 
   virtual void DestroyContent() MOZ_OVERRIDE;
   virtual void SaveSubtreeState() MOZ_OVERRIDE;
@@ -378,6 +381,11 @@ public:
      * XBL binding installed on the lement.
      */
     nsCOMPtr<nsIContent> mXBLInsertionParent;
+
+    /**
+     * Web components custom element data.
+     */
+    nsAutoPtr<CustomElementData> mCustomElementData;
   };
 
 protected:

@@ -25,6 +25,7 @@
 #include "IDBObjectStore.h"
 #include "IDBTransaction.h"
 #include "ProfilerHelpers.h"
+#include "ReportInternalError.h"
 
 #include "ipc/IndexedDBChild.h"
 #include "ipc/IndexedDBParent.h"
@@ -35,6 +36,7 @@ USING_INDEXEDDB_NAMESPACE
 using namespace mozilla::dom;
 using namespace mozilla::dom::indexedDB::ipc;
 using mozilla::ErrorResult;
+using mozilla::Move;
 
 namespace {
 
@@ -438,7 +440,7 @@ IDBIndex::GetInternal(IDBKeyRange* aKeyRange, ErrorResult& aRv)
 
   nsRefPtr<IDBRequest> request = GenerateRequest(this);
   if (!request) {
-    NS_WARNING("Failed to generate request!");
+    IDB_WARNING("Failed to generate request!");
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
     return nullptr;
   }
@@ -448,7 +450,7 @@ IDBIndex::GetInternal(IDBKeyRange* aKeyRange, ErrorResult& aRv)
 
   nsresult rv = helper->DispatchToTransactionPool();
   if (NS_FAILED(rv)) {
-    NS_WARNING("Failed to dispatch!");
+    IDB_WARNING("Failed to dispatch!");
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
     return nullptr;
   }
@@ -480,7 +482,7 @@ IDBIndex::GetKeyInternal(IDBKeyRange* aKeyRange, ErrorResult& aRv)
 
   nsRefPtr<IDBRequest> request = GenerateRequest(this);
   if (!request) {
-    NS_WARNING("Failed to generate request!");
+    IDB_WARNING("Failed to generate request!");
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
     return nullptr;
   }
@@ -490,7 +492,7 @@ IDBIndex::GetKeyInternal(IDBKeyRange* aKeyRange, ErrorResult& aRv)
 
   nsresult rv = helper->DispatchToTransactionPool();
   if (NS_FAILED(rv)) {
-    NS_WARNING("Failed to dispatch!");
+    IDB_WARNING("Failed to dispatch!");
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
     return nullptr;
   }
@@ -523,7 +525,7 @@ IDBIndex::GetAllInternal(IDBKeyRange* aKeyRange, uint32_t aLimit,
 
   nsRefPtr<IDBRequest> request = GenerateRequest(this);
   if (!request) {
-    NS_WARNING("Failed to generate request!");
+    IDB_WARNING("Failed to generate request!");
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
     return nullptr;
   }
@@ -533,7 +535,7 @@ IDBIndex::GetAllInternal(IDBKeyRange* aKeyRange, uint32_t aLimit,
 
   nsresult rv = helper->DispatchToTransactionPool();
   if (NS_FAILED(rv)) {
-    NS_WARNING("Failed to dispatch!");
+    IDB_WARNING("Failed to dispatch!");
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
     return nullptr;
   }
@@ -567,7 +569,7 @@ IDBIndex::GetAllKeysInternal(IDBKeyRange* aKeyRange, uint32_t aLimit,
 
   nsRefPtr<IDBRequest> request = GenerateRequest(this);
   if (!request) {
-    NS_WARNING("Failed to generate request!");
+    IDB_WARNING("Failed to generate request!");
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
     return nullptr;
   }
@@ -577,7 +579,7 @@ IDBIndex::GetAllKeysInternal(IDBKeyRange* aKeyRange, uint32_t aLimit,
 
   nsresult rv = helper->DispatchToTransactionPool();
   if (NS_FAILED(rv)) {
-    NS_WARNING("Failed to dispatch!");
+    IDB_WARNING("Failed to dispatch!");
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
     return nullptr;
   }
@@ -610,7 +612,7 @@ IDBIndex::CountInternal(IDBKeyRange* aKeyRange, ErrorResult& aRv)
 
   nsRefPtr<IDBRequest> request = GenerateRequest(this);
   if (!request) {
-    NS_WARNING("Failed to generate request!");
+    IDB_WARNING("Failed to generate request!");
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
     return nullptr;
   }
@@ -620,7 +622,7 @@ IDBIndex::CountInternal(IDBKeyRange* aKeyRange, ErrorResult& aRv)
 
   nsresult rv = helper->DispatchToTransactionPool();
   if (NS_FAILED(rv)) {
-    NS_WARNING("Failed to dispatch!");
+    IDB_WARNING("Failed to dispatch!");
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
     return nullptr;
   }
@@ -656,7 +658,7 @@ IDBIndex::OpenKeyCursorInternal(IDBKeyRange* aKeyRange, size_t aDirection,
 
   nsRefPtr<IDBRequest> request = GenerateRequest(this);
   if (!request) {
-    NS_WARNING("Failed to generate request!");
+    IDB_WARNING("Failed to generate request!");
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
     return nullptr;
   }
@@ -666,7 +668,7 @@ IDBIndex::OpenKeyCursorInternal(IDBKeyRange* aKeyRange, size_t aDirection,
 
   nsresult rv = helper->DispatchToTransactionPool();
   if (NS_FAILED(rv)) {
-    NS_WARNING("Failed to dispatch!");
+    IDB_WARNING("Failed to dispatch!");
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
     return nullptr;
   }
@@ -702,13 +704,13 @@ IDBIndex::OpenCursorInternal(IDBKeyRange* aKeyRange,
     static_cast<IDBCursor::Direction>(aDirection);
 
   nsRefPtr<IDBRequest> request = GenerateRequest(this);
-  NS_ENSURE_TRUE(request, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_TRUE(request, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   nsRefPtr<OpenCursorHelper> helper =
     new OpenCursorHelper(transaction, request, this, aKeyRange, direction);
 
   nsresult rv = helper->DispatchToTransactionPool();
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   IDB_PROFILER_MARK("IndexedDB Request %llu: "
                     "database(%s).transaction(%s).objectStore(%s).index(%s)."
@@ -741,7 +743,7 @@ IDBIndex::OpenCursorFromChildProcess(IDBRequest* aRequest,
   nsRefPtr<IDBCursor> cursor =
     IDBCursor::Create(aRequest, mObjectStore->Transaction(), this, direction,
                       Key(), EmptyCString(), EmptyCString(), aKey, aObjectKey);
-  NS_ENSURE_TRUE(cursor, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_TRUE(cursor, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   cursor.forget(_retval);
   return NS_OK;
@@ -768,7 +770,7 @@ IDBIndex::OpenCursorFromChildProcess(
   StructuredCloneReadInfo cloneInfo;
 
   if (!cloneInfo.SetFromSerialized(aCloneInfo)) {
-    NS_WARNING("Failed to copy clone buffer!");
+    IDB_WARNING("Failed to copy clone buffer!");
     return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
   }
 
@@ -777,8 +779,8 @@ IDBIndex::OpenCursorFromChildProcess(
   nsRefPtr<IDBCursor> cursor =
     IDBCursor::Create(aRequest, mObjectStore->Transaction(), this, direction,
                       Key(), EmptyCString(), EmptyCString(), aKey, aObjectKey,
-                      cloneInfo);
-  NS_ENSURE_TRUE(cursor, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+                      Move(cloneInfo));
+  IDB_ENSURE_TRUE(cursor, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   NS_ASSERTION(!cloneInfo.mCloneBuffer.data(), "Should have swapped!");
 
@@ -894,7 +896,7 @@ IDBIndex::GetKey(JSContext* aCx, JS::Handle<JS::Value> aKey, ErrorResult& aRv)
 }
 
 already_AddRefed<IDBRequest>
-IDBIndex::GetAll(JSContext* aCx, const Optional<JS::Handle<JS::Value> >& aKey,
+IDBIndex::GetAll(JSContext* aCx, JS::Handle<JS::Value> aKey,
                  const Optional<uint32_t>& aLimit, ErrorResult& aRv)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
@@ -906,10 +908,8 @@ IDBIndex::GetAll(JSContext* aCx, const Optional<JS::Handle<JS::Value> >& aKey,
   }
 
   nsRefPtr<IDBKeyRange> keyRange;
-  if (aKey.WasPassed()) {
-    aRv = IDBKeyRange::FromJSVal(aCx, aKey.Value(), getter_AddRefs(keyRange));
-    ENSURE_SUCCESS(aRv, nullptr);
-  }
+  aRv = IDBKeyRange::FromJSVal(aCx, aKey, getter_AddRefs(keyRange));
+  ENSURE_SUCCESS(aRv, nullptr);
 
   uint32_t limit = UINT32_MAX;
   if (aLimit.WasPassed() && aLimit.Value() > 0) {
@@ -921,7 +921,7 @@ IDBIndex::GetAll(JSContext* aCx, const Optional<JS::Handle<JS::Value> >& aKey,
 
 already_AddRefed<IDBRequest>
 IDBIndex::GetAllKeys(JSContext* aCx,
-                     const Optional<JS::Handle<JS::Value> >& aKey,
+                     JS::Handle<JS::Value> aKey,
                      const Optional<uint32_t>& aLimit, ErrorResult& aRv)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
@@ -933,10 +933,8 @@ IDBIndex::GetAllKeys(JSContext* aCx,
   }
 
   nsRefPtr<IDBKeyRange> keyRange;
-  if (aKey.WasPassed()) {
-    aRv = IDBKeyRange::FromJSVal(aCx, aKey.Value(), getter_AddRefs(keyRange));
-    ENSURE_SUCCESS(aRv, nullptr);
-  }
+  aRv = IDBKeyRange::FromJSVal(aCx, aKey, getter_AddRefs(keyRange));
+  ENSURE_SUCCESS(aRv, nullptr);
 
   uint32_t limit = UINT32_MAX;
   if (aLimit.WasPassed() && aLimit.Value() > 0) {
@@ -948,7 +946,7 @@ IDBIndex::GetAllKeys(JSContext* aCx,
 
 already_AddRefed<IDBRequest>
 IDBIndex::OpenCursor(JSContext* aCx,
-                     const Optional<JS::Handle<JS::Value> >& aRange,
+                     JS::Handle<JS::Value> aRange,
                      IDBCursorDirection aDirection, ErrorResult& aRv)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
@@ -960,16 +958,14 @@ IDBIndex::OpenCursor(JSContext* aCx,
   }
 
   nsRefPtr<IDBKeyRange> keyRange;
-  if (aRange.WasPassed()) {
-    aRv = IDBKeyRange::FromJSVal(aCx, aRange.Value(), getter_AddRefs(keyRange));
-    ENSURE_SUCCESS(aRv, nullptr);
-  }
+  aRv = IDBKeyRange::FromJSVal(aCx, aRange, getter_AddRefs(keyRange));
+  ENSURE_SUCCESS(aRv, nullptr);
 
   IDBCursor::Direction direction = IDBCursor::ConvertDirection(aDirection);
 
   nsRefPtr<IDBRequest> request = GenerateRequest(this);
   if (!request) {
-    NS_WARNING("Failed to generate request!");
+    IDB_WARNING("Failed to generate request!");
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
     return nullptr;
   }
@@ -979,7 +975,7 @@ IDBIndex::OpenCursor(JSContext* aCx,
 
   nsresult rv = helper->DispatchToTransactionPool();
   if (NS_FAILED(rv)) {
-    NS_WARNING("Failed to dispatch!");
+    IDB_WARNING("Failed to dispatch!");
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
     return nullptr;
   }
@@ -989,7 +985,7 @@ IDBIndex::OpenCursor(JSContext* aCx,
 
 already_AddRefed<IDBRequest>
 IDBIndex::OpenKeyCursor(JSContext* aCx,
-                        const Optional<JS::Handle<JS::Value> >& aRange,
+                        JS::Handle<JS::Value> aRange,
                         IDBCursorDirection aDirection, ErrorResult& aRv)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
@@ -1001,10 +997,8 @@ IDBIndex::OpenKeyCursor(JSContext* aCx,
   }
 
   nsRefPtr<IDBKeyRange> keyRange;
-  if (aRange.WasPassed()) {
-    aRv = IDBKeyRange::FromJSVal(aCx, aRange.Value(), getter_AddRefs(keyRange));
-    ENSURE_SUCCESS(aRv, nullptr);
-  }
+  aRv = IDBKeyRange::FromJSVal(aCx, aRange, getter_AddRefs(keyRange));
+  ENSURE_SUCCESS(aRv, nullptr);
 
   IDBCursor::Direction direction = IDBCursor::ConvertDirection(aDirection);
 
@@ -1012,7 +1006,7 @@ IDBIndex::OpenKeyCursor(JSContext* aCx,
 }
 
 already_AddRefed<IDBRequest>
-IDBIndex::Count(JSContext* aCx, const Optional<JS::Handle<JS::Value> >& aKey,
+IDBIndex::Count(JSContext* aCx, JS::Handle<JS::Value> aKey,
                 ErrorResult& aRv)
 {
   IDBTransaction* transaction = mObjectStore->Transaction();
@@ -1022,10 +1016,8 @@ IDBIndex::Count(JSContext* aCx, const Optional<JS::Handle<JS::Value> >& aKey,
   }
 
   nsRefPtr<IDBKeyRange> keyRange;
-  if (aKey.WasPassed()) {
-    aRv = IDBKeyRange::FromJSVal(aCx, aKey.Value(), getter_AddRefs(keyRange));
-    ENSURE_SUCCESS(aRv, nullptr);
-  }
+  aRv = IDBKeyRange::FromJSVal(aCx, aKey, getter_AddRefs(keyRange));
+  ENSURE_SUCCESS(aRv, nullptr);
 
   return CountInternal(keyRange, aRv);
 }
@@ -1051,6 +1043,7 @@ IndexHelper::Dispatch(nsIEventTarget* aDatabaseThread)
   // If we've been invalidated then there's no point sending anything to the
   // parent process.
   if (mIndex->ObjectStore()->Transaction()->Database()->IsInvalidated()) {
+    IDB_REPORT_INTERNAL_ERR();
     return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
   }
 
@@ -1059,11 +1052,11 @@ IndexHelper::Dispatch(nsIEventTarget* aDatabaseThread)
 
   IndexRequestParams params;
   nsresult rv = PackArgumentsForParentProcess(params);
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   NoDispatchEventTarget target;
   rv = AsyncConnectionHelper::Dispatch(&target);
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   mActor = new IndexedDBIndexRequestChild(this, mIndex, params.type());
   indexActor->SendPIndexedDBRequestConstructor(mActor, params);
@@ -1100,20 +1093,20 @@ GetKeyHelper::DoDatabaseWork(mozIStorageConnection* /* aConnection */)
                     NS_LITERAL_CSTRING(" LIMIT 1");
 
   nsCOMPtr<mozIStorageStatement> stmt = mTransaction->GetCachedStatement(query);
-  NS_ENSURE_TRUE(stmt, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_TRUE(stmt, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   mozStorageStatementScoper scoper(stmt);
 
   nsresult rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("index_id"),
                                       mIndex->Id());
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   rv = mKeyRange->BindToStatement(stmt);
   NS_ENSURE_SUCCESS(rv, rv);
 
   bool hasResult;
   rv = stmt->ExecuteStep(&hasResult);
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   if (hasResult) {
     rv = mKey.SetFromStatement(stmt, 0);
@@ -1226,20 +1219,20 @@ GetHelper::DoDatabaseWork(mozIStorageConnection* /* aConnection */)
                     NS_LITERAL_CSTRING(" LIMIT 1");
 
   nsCOMPtr<mozIStorageStatement> stmt = mTransaction->GetCachedStatement(query);
-  NS_ENSURE_TRUE(stmt, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_TRUE(stmt, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   mozStorageStatementScoper scoper(stmt);
 
   nsresult rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("index_id"),
                                       mIndex->Id());
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   rv = mKeyRange->BindToStatement(stmt);
   NS_ENSURE_SUCCESS(rv, rv);
 
   bool hasResult;
   rv = stmt->ExecuteStep(&hasResult);
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   if (hasResult) {
     rv = IDBObjectStore::GetStructuredCloneReadInfoFromStatement(stmt, 0, 1,
@@ -1355,7 +1348,7 @@ GetHelper::UnpackResponseFromParentProcess(const ResponseValue& aResponseValue)
                "Inconsistent clone info!");
 
   if (!mCloneReadInfo.SetFromSerialized(cloneInfo)) {
-    NS_WARNING("Failed to copy clone buffer!");
+    IDB_WARNING("Failed to copy clone buffer!");
     return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
   }
 
@@ -1398,13 +1391,13 @@ GetAllKeysHelper::DoDatabaseWork(mozIStorageConnection* /* aConnection */)
                     keyRangeClause + limitClause;
 
   nsCOMPtr<mozIStorageStatement> stmt = mTransaction->GetCachedStatement(query);
-  NS_ENSURE_TRUE(stmt, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_TRUE(stmt, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   mozStorageStatementScoper scoper(stmt);
 
   nsresult rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("index_id"),
                                       mIndex->Id());
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   if (mKeyRange) {
     rv = mKeyRange->BindToStatement(stmt);
@@ -1425,7 +1418,7 @@ GetAllKeysHelper::DoDatabaseWork(mozIStorageConnection* /* aConnection */)
     rv = key->SetFromStatement(stmt, 0);
     NS_ENSURE_SUCCESS(rv, rv);
   }
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   return NS_OK;
 }
@@ -1444,15 +1437,15 @@ GetAllKeysHelper::GetSuccessResult(JSContext* aCx,
   nsTArray<Key> keys;
   mKeys.SwapElements(keys);
 
-  JS::Rooted<JSObject*> array(aCx, JS_NewArrayObject(aCx, 0, nullptr));
+  JS::Rooted<JSObject*> array(aCx, JS_NewArrayObject(aCx, 0));
   if (!array) {
-    NS_WARNING("Failed to make array!");
+    IDB_WARNING("Failed to make array!");
     return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
   }
 
   if (!keys.IsEmpty()) {
     if (!JS_SetArrayLength(aCx, array, uint32_t(keys.Length()))) {
-      NS_WARNING("Failed to set array length!");
+      IDB_WARNING("Failed to set array length!");
       return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
     }
 
@@ -1467,8 +1460,8 @@ GetAllKeysHelper::GetSuccessResult(JSContext* aCx,
         return rv;
       }
 
-      if (!JS_SetElement(aCx, array, index, &value)) {
-        NS_WARNING("Failed to set array element!");
+      if (!JS_SetElement(aCx, array, index, value)) {
+        IDB_WARNING("Failed to set array element!");
         return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
       }
     }
@@ -1582,13 +1575,13 @@ GetAllHelper::DoDatabaseWork(mozIStorageConnection* /* aConnection */)
                     keyRangeClause + limitClause;
 
   nsCOMPtr<mozIStorageStatement> stmt = mTransaction->GetCachedStatement(query);
-  NS_ENSURE_TRUE(stmt, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_TRUE(stmt, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   mozStorageStatementScoper scoper(stmt);
 
   nsresult rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("index_id"),
                                       mIndex->Id());
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   if (mKeyRange) {
     rv = mKeyRange->BindToStatement(stmt);
@@ -1610,7 +1603,7 @@ GetAllHelper::DoDatabaseWork(mozIStorageConnection* /* aConnection */)
       mDatabase, *readInfo);
     NS_ENSURE_SUCCESS(rv, rv);
   }
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   return NS_OK;
 }
@@ -1761,7 +1754,7 @@ GetAllHelper::UnpackResponseFromParentProcess(
 
     StructuredCloneReadInfo* destInfo = mCloneReadInfos.AppendElement();
     if (!destInfo->SetFromSerialized(srcInfo)) {
-      NS_WARNING("Failed to copy clone buffer!");
+      IDB_WARNING("Failed to copy clone buffer!");
       return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
     }
 
@@ -1821,13 +1814,13 @@ OpenKeyCursorHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
 
   nsCOMPtr<mozIStorageStatement> stmt =
     mTransaction->GetCachedStatement(firstQuery);
-  NS_ENSURE_TRUE(stmt, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_TRUE(stmt, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   mozStorageStatementScoper scoper(stmt);
 
   nsresult rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("index_id"),
                                       mIndex->Id());
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   if (mKeyRange) {
     rv = mKeyRange->BindToStatement(stmt);
@@ -1836,7 +1829,7 @@ OpenKeyCursorHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
 
   bool hasResult;
   rv = stmt->ExecuteStep(&hasResult);
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   if (!hasResult) {
     mKey.Unset();
@@ -1949,7 +1942,7 @@ OpenKeyCursorHelper::EnsureCursor()
   nsRefPtr<IDBCursor> cursor =
     IDBCursor::Create(mRequest, mTransaction, mIndex, mDirection, mRangeKey,
                       mContinueQuery, mContinueToQuery, mKey, mObjectKey);
-  NS_ENSURE_TRUE(cursor, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_TRUE(cursor, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   mCursor.swap(cursor);
   return NS_OK;
@@ -1964,7 +1957,7 @@ OpenKeyCursorHelper::GetSuccessResult(JSContext* aCx,
 
   if (mCursor) {
     rv = WrapNative(aCx, mCursor, aVal);
-    NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+    IDB_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
   }
   else {
     aVal.setUndefined();
@@ -2099,8 +2092,7 @@ OpenKeyCursorHelper::UnpackResponseFromParentProcess(
     } break;
 
     default:
-      NS_NOTREACHED("Unknown response union type!");
-      return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
+      MOZ_CRASH();
   }
 
   return NS_OK;
@@ -2166,12 +2158,12 @@ OpenCursorHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
 
   nsCOMPtr<mozIStorageStatement> stmt =
     mTransaction->GetCachedStatement(firstQuery);
-  NS_ENSURE_TRUE(stmt, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_TRUE(stmt, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   mozStorageStatementScoper scoper(stmt);
 
   nsresult rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("id"), mIndex->Id());
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   if (mKeyRange) {
     rv = mKeyRange->BindToStatement(stmt);
@@ -2180,7 +2172,7 @@ OpenCursorHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
 
   bool hasResult;
   rv = stmt->ExecuteStep(&hasResult);
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   if (!hasResult) {
     mKey.Unset();
@@ -2303,8 +2295,8 @@ OpenCursorHelper::EnsureCursor()
   nsRefPtr<IDBCursor> cursor =
     IDBCursor::Create(mRequest, mTransaction, mIndex, mDirection, mRangeKey,
                       mContinueQuery, mContinueToQuery, mKey, mObjectKey,
-                      mCloneReadInfo);
-  NS_ENSURE_TRUE(cursor, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+                      Move(mCloneReadInfo));
+  IDB_ENSURE_TRUE(cursor, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   NS_ASSERTION(!mCloneReadInfo.mCloneBuffer.data(), "Should have swapped!");
 
@@ -2477,12 +2469,12 @@ CountHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
                     keyRangeClause;
 
   nsCOMPtr<mozIStorageStatement> stmt = mTransaction->GetCachedStatement(query);
-  NS_ENSURE_TRUE(stmt, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_TRUE(stmt, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   mozStorageStatementScoper scoper(stmt);
 
   nsresult rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("id"), mIndex->Id());
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   if (mKeyRange) {
     if (!mKeyRange->Lower().IsUnset()) {
@@ -2497,8 +2489,8 @@ CountHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
 
   bool hasResult;
   rv = stmt->ExecuteStep(&hasResult);
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
-  NS_ENSURE_TRUE(hasResult, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  IDB_ENSURE_TRUE(hasResult, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   mCount = stmt->AsInt64(0);
   return NS_OK;

@@ -5,6 +5,7 @@
 
 var gPluginHandler = {
   PREF_NOTIFY_MISSING_FLASH: "plugins.notifyMissingFlash",
+  PREF_HIDE_MISSING_PLUGINS_NOTIFICATION: "plugins.hideMissingPluginsNotification",
   PREF_SESSION_PERSIST_MINUTES: "plugin.sessionPermissionNow.intervalInMinutes",
   PREF_PERSISTENT_DAYS: "plugin.persistentPermissionAlways.intervalInDays",
 
@@ -32,14 +33,9 @@ var gPluginHandler = {
     let fallbackType = null;
     let blocklistState = null;
 
-    if (pluginElement instanceof HTMLAppletElement) {
-      tagMimetype = "application/x-java-vm";
-    } else {
-      tagMimetype = pluginElement.actualType;
-
-      if (tagMimetype == "") {
-        tagMimetype = pluginElement.type;
-      }
+    tagMimetype = pluginElement.actualType;
+    if (tagMimetype == "") {
+      tagMimetype = pluginElement.type;
     }
 
     if (gPluginHandler.isKnownPlugin(pluginElement)) {
@@ -134,8 +130,12 @@ var gPluginHandler = {
       return false;
     }
 
+    let contentWindow = plugin.ownerDocument.defaultView;
+    let cwu = contentWindow.QueryInterface(Ci.nsIInterfaceRequestor)
+                           .getInterface(Ci.nsIDOMWindowUtils);
+
     for (let [x, y] of points) {
-      let el = plugin.ownerDocument.elementFromPoint(x, y);
+      let el = cwu.elementFromPoint(x, y, true, true);
       if (el !== plugin) {
         return false;
       }
@@ -271,7 +271,8 @@ var gPluginHandler = {
     if (eventType == "PluginRemoved") {
       let doc = event.target;
       let browser = gBrowser.getBrowserForDocument(doc.defaultView.top.document);
-      this._setPluginNotificationIcon(browser);
+      if (browser)
+        this._setPluginNotificationIcon(browser);
       return;
     }
 
@@ -301,6 +302,8 @@ var gPluginHandler = {
 
     let shouldShowNotification = false;
     let browser = gBrowser.getBrowserForDocument(doc.defaultView.top.document);
+    if (!browser)
+      return;
 
     switch (eventType) {
       case "PluginCrashed":
@@ -379,6 +382,14 @@ var gPluginHandler = {
         plugin.addEventListener("overflow", resizeListener);
         plugin.addEventListener("underflow", resizeListener);
       }
+    }
+
+    let closeIcon = this.getPluginUI(plugin, "closeIcon");
+    if (closeIcon) {
+      closeIcon.addEventListener("click", function(aEvent) {
+        if (aEvent.button == 0 && aEvent.isTrusted)
+          gPluginHandler.hideClickToPlayOverlay(plugin);
+      }, true);
     }
 
     if (shouldShowNotification) {
@@ -501,6 +512,12 @@ var gPluginHandler = {
   },
 
   showInstallNotification: function (aPlugin) {
+    let hideMissingPluginsNotification =
+      Services.prefs.getBoolPref(this.PREF_HIDE_MISSING_PLUGINS_NOTIFICATION);
+    if (hideMissingPluginsNotification) {
+      return false;
+    }
+
     let browser = gBrowser.getBrowserForDocument(aPlugin.ownerDocument
                                                         .defaultView.top.document);
     if (!browser.missingPlugins)
@@ -581,11 +598,6 @@ var gPluginHandler = {
 
     if (overlay) {
       overlay.addEventListener("click", gPluginHandler._overlayClickListener, true);
-      let closeIcon = this.getPluginUI(aPlugin, "closeIcon");
-      closeIcon.addEventListener("click", function(aEvent) {
-        if (aEvent.button == 0 && aEvent.isTrusted)
-          gPluginHandler.hideClickToPlayOverlay(aPlugin);
-      }, true);
     }
   },
 
@@ -681,7 +693,7 @@ var gPluginHandler = {
       Services.telemetry.getHistogramById("PLUGINS_NOTIFICATION_SHOWN")
         .add(!this.options.primaryPlugin);
       // Histograms always start at 0, even though our data starts at 1
-      let histogramCount = this.options.centerActions.size - 1;
+      let histogramCount = this.options.pluginData.size - 1;
       if (histogramCount > 4) {
         histogramCount = 4;
       }
@@ -841,12 +853,12 @@ var gPluginHandler = {
       plugins = [aPlugin];
     }
 
-    // If this is a new notification, create a centerActions map, otherwise append
-    let centerActions;
+    // If this is a new notification, create a pluginData map, otherwise append
+    let pluginData;
     if (notification) {
-      centerActions = notification.options.centerActions;
+      pluginData = notification.options.pluginData;
     } else {
-      centerActions = new Map();
+      pluginData = new Map();
     }
 
     let principal = aBrowser.contentDocument.nodePrincipal;
@@ -858,7 +870,7 @@ var gPluginHandler = {
         Cu.reportError("No permission string for active plugin.");
         continue;
       }
-      if (centerActions.has(pluginInfo.permissionString)) {
+      if (pluginData.has(pluginInfo.permissionString)) {
         continue;
       }
 
@@ -885,8 +897,8 @@ var gPluginHandler = {
         url = Services.urlFormatter.formatURLPref("app.support.baseURL") + "clicktoplay";
       }
       pluginInfo.detailsLink = url;
-      
-      centerActions.set(pluginInfo.permissionString, pluginInfo);
+
+      pluginData.set(pluginInfo.permissionString, pluginInfo);
     }
 
     let primaryPluginPermission = null;
@@ -909,7 +921,7 @@ var gPluginHandler = {
       dismissed: !aShowNow,
       eventCallback: this._clickToPlayNotificationEventCallback,
       primaryPlugin: primaryPluginPermission,
-      centerActions: centerActions
+      pluginData: pluginData
     };
     PopupNotifications.show(aBrowser, "click-to-play-plugins",
                             "", "plugins-notification-icon",
@@ -931,7 +943,7 @@ var gPluginHandler = {
     // outdated plugins.
     let haveInsecure = false;
     let actions = new Map();
-    for (let action of notification.options.centerActions.values()) {
+    for (let action of notification.options.pluginData.values()) {
       switch (action.fallbackType) {
         // haveInsecure will trigger the red flashing icon and the infobar
         // styling below

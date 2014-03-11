@@ -13,7 +13,7 @@
 #include "nsIPresShell.h"
 #include "nsIContent.h"
 #include "nsViewManager.h"
-#include "nsINameSpaceManager.h"
+#include "nsNameSpaceManager.h"
 #include "nsGfxCIID.h"
 #include "nsTransform2D.h"
 #include "nsMenuFrame.h"
@@ -57,7 +57,7 @@ nsNativeThemeGTK::~nsNativeThemeGTK() {
 
 NS_IMETHODIMP
 nsNativeThemeGTK::Observe(nsISupports *aSubject, const char *aTopic,
-                          const PRUnichar *aData)
+                          const char16_t *aData)
 {
   if (!nsCRT::strcmp(aTopic, "xpcom-shutdown")) {
     moz_gtk_shutdown();

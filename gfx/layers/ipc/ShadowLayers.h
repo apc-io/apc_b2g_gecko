@@ -11,7 +11,6 @@
 #include <stddef.h>                     // for size_t
 #include <stdint.h>                     // for uint64_t
 #include "gfxTypes.h"
-#include "gfxPoint.h"                   // for gfxIntSize
 #include "mozilla/Attributes.h"         // for MOZ_OVERRIDE
 #include "mozilla/WidgetUtils.h"        // for ScreenRotation
 #include "mozilla/dom/ScreenOrientation.h"  // for ScreenOrientation
@@ -29,7 +28,7 @@ class gfxASurface;
 namespace mozilla {
 namespace layers {
 
-class BasicTiledLayerBuffer;
+class ClientTiledLayerBuffer;
 class CanvasClient;
 class CanvasLayerComposite;
 class CanvasSurface;
@@ -149,7 +148,8 @@ public:
    */
   void Connect(CompositableClient* aCompositable);
 
-  virtual PTextureChild* CreateEmptyTextureChild() MOZ_OVERRIDE;
+  virtual PTextureChild* CreateTexture(const SurfaceDescriptor& aSharedData,
+                                       TextureFlags aFlags) MOZ_OVERRIDE;
 
   virtual void CreatedSingleBuffer(CompositableClient* aCompositable,
                                    const SurfaceDescriptor& aDescriptor,
@@ -255,14 +255,10 @@ public:
                ShadowableLayer* aMaskLayer);
 
   /**
-   * Notify the compositor that a tiled layer buffer has changed
-   * that needs to be synced to the shadow retained copy. The tiled
-   * layer buffer will operate directly on the shadow retained buffer
-   * and is free to choose it's own internal representation (double buffering,
-   * copy on write, tiling).
+   * See CompositableForwarder::UseTiledLayerBuffer
    */
-  virtual void PaintedTiledLayerBuffer(CompositableClient* aCompositable,
-                                       const SurfaceDescriptorTiles& aTileLayerDescriptor) MOZ_OVERRIDE;
+  virtual void UseTiledLayerBuffer(CompositableClient* aCompositable,
+                                   const SurfaceDescriptorTiles& aTileLayerDescriptor) MOZ_OVERRIDE;
 
   /**
    * Notify the compositor that a compositable will be updated asynchronously
@@ -278,6 +274,9 @@ public:
   virtual void UpdateTexture(CompositableClient* aCompositable,
                              TextureIdentifier aTextureId,
                              SurfaceDescriptor* aDescriptor) MOZ_OVERRIDE;
+
+  virtual void RemoveTextureFromCompositable(CompositableClient* aCompositable,
+                                             TextureClient* aTexture) MOZ_OVERRIDE;
 
   virtual void RemoveTexture(TextureClient* aTexture) MOZ_OVERRIDE;
 
@@ -321,6 +320,9 @@ public:
    */
   virtual void UseTexture(CompositableClient* aCompositable,
                           TextureClient* aClient) MOZ_OVERRIDE;
+  virtual void UseComponentAlphaTextures(CompositableClient* aCompositable,
+                                         TextureClient* aClientOnBlack,
+                                         TextureClient* aClientOnWhite) MOZ_OVERRIDE;
 
   /**
    * End the current transaction and forward it to LayerManagerComposite.
@@ -385,6 +387,7 @@ public:
   virtual void DeallocShmem(mozilla::ipc::Shmem& aShmem) MOZ_OVERRIDE;
 
   virtual bool IPCOpen() const MOZ_OVERRIDE;
+  virtual bool IsSameProcess() const MOZ_OVERRIDE;
 
   /**
    * Construct a shadow of |aLayer| on the "other side", at the
@@ -415,7 +418,7 @@ protected:
 
 #ifdef MOZ_HAVE_SURFACEDESCRIPTORGRALLOC
   // from ISurfaceAllocator
-  virtual PGrallocBufferChild* AllocGrallocBuffer(const gfxIntSize& aSize,
+  virtual PGrallocBufferChild* AllocGrallocBuffer(const gfx::IntSize& aSize,
                                                   uint32_t aFormat,
                                                   uint32_t aUsage,
                                                   MaybeMagicGrallocBufferHandle* aHandle) MOZ_OVERRIDE;
@@ -441,17 +444,17 @@ private:
                                           gfxContentType* aContent,
                                           gfxASurface** aSurface);
   // (Same as above, but for surface size.)
-  static gfxIntSize
+  static gfx::IntSize
   GetDescriptorSurfaceSize(const SurfaceDescriptor& aDescriptor,
                            OpenMode aMode,
                            gfxASurface** aSurface);
   static bool
   PlatformGetDescriptorSurfaceSize(const SurfaceDescriptor& aDescriptor,
                                    OpenMode aMode,
-                                   gfxIntSize* aSize,
+                                   gfx::IntSize* aSize,
                                    gfxASurface** aSurface);
   // And again, for the image format.
-  // This function will return gfxImageFormatUnknown only if |aDescriptor|
+  // This function will return gfxImageFormat::Unknown only if |aDescriptor|
   // describes a non-ImageSurface.
   static gfxImageFormat
   GetDescriptorSurfaceImageFormat(const SurfaceDescriptor& aDescriptor,

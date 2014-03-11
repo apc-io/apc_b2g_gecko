@@ -11,7 +11,7 @@ import org.mozilla.gecko.PrefsHelper;
 import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.Tabs;
 import org.mozilla.gecko.ZoomConstraints;
-import org.mozilla.gecko.util.EventDispatcher;
+import org.mozilla.gecko.EventDispatcher;
 import org.mozilla.gecko.util.FloatUtils;
 import org.mozilla.gecko.util.GamepadUtils;
 import org.mozilla.gecko.util.GeckoEventListener;
@@ -128,6 +128,8 @@ class JavaPanZoomController
     private boolean mMediumPress;
     /* Used to change the scrollY direction */
     private boolean mNegateWheelScrollY;
+    /* Whether the current event has been default-prevented. */
+    private boolean mDefaultPrevented;
 
     // Handler to be notified when overscroll occurs
     private Overscroll mOverscroll;
@@ -245,12 +247,16 @@ class JavaPanZoomController
                 final RectF zoomRect = new RectF(x, y,
                                      x + (float)message.getDouble("w"),
                                      y + (float)message.getDouble("h"));
-                mTarget.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        animatedZoomTo(zoomRect);
-                    }
-                });
+                if (message.optBoolean("animate", true)) {
+                    mTarget.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            animatedZoomTo(zoomRect);
+                        }
+                    });
+                } else {
+                    mTarget.setViewportMetrics(getMetricsToZoomTo(zoomRect));
+                }
             } else if (MESSAGE_ZOOM_PAGE.equals(event)) {
                 ImmutableViewportMetrics metrics = getMetrics();
                 RectF cssPageRect = metrics.getCssPageRect();
@@ -264,12 +270,16 @@ class JavaPanZoomController
                                     y + dh/2,
                                     cssPageRect.width(),
                                     y + dh/2 + newHeight);
-                mTarget.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        animatedZoomTo(r);
-                    }
-                });
+                if (message.optBoolean("animate", true)) {
+                    mTarget.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            animatedZoomTo(r);
+                        }
+                    });
+                } else {
+                    mTarget.setViewportMetrics(getMetricsToZoomTo(r));
+                }
             } else if (MESSAGE_TOUCH_LISTENER.equals(event)) {
                 int tabId = message.getInt("tabID");
                 final Tab tab = Tabs.getInstance().getTab(tabId);
@@ -335,7 +345,9 @@ class JavaPanZoomController
         return mTouchEventHandler.handleEvent(event);
     }
 
-    boolean handleEvent(MotionEvent event) {
+    boolean handleEvent(MotionEvent event, boolean defaultPrevented) {
+        mDefaultPrevented = defaultPrevented;
+
         switch (event.getAction() & MotionEvent.ACTION_MASK) {
         case MotionEvent.ACTION_DOWN:   return handleTouchStart(event);
         case MotionEvent.ACTION_MOVE:   return handleTouchMove(event);
@@ -390,17 +402,6 @@ class JavaPanZoomController
             // seting the state will kill any animations in progress, possibly leaving
             // the page in overscroll
             setState(PanZoomState.WAITING_LISTENERS);
-        }
-    }
-
-    /** This function must be called on the UI thread. */
-    public void preventedTouchFinished() {
-        checkMainThread();
-        if (mState == PanZoomState.WAITING_LISTENERS) {
-            // if we enter here, we just finished a block of events whose default actions
-            // were prevented by touch listeners. Now there are no touch points left, so
-            // we need to reset our state and re-bounce because we might be in overscroll
-            bounce();
         }
     }
 
@@ -516,16 +517,18 @@ class JavaPanZoomController
         case FLING:
         case AUTONAV:
         case BOUNCE:
-        case WAITING_LISTENERS:
-            // should never happen
-            Log.e(LOGTAG, "Received impossible touch end while in " + mState);
-            // fall through
         case ANIMATED_ZOOM:
         case NOTHING:
             // may happen if user double-taps and drags without lifting after the
             // second tap. ignore if this happens.
             return false;
 
+        case WAITING_LISTENERS:
+            if (!mDefaultPrevented) {
+              // should never happen
+              Log.e(LOGTAG, "Received impossible touch end while in " + mState);
+            }
+            // fall through
         case TOUCHING:
             // the switch into TOUCHING might have happened while the page was
             // snapping back after overscroll. we need to finish the snap if that
@@ -553,16 +556,6 @@ class JavaPanZoomController
 
     private boolean handleTouchCancel(MotionEvent event) {
         cancelTouch();
-
-        if (mState == PanZoomState.WAITING_LISTENERS) {
-            // we might get a cancel event from the TouchEventHandler while in the
-            // WAITING_LISTENERS state if the touch listeners prevent-default the
-            // block of events. at this point being in WAITING_LISTENERS is equivalent
-            // to being in NOTHING with the exception of possibly being in overscroll.
-            // so here we don't want to do anything right now; the overscroll will be
-            // corrected in preventedTouchFinished().
-            return false;
-        }
 
         // ensure we snap back if we're overscrolled
         bounce();
@@ -819,9 +812,9 @@ class JavaPanZoomController
         if (FloatUtils.fuzzyEquals(displacement.x, 0.0f) && FloatUtils.fuzzyEquals(displacement.y, 0.0f)) {
             return;
         }
-        if (mSubscroller.scrollBy(displacement)) {
+        if (mDefaultPrevented || mSubscroller.scrollBy(displacement)) {
             synchronized (mTarget.getLock()) {
-                mTarget.onSubdocumentScrollBy(displacement.x, displacement.y);
+                mTarget.scrollMarginsBy(displacement.x, displacement.y);
             }
         } else {
             synchronized (mTarget.getLock()) {
@@ -1361,10 +1354,11 @@ class JavaPanZoomController
 
     @Override
     public boolean onSingleTapUp(MotionEvent motionEvent) {
-        // When zooming is enabled, we wait to see if there's a double-tap.
+        // When double-tapping is allowed, we have to wait to see if this is
+        // going to be a double-tap.
         // However, if mMediumPress is true then we know there will be no
         // double-tap so we treat this as a click.
-        if (mMediumPress || !mTarget.getZoomConstraints().getAllowZoom()) {
+        if (mMediumPress || !mTarget.getZoomConstraints().getAllowDoubleTapZoom()) {
             sendPointToGecko("Gesture:SingleTap", motionEvent);
         }
         // return false because we still want to get the ACTION_UP event that triggers this
@@ -1374,7 +1368,7 @@ class JavaPanZoomController
     @Override
     public boolean onSingleTapConfirmed(MotionEvent motionEvent) {
         // When zooming is disabled, we handle this in onSingleTapUp.
-        if (mTarget.getZoomConstraints().getAllowZoom()) {
+        if (mTarget.getZoomConstraints().getAllowDoubleTapZoom()) {
             sendPointToGecko("Gesture:SingleTap", motionEvent);
         }
         return true;
@@ -1382,7 +1376,7 @@ class JavaPanZoomController
 
     @Override
     public boolean onDoubleTap(MotionEvent motionEvent) {
-        if (mTarget.getZoomConstraints().getAllowZoom()) {
+        if (mTarget.getZoomConstraints().getAllowDoubleTapZoom()) {
             sendPointToGecko("Gesture:DoubleTap", motionEvent);
         }
         return true;
@@ -1399,7 +1393,7 @@ class JavaPanZoomController
      * While we usually use device pixels, @zoomToRect must be specified in CSS
      * pixels.
      */
-    private boolean animatedZoomTo(RectF zoomToRect) {
+    private ImmutableViewportMetrics getMetricsToZoomTo(RectF zoomToRect) {
         final float startZoom = getMetrics().zoomFactor;
 
         RectF viewport = getMetrics().getViewport();
@@ -1434,8 +1428,11 @@ class JavaPanZoomController
         // 2. now run getValidViewportMetrics on it, so that the target viewport is
         // clamped down to prevent overscroll, over-zoom, and other bad conditions.
         finalMetrics = getValidViewportMetrics(finalMetrics);
+        return finalMetrics;
+    }
 
-        bounce(finalMetrics, PanZoomState.ANIMATED_ZOOM);
+    private boolean animatedZoomTo(RectF zoomToRect) {
+        bounce(getMetricsToZoomTo(zoomToRect), PanZoomState.ANIMATED_ZOOM);
         return true;
     }
 

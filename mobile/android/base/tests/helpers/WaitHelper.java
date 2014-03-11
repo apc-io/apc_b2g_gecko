@@ -15,6 +15,8 @@ import org.mozilla.gecko.tests.UITestContext.ComponentType;
 import com.jayway.android.robotium.solo.Condition;
 import com.jayway.android.robotium.solo.Solo;
 
+import java.util.regex.Pattern;
+
 /**
  * Provides functionality related to waiting on certain events to happen.
  */
@@ -23,7 +25,7 @@ public final class WaitHelper {
     // assertion from waitFor)?
     private static final int DEFAULT_MAX_WAIT_MS = 5000;
     private static final int PAGE_LOAD_WAIT_MS = 10000;
-    private static final int CHANGE_WAIT_MS = 5000;
+    private static final int CHANGE_WAIT_MS = 10000;
 
     // TODO: via lucasr - Add ThrobberVisibilityChangeVerifier?
     private static final ChangeVerifier[] PAGE_LOAD_VERIFIERS = new ChangeVerifier[] {
@@ -38,7 +40,7 @@ public final class WaitHelper {
 
     private WaitHelper() { /* To disallow instantiation. */ }
 
-    public static void init(final UITestContext context) {
+    protected static void init(final UITestContext context) {
         sContext = context;
         sSolo = context.getSolo();
         sActions = context.getActions();
@@ -52,7 +54,7 @@ public final class WaitHelper {
      */
     public static void waitFor(String message, final Condition condition) {
         message = "Waiting for " + message + ".";
-        assertTrue(message, sSolo.waitForCondition(condition, DEFAULT_MAX_WAIT_MS));
+        fAssertTrue(message, sSolo.waitForCondition(condition, DEFAULT_MAX_WAIT_MS));
     }
 
     /**
@@ -61,7 +63,7 @@ public final class WaitHelper {
      */
     public static void waitFor(String message, final Condition condition, final int waitMillis) {
         message = "Waiting for " + message + " with timeout " + waitMillis + ".";
-        assertTrue(message, sSolo.waitForCondition(condition, waitMillis));
+        fAssertTrue(message, sSolo.waitForCondition(condition, waitMillis));
     }
 
     /**
@@ -69,7 +71,7 @@ public final class WaitHelper {
      * that will perform the action that will cause the page to load.
      */
     public static void waitForPageLoad(final Runnable initiatingAction) {
-        assertNotNull("initiatingAction is not null", initiatingAction);
+        fAssertNotNull("initiatingAction is not null", initiatingAction);
 
         // Some changes to the UI occur in response to the same event we listen to for when
         // the page has finished loading (e.g. a page title update). As such, we ensure this
@@ -103,7 +105,7 @@ public final class WaitHelper {
                 }
             }, CHANGE_WAIT_MS);
 
-            sContext.dumpLog(verifier.getLogTag() +
+            sContext.dumpLog(verifier.getLogTag(),
                     (hasTimedOut ? "timed out." : "was satisfied."));
         }
     }
@@ -127,11 +129,10 @@ public final class WaitHelper {
     }
 
     private static class ToolbarTitleTextChangeVerifier implements ChangeVerifier {
-        private static final String LOGTAG =
-                ToolbarTitleTextChangeVerifier.class.getSimpleName() + ": ";
+        private static final String LOGTAG = ToolbarTitleTextChangeVerifier.class.getSimpleName();
 
         // A regex that matches the page title that shows up while the page is loading.
-        private static final String LOADING_REGEX = "^[A-Za-z]{3,9}://";
+        private static final Pattern LOADING_PREFIX = Pattern.compile("[A-Za-z]{3,9}://");
 
         private CharSequence mOldTitleText;
 
@@ -143,7 +144,7 @@ public final class WaitHelper {
         @Override
         public void storeState() {
             mOldTitleText = sToolbar.getPotentiallyInconsistentTitle();
-            sContext.dumpLog(LOGTAG + "stored title, \"" + mOldTitleText + "\".");
+            sContext.dumpLog(LOGTAG, "stored title, \"" + mOldTitleText + "\".");
         }
 
         @Override
@@ -157,11 +158,11 @@ public final class WaitHelper {
             // (e.g. the page title). However, the title is set to the URL before the title is
             // loaded from the server and set as the final page title; we ignore the
             // intermediate URL loading state here.
-            final boolean isLoading = title.toString().matches(LOADING_REGEX);
+            final boolean isLoading = LOADING_PREFIX.matcher(title).lookingAt();
             final boolean hasStateChanged = !isLoading && !mOldTitleText.equals(title);
 
             if (hasStateChanged) {
-                sContext.dumpLog(LOGTAG + "state changed to title, \"" + title + "\".");
+                sContext.dumpLog(LOGTAG, "state changed to title, \"" + title + "\".");
             }
             return hasStateChanged;
         }

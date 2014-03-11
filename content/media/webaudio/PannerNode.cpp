@@ -133,10 +133,10 @@ public:
     }
   }
 
-  virtual void ProduceAudioBlock(AudioNodeStream* aStream,
-                                 const AudioChunk& aInput,
-                                 AudioChunk* aOutput,
-                                 bool *aFinished) MOZ_OVERRIDE
+  virtual void ProcessBlock(AudioNodeStream* aStream,
+                            const AudioChunk& aInput,
+                            AudioChunk* aOutput,
+                            bool *aFinished) MOZ_OVERRIDE
   {
     if (aInput.IsNull()) {
       // mLeftOverData != INT_MIN means that the panning model was HRTF and a
@@ -172,7 +172,6 @@ public:
   }
 
   void ComputeAzimuthAndElevation(float& aAzimuth, float& aElevation);
-  void DistanceAndConeGain(AudioChunk* aChunk, float aGain);
   float ComputeConeGain();
   // Compute how much the distance contributes to the gain reduction.
   float ComputeDistanceGain();
@@ -280,8 +279,6 @@ void
 PannerNodeEngine::HRTFPanningFunction(const AudioChunk& aInput,
                                       AudioChunk* aOutput)
 {
-  int numChannels = aInput.mChannelData.Length();
-
   // The output of this node is always stereo, no matter what the inputs are.
   AllocateAudioBlock(2, aOutput);
 
@@ -290,20 +287,9 @@ PannerNodeEngine::HRTFPanningFunction(const AudioChunk& aInput,
 
   AudioChunk input = aInput;
   // Gain is applied before the delay and convolution of the HRTF
-  if (!input.IsNull()) {
-    float gain = ComputeConeGain() * ComputeDistanceGain() * aInput.mVolume;
-    if (gain != 1.0f) {
-      AllocateAudioBlock(numChannels, &input);
-      for (int i = 0; i < numChannels; ++i) {
-        const float* src = static_cast<const float*>(aInput.mChannelData[i]);
-        float* dest =
-          static_cast<float*>(const_cast<void*>(input.mChannelData[i]));
-        AudioBlockCopyChannelWithScale(src, gain, dest);
-      }
-    }
-  }
+  input.mVolume *= ComputeConeGain() * ComputeDistanceGain();
 
-  mHRTFPanner->pan(azimuth, elevation, &input, aOutput, WEBAUDIO_BLOCK_SIZE);
+  mHRTFPanner->pan(azimuth, elevation, &input, aOutput);
 }
 
 void
@@ -353,8 +339,8 @@ PannerNodeEngine::EqualPowerPanningFunction(const AudioChunk& aInput,
   distanceGain = ComputeDistanceGain();
 
   // Actually compute the left and right gain.
-  gainL = cos(0.5 * M_PI * normalizedAzimuth) * aInput.mVolume;
-  gainR = sin(0.5 * M_PI * normalizedAzimuth) * aInput.mVolume;
+  gainL = cos(0.5 * M_PI * normalizedAzimuth);
+  gainR = sin(0.5 * M_PI * normalizedAzimuth);
 
   // Compute the output.
   if (inputChannels == 1) {
@@ -363,7 +349,7 @@ PannerNodeEngine::EqualPowerPanningFunction(const AudioChunk& aInput,
     GainStereoToStereo(aInput, aOutput, gainL, gainR, azimuth);
   }
 
-  DistanceAndConeGain(aOutput, distanceGain * coneGain);
+  aOutput->mVolume = aInput.mVolume * distanceGain * coneGain;
 }
 
 void
@@ -387,15 +373,6 @@ PannerNodeEngine::GainStereoToStereo(const AudioChunk& aInput, AudioChunk* aOutp
   const float* inputR = static_cast<float*>(const_cast<void*>(aInput.mChannelData[1]));
 
   AudioBlockPanStereoToStereo(inputL, inputR, aGainL, aGainR, aAzimuth <= 0, outputL, outputR);
-}
-
-void
-PannerNodeEngine::DistanceAndConeGain(AudioChunk* aChunk, float aGain)
-{
-  float* samples = static_cast<float*>(const_cast<void*>(*aChunk->mChannelData.Elements()));
-  uint32_t channelCount = aChunk->mChannelData.Length();
-
-  AudioBufferInPlaceScale(samples, channelCount, aGain);
 }
 
 // This algorithm is specified in the webaudio spec.

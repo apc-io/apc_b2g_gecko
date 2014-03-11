@@ -416,7 +416,7 @@ nsFloatManager::GetLowestFloatTop() const
   return mFloats[mFloats.Length() - 1].mRect.y - mY;
 }
 
-#ifdef DEBUG
+#ifdef DEBUG_FRAME_DUMP
 void
 DebugListFloatManager(const nsFloatManager *aFloatManager)
 {
@@ -431,10 +431,10 @@ nsFloatManager::List(FILE* out) const
 
   for (uint32_t i = 0; i < mFloats.Length(); ++i) {
     const FloatInfo &fi = mFloats[i];
-    printf("Float %u: frame=%p rect={%d,%d,%d,%d} ymost={l:%d, r:%d}\n",
-           i, static_cast<void*>(fi.mFrame),
-           fi.mRect.x, fi.mRect.y, fi.mRect.width, fi.mRect.height,
-           fi.mLeftYMost, fi.mRightYMost);
+    fprintf_stderr(out, "Float %u: frame=%p rect={%d,%d,%d,%d} ymost={l:%d, r:%d}\n",
+                   i, static_cast<void*>(fi.mFrame),
+                   fi.mRect.x, fi.mRect.y, fi.mRect.width, fi.mRect.height,
+                   fi.mLeftYMost, fi.mRightYMost);
   }
   return NS_OK;
 }
@@ -455,7 +455,7 @@ nsFloatManager::ClearFloats(nscoord aY, uint8_t aBreakType,
 
   const FloatInfo &tail = mFloats[mFloats.Length() - 1];
   switch (aBreakType) {
-    case NS_STYLE_CLEAR_LEFT_AND_RIGHT:
+    case NS_STYLE_CLEAR_BOTH:
       bottom = std::max(bottom, tail.mLeftYMost);
       bottom = std::max(bottom, tail.mRightYMost);
       break;
@@ -479,10 +479,10 @@ bool
 nsFloatManager::ClearContinues(uint8_t aBreakType) const
 {
   return ((mPushedLeftFloatPastBreak || mSplitLeftFloatAcrossBreak) &&
-          (aBreakType == NS_STYLE_CLEAR_LEFT_AND_RIGHT ||
+          (aBreakType == NS_STYLE_CLEAR_BOTH ||
            aBreakType == NS_STYLE_CLEAR_LEFT)) ||
          ((mPushedRightFloatPastBreak || mSplitRightFloatAcrossBreak) &&
-          (aBreakType == NS_STYLE_CLEAR_LEFT_AND_RIGHT ||
+          (aBreakType == NS_STYLE_CLEAR_BOTH ||
            aBreakType == NS_STYLE_CLEAR_RIGHT));
 }
 

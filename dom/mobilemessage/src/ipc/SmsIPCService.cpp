@@ -10,7 +10,6 @@
 #include "SmsMessage.h"
 #include "SmsFilter.h"
 #include "SmsSegmentInfo.h"
-#include "DictionaryHelpers.h"
 #include "nsJSUtils.h"
 #include "nsCxPusher.h"
 #include "mozilla/dom/MobileMessageManagerBinding.h"
@@ -120,7 +119,7 @@ SmsIPCService::SmsIPCService()
 NS_IMETHODIMP
 SmsIPCService::Observe(nsISupports* aSubject,
                        const char* aTopic,
-                       const PRUnichar* aData)
+                       const char16_t* aData)
 {
   if (!strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID)) {
     nsDependentString data(aData);
@@ -315,7 +314,7 @@ SmsIPCService::GetMmsDefaultServiceId(uint32_t* aServiceId)
 
 NS_IMETHODIMP
 SmsIPCService::Send(uint32_t aServiceId,
-                    const JS::Value& aParameters,
+                    JS::Handle<JS::Value> aParameters,
                     nsIMobileMessageCallback *aRequest)
 {
   SendMmsMessageRequest req;

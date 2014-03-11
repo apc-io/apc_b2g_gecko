@@ -6,7 +6,6 @@
 #include "ClientLayerManager.h"
 #include "CompositorChild.h"            // for CompositorChild
 #include "GeckoProfiler.h"              // for PROFILER_LABEL
-#include "gfx3DMatrix.h"                // for gfx3DMatrix
 #include "gfxASurface.h"                // for gfxASurface, etc
 #include "ipc/AutoOpenSurface.h"        // for AutoOpenSurface
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
@@ -21,10 +20,12 @@
 #include "mozilla/layers/LayersSurfaces.h"  // for SurfaceDescriptor
 #include "mozilla/layers/PLayerChild.h"  // for PLayerChild
 #include "mozilla/layers/LayerTransactionChild.h"
+#include "mozilla/layers/TextureClientPool.h" // for TextureClientPool
 #include "nsAString.h"
 #include "nsIWidget.h"                  // for nsIWidget
 #include "nsTArray.h"                   // for AutoInfallibleTArray
 #include "nsXULAppAPI.h"                // for XRE_GetProcessType, etc
+#include "TiledLayerBuffer.h"
 #ifdef MOZ_WIDGET_ANDROID
 #include "AndroidBridge.h"
 #endif
@@ -34,6 +35,11 @@ using namespace mozilla::gfx;
 
 namespace mozilla {
 namespace layers {
+
+  TextureClientPoolMember::TextureClientPoolMember(SurfaceFormat aFormat, TextureClientPool* aTexturePool)
+  : mFormat(aFormat)
+  , mTexturePool(aTexturePool)
+{}
 
 ClientLayerManager::ClientLayerManager(nsIWidget* aWidget)
   : mPhase(PHASE_NONE)
@@ -54,6 +60,8 @@ ClientLayerManager::~ClientLayerManager()
   mRoot = nullptr;
 
   MOZ_COUNT_DTOR(ClientLayerManager);
+
+  mTexturePools.clear();
 }
 
 int32_t
@@ -183,8 +191,11 @@ ClientLayerManager::EndTransactionInternal(DrawThebesLayerCallback aCallback,
   mThebesLayerCallback = aCallback;
   mThebesLayerCallbackData = aCallbackData;
 
-  GetRoot()->ComputeEffectiveTransforms(gfx3DMatrix());
+  GetRoot()->ComputeEffectiveTransforms(Matrix4x4());
 
+  if (!GetRoot()->GetInvalidRegion().IsEmpty()) {
+    GetRoot()->Mutated();
+  }
   root->RenderLayer();
   
   mThebesLayerCallback = nullptr;
@@ -219,6 +230,11 @@ ClientLayerManager::EndTransaction(DrawThebesLayerCallback aCallback,
     mIsRepeatTransaction = false;
   } else {
     MakeSnapshotIfRequired();
+  }
+
+  for (const TextureClientPoolMember* item = mTexturePools.getFirst();
+       item; item = item->getNext()) {
+    item->mTexturePool->ReturnDeferredClients();
   }
 }
 
@@ -257,8 +273,8 @@ ClientLayerManager::GetRemoteRenderer()
 void
 ClientLayerManager::Composite()
 {
-  if (CompositorChild* remoteRenderer = GetRemoteRenderer()) {
-    remoteRenderer->SendForceComposite();
+  if (LayerTransactionChild* manager = mForwarder->GetShadowManager()) {
+    manager->SendForceComposite();
   }
 }
 
@@ -273,8 +289,8 @@ ClientLayerManager::MakeSnapshotIfRequired()
       nsIntRect bounds;
       mWidget->GetBounds(bounds);
       SurfaceDescriptor inSnapshot, snapshot;
-      if (mForwarder->AllocSurfaceDescriptor(bounds.Size(),
-                                             GFX_CONTENT_COLOR_ALPHA,
+      if (mForwarder->AllocSurfaceDescriptor(bounds.Size().ToIntSize(),
+                                             gfxContentType::COLOR_ALPHA,
                                              &inSnapshot) &&
           // The compositor will usually reuse |snapshot| and return
           // it through |outSnapshot|, but if it doesn't, it's
@@ -376,6 +392,20 @@ ClientLayerManager::ForwardTransaction(bool aScheduleComposite)
           ->SetDescriptorFromReply(ots.textureId(), ots.image());
         break;
       }
+      case EditReply::TReturnReleaseFence: {
+        const ReturnReleaseFence& rep = reply.get_ReturnReleaseFence();
+        FenceHandle fence = rep.fence();
+        PTextureChild* child = rep.textureChild();
+
+        if (!fence.IsValid() || !child) {
+          break;
+        }
+        RefPtr<TextureClient> texture = TextureClient::AsTextureClient(child);
+        if (texture) {
+          texture->SetReleaseFenceHandle(fence);
+        }
+        break;
+      }
 
       default:
         NS_RUNTIMEABORT("not reached");
@@ -389,6 +419,7 @@ ClientLayerManager::ForwardTransaction(bool aScheduleComposite)
     NS_WARNING("failed to forward Layers transaction");
   }
 
+  mForwarder->RemoveTexturesIfNecessary();
   mPhase = PHASE_NONE;
 
   // this may result in Layers being deleted, which results in
@@ -423,6 +454,26 @@ ClientLayerManager::SetIsFirstPaint()
   mForwarder->SetIsFirstPaint();
 }
 
+TextureClientPool*
+ClientLayerManager::GetTexturePool(SurfaceFormat aFormat)
+{
+  for (const TextureClientPoolMember* item = mTexturePools.getFirst();
+       item; item = item->getNext()) {
+    if (item->mFormat == aFormat) {
+      return item->mTexturePool;
+    }
+  }
+
+  TextureClientPoolMember* texturePoolMember =
+    new TextureClientPoolMember(aFormat,
+      new TextureClientPool(aFormat, IntSize(TILEDLAYERBUFFER_TILE_SIZE,
+                                             TILEDLAYERBUFFER_TILE_SIZE),
+                            mForwarder));
+  mTexturePools.insertBack(texturePoolMember);
+
+  return texturePoolMember->mTexturePool;
+}
+
 void
 ClientLayerManager::ClearCachedResources(Layer* aSubtree)
 {
@@ -434,6 +485,10 @@ ClientLayerManager::ClearCachedResources(Layer* aSubtree)
     ClearLayer(aSubtree);
   } else if (mRoot) {
     ClearLayer(mRoot);
+  }
+  for (const TextureClientPoolMember* item = mTexturePools.getFirst();
+       item; item = item->getNext()) {
+    item->mTexturePool->Clear();
   }
 }
 
@@ -451,11 +506,11 @@ void
 ClientLayerManager::GetBackendName(nsAString& aName)
 {
   switch (mForwarder->GetCompositorBackendType()) {
-    case LAYERS_BASIC: aName.AssignLiteral("Basic"); return;
-    case LAYERS_OPENGL: aName.AssignLiteral("OpenGL"); return;
-    case LAYERS_D3D9: aName.AssignLiteral("Direct3D 9"); return;
-    case LAYERS_D3D10: aName.AssignLiteral("Direct3D 10"); return;
-    case LAYERS_D3D11: aName.AssignLiteral("Direct3D 11"); return;
+    case LayersBackend::LAYERS_BASIC: aName.AssignLiteral("Basic"); return;
+    case LayersBackend::LAYERS_OPENGL: aName.AssignLiteral("OpenGL"); return;
+    case LayersBackend::LAYERS_D3D9: aName.AssignLiteral("Direct3D 9"); return;
+    case LayersBackend::LAYERS_D3D10: aName.AssignLiteral("Direct3D 10"); return;
+    case LayersBackend::LAYERS_D3D11: aName.AssignLiteral("Direct3D 11"); return;
     default: NS_RUNTIMEABORT("Invalid backend");
   }
 }

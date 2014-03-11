@@ -10,8 +10,7 @@
 #include "gfx2DGlue.h"                  // for ToMatrix4x4
 #include "gfx3DMatrix.h"                // for gfx3DMatrix
 #include "gfxImageSurface.h"            // for gfxImageSurface
-#include "gfxMatrix.h"                  // for gfxMatrix
-#include "gfxPlatform.h"                // for gfxPlatform
+#include "gfxPrefs.h"                   // for gfxPrefs
 #include "gfxUtils.h"                   // for gfxUtils, etc
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
 #include "mozilla/RefPtr.h"             // for RefPtr
@@ -26,12 +25,12 @@
 #include "mozilla/mozalloc.h"           // for operator delete, etc
 #include "nsAutoPtr.h"                  // for nsRefPtr
 #include "nsDebug.h"                    // for NS_ASSERTION
+#include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "nsISupportsUtils.h"           // for NS_ADDREF, NS_RELEASE
 #include "nsPoint.h"                    // for nsIntPoint
 #include "nsRect.h"                     // for nsIntRect
 #include "nsRegion.h"                   // for nsIntRegion
 #include "nsTArray.h"                   // for nsAutoTArray
-#include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
 #include <vector>
 
 namespace mozilla {
@@ -56,12 +55,16 @@ static nsIntRect
 GetOpaqueRect(Layer* aLayer)
 {
   nsIntRect result;
+  gfx::Matrix matrix;
+  bool is2D = aLayer->GetBaseTransform().Is2D(&matrix);
+
   // Just bail if there's anything difficult to handle.
-  if (!aLayer->GetEffectiveTransform().IsIdentity() ||
-      aLayer->GetEffectiveOpacity() != 1.0f ||
-      aLayer->GetMaskLayer()) {
+  if (!is2D || aLayer->GetMaskLayer() ||
+    aLayer->GetEffectiveOpacity() != 1.0f ||
+    matrix.HasNonIntegerTranslation()) {
     return result;
   }
+
   if (aLayer->GetContentFlags() & Layer::CONTENT_OPAQUE) {
     result = aLayer->GetEffectiveVisibleRegion().GetLargestRectangle();
   } else {
@@ -73,10 +76,16 @@ GetOpaqueRect(Layer* aLayer)
       result = GetOpaqueRect(refLayer->GetFirstChild());
     }
   }
+
+  // Translate our opaque region to cover the child
+  gfx::Point point = matrix.GetTranslation();
+  result.MoveBy(static_cast<int>(point.x), static_cast<int>(point.y));
+
   const nsIntRect* clipRect = aLayer->GetEffectiveClipRect();
   if (clipRect) {
     result.IntersectRect(result, *clipRect);
   }
+
   return result;
 }
 
@@ -101,23 +110,36 @@ public:
   std::vector<VelocityData> mData;
 };
 
+static gfx::Point GetScrollData(Layer* aLayer) {
+  gfx::Matrix matrix;
+  if (aLayer->GetLocalTransform().Is2D(&matrix)) {
+    return matrix.GetTranslation();
+  }
+
+  gfx::Point origin;
+  return origin;
+}
+
+static LayerVelocityUserData* GetVelocityData(Layer* aLayer) {
+  static char sLayerVelocityUserDataKey;
+  void* key = reinterpret_cast<void*>(&sLayerVelocityUserDataKey);
+  if (!aLayer->HasUserData(key)) {
+    LayerVelocityUserData* newData = new LayerVelocityUserData();
+    aLayer->SetUserData(key, newData);
+  }
+
+  return static_cast<LayerVelocityUserData*>(aLayer->GetUserData(key));
+}
+
 static void DrawVelGraph(const nsIntRect& aClipRect,
                          LayerManagerComposite* aManager,
                          Layer* aLayer) {
-  static char sLayerVelocityUserDataKey;
   Compositor* compositor = aManager->GetCompositor();
   gfx::Rect clipRect(aClipRect.x, aClipRect.y,
                      aClipRect.width, aClipRect.height);
 
   TimeStamp now = TimeStamp::Now();
-
-  void* key = reinterpret_cast<void*>(&sLayerVelocityUserDataKey);
-  if (!aLayer->HasUserData(key)) {
-    aLayer->SetUserData(key, new LayerVelocityUserData());
-  }
-
-  LayerVelocityUserData* velocityData =
-    static_cast<LayerVelocityUserData*>(aLayer->GetUserData(key));
+  LayerVelocityUserData* velocityData = GetVelocityData(aLayer);
 
   if (velocityData->mData.size() >= 1 &&
     now > velocityData->mData[velocityData->mData.size() - 1].mFrameTime +
@@ -126,17 +148,17 @@ static void DrawVelGraph(const nsIntRect& aClipRect,
     velocityData->mData.clear();
   }
 
-  nsIntPoint scrollOffset =
-    aLayer->GetEffectiveVisibleRegion().GetBounds().TopLeft();
+  const gfx::Point layerTransform = GetScrollData(aLayer);
   velocityData->mData.push_back(
-    LayerVelocityUserData::VelocityData(now, scrollOffset.x, scrollOffset.y));
+    LayerVelocityUserData::VelocityData(now,
+      static_cast<int>(layerTransform.x), static_cast<int>(layerTransform.y)));
 
-
+  // TODO: dump to file
   // XXX: Uncomment these lines to enable ScrollGraph logging. This is
   //      useful for HVGA phones or to output the data to accurate
   //      graphing software.
-  //printf_stderr("ScrollGraph (%p): %i, %i\n",
-  //  aLayer, scrollOffset.x, scrollOffset.y);
+  // printf_stderr("ScrollGraph (%p): %f, %f\n",
+  // aLayer, layerTransform.x, layerTransform.y);
 
   // Keep a circular buffer of 100.
   size_t circularBufferSize = 100;
@@ -167,8 +189,7 @@ static void DrawVelGraph(const nsIntRect& aClipRect,
 
   aManager->SetDebugOverlayWantsNextFrame(true);
 
-  gfx::Matrix4x4 transform;
-  ToMatrix4x4(aLayer->GetEffectiveTransform(), transform);
+  const gfx::Matrix4x4& transform = aLayer->GetEffectiveTransform();
   nsIntRect bounds = aLayer->GetEffectiveVisibleRegion().GetBounds();
   gfx::Rect graphBounds = gfx::Rect(bounds.x, bounds.y,
                                     bounds.width, bounds.height);
@@ -176,7 +197,7 @@ static void DrawVelGraph(const nsIntRect& aClipRect,
 
   float opacity = 1.0;
   EffectChain effects;
-  effects.mPrimaryEffect = new EffectSolidColor(gfx::Color(0.2,0,0,1));
+  effects.mPrimaryEffect = new EffectSolidColor(gfx::Color(0.2f,0,0,1));
   compositor->DrawQuad(graphRect,
                        clipRect,
                        effects,
@@ -197,7 +218,6 @@ static void DrawVelGraph(const nsIntRect& aClipRect,
 
   compositor->DrawLines(graph, clipRect, gfx::Color(0,1,0,1),
                         opacity, transform);
-
 }
 
 template<class ContainerT> void
@@ -243,19 +263,19 @@ ContainerRender(ContainerT* aContainer,
       aContainer->mSupportsComponentAlphaChildren = true;
       mode = INIT_MODE_NONE;
     } else {
-      const gfx3DMatrix& transform3D = aContainer->GetEffectiveTransform();
-      gfxMatrix transform;
+      const gfx::Matrix4x4& transform3D = aContainer->GetEffectiveTransform();
+      gfx::Matrix transform;
       // If we have an opaque ancestor layer, then we can be sure that
       // all the pixels we draw into are either opaque already or will be
       // covered by something opaque. Otherwise copying up the background is
       // not safe.
       if (HasOpaqueAncestorLayer(aContainer) &&
-          transform3D.Is2D(&transform) && !transform.HasNonIntegerTranslation()) {
-        surfaceCopyNeeded = gfxPlatform::ComponentAlphaEnabled();
-        sourcePoint.x += transform.x0;
-        sourcePoint.y += transform.y0;
+          transform3D.Is2D(&transform) && !ThebesMatrix(transform).HasNonIntegerTranslation()) {
+        surfaceCopyNeeded = gfxPrefs::ComponentAlphaEnabled();
+        sourcePoint.x += transform._31;
+        sourcePoint.y += transform._32;
         aContainer->mSupportsComponentAlphaChildren
-          = gfxPlatform::ComponentAlphaEnabled();
+          = gfxPrefs::ComponentAlphaEnabled();
       }
     }
 
@@ -291,6 +311,14 @@ ContainerRender(ContainerT* aContainer,
       continue;
     }
 
+    nsIntRect clipRect = layerToRender->GetLayer()->
+        CalculateScissorRect(aClipRect, &aManager->GetWorldTransform());
+    if (clipRect.IsEmpty()) {
+      continue;
+    }
+
+    nsIntRegion savedVisibleRegion;
+    bool restoreVisibleRegion = false;
     if (i + 1 < children.Length() &&
         layerToRender->GetLayer()->GetEffectiveTransform().IsIdentity()) {
       LayerComposite* nextLayer = static_cast<LayerComposite*>(children.ElementAt(i + 1)->ImplData());
@@ -299,30 +327,38 @@ ContainerRender(ContainerT* aContainer,
         nextLayerOpaqueRect = GetOpaqueRect(nextLayer->GetLayer());
       }
       if (!nextLayerOpaqueRect.IsEmpty()) {
+        savedVisibleRegion = layerToRender->GetShadowVisibleRegion();
         nsIntRegion visibleRegion;
-        visibleRegion.Sub(layerToRender->GetShadowVisibleRegion(), nextLayerOpaqueRect);
-        layerToRender->SetShadowVisibleRegion(visibleRegion);
+        visibleRegion.Sub(savedVisibleRegion, nextLayerOpaqueRect);
         if (visibleRegion.IsEmpty()) {
           continue;
         }
+        layerToRender->SetShadowVisibleRegion(visibleRegion);
+        restoreVisibleRegion = true;
       }
-    }
-
-    nsIntRect clipRect = layerToRender->GetLayer()->
-        CalculateScissorRect(aClipRect, &aManager->GetWorldTransform());
-    if (clipRect.IsEmpty()) {
-      continue;
     }
 
     if (layerToRender->HasLayerBeenComposited()) {
       // Composer2D will compose this layer so skip GPU composition
       // this time & reset composition flag for next composition phase
       layerToRender->SetLayerComposited(false);
+      nsIntRect clearRect = layerToRender->GetClearRect();
+      if (!clearRect.IsEmpty()) {
+        // Clear layer's visible rect on FrameBuffer with transparent pixels
+        gfx::Rect fbRect(clearRect.x, clearRect.y, clearRect.width, clearRect.height);
+        compositor->clearFBRect(&fbRect);
+        layerToRender->SetClearRect(nsIntRect(0, 0, 0, 0));
+      }
     } else {
       layerToRender->RenderLayer(clipRect);
     }
 
-    if (gfxPlatform::GetPrefLayersScrollGraph()) {
+    if (restoreVisibleRegion) {
+      // Restore the region in case it's not covered by opaque content next time
+      layerToRender->SetShadowVisibleRegion(savedVisibleRegion);
+    }
+
+    if (gfxPrefs::LayersScrollGraph()) {
       DrawVelGraph(clipRect, aManager, layerToRender->GetLayer());
     }
     // invariant: our GL context should be current here, I don't think we can
@@ -333,39 +369,33 @@ ContainerRender(ContainerT* aContainer,
     // Unbind the current surface and rebind the previous one.
 #ifdef MOZ_DUMP_PAINTING
     if (gfxUtils::sDumpPainting) {
-      nsRefPtr<gfxImageSurface> surf = surface->Dump(aManager->GetCompositor());
+      RefPtr<gfx::DataSourceSurface> surf = surface->Dump(aManager->GetCompositor());
       WriteSnapshotToDumpFile(aContainer, surf);
     }
 #endif
 
     compositor->SetRenderTarget(previousTarget);
-    EffectChain effectChain;
+    EffectChain effectChain(aContainer);
     LayerManagerComposite::AutoAddMaskEffect autoMaskEffect(aContainer->GetMaskLayer(),
                                                             effectChain,
                                                             !aContainer->GetTransform().CanDraw2D());
 
     effectChain.mPrimaryEffect = new EffectRenderTarget(surface);
 
-    gfx::Matrix4x4 transform;
-    ToMatrix4x4(aContainer->GetEffectiveTransform(), transform);
-
     gfx::Rect rect(visibleRect.x, visibleRect.y, visibleRect.width, visibleRect.height);
     gfx::Rect clipRect(aClipRect.x, aClipRect.y, aClipRect.width, aClipRect.height);
     aManager->GetCompositor()->DrawQuad(rect, clipRect, effectChain, opacity,
-                                        transform);
+                                        aContainer->GetEffectiveTransform());
   }
 
   if (aContainer->GetFrameMetrics().IsScrollable()) {
-    gfx::Matrix4x4 transform;
-    ToMatrix4x4(aContainer->GetEffectiveTransform(), transform);
-
     const FrameMetrics& frame = aContainer->GetFrameMetrics();
     LayerRect layerBounds = ScreenRect(frame.mCompositionBounds) * ScreenToLayerScale(1.0);
     gfx::Rect rect(layerBounds.x, layerBounds.y, layerBounds.width, layerBounds.height);
     gfx::Rect clipRect(aClipRect.x, aClipRect.y, aClipRect.width, aClipRect.height);
     aManager->GetCompositor()->DrawDiagnostics(DIAGNOSTIC_CONTAINER,
                                                rect, clipRect,
-                                               transform);
+                                               aContainer->GetEffectiveTransform());
   }
 }
 

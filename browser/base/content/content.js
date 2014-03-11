@@ -9,10 +9,12 @@ let Cu = Components.utils;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this,
-  "LoginManagerContent", "resource://gre/modules/LoginManagerContent.jsm");
-XPCOMUtils.defineLazyModuleGetter(this,
-  "InsecurePasswordUtils", "resource://gre/modules/InsecurePasswordUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "ContentLinkHandler",
+  "resource:///modules/ContentLinkHandler.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "LoginManagerContent",
+  "resource://gre/modules/LoginManagerContent.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "InsecurePasswordUtils",
+  "resource://gre/modules/InsecurePasswordUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
   "resource://gre/modules/PrivateBrowsingUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "UITour",
@@ -33,7 +35,7 @@ addMessageListener("Browser:HideSessionRestoreButton", function (message) {
   }
 });
 
-if (Services.prefs.getBoolPref("browser.tabs.remote")) {
+if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
   addEventListener("contextmenu", function (event) {
     sendAsyncMessage("contextmenu", {}, { event: event });
   }, false);
@@ -107,14 +109,14 @@ let AboutHomeListener = {
     }
 
     doc.documentElement.setAttribute("hasBrowserHandlers", "true");
-    let updateListener = this;
-    addMessageListener("AboutHome:Update", updateListener);
+    let self = this;
+    addMessageListener("AboutHome:Update", self);
     addEventListener("click", this.onClick, true);
     addEventListener("pagehide", function onPageHide(event) {
       if (event.target.defaultView.frameElement)
         return;
-      removeMessageListener("AboutHome:Update", updateListener);
-      removeEventListener("click", this.onClick, true);
+      removeMessageListener("AboutHome:Update", self);
+      removeEventListener("click", self.onClick, true);
       removeEventListener("pagehide", onPageHide, true);
       if (event.target.documentElement)
         event.target.documentElement.removeAttribute("hasBrowserHandlers");
@@ -141,6 +143,11 @@ let AboutHomeListener = {
 
     let originalTarget = aEvent.originalTarget;
     let ownerDoc = originalTarget.ownerDocument;
+    if (ownerDoc.documentURI != "about:home") {
+      // This shouldn't happen, but we're being defensive.
+      return;
+    }
+
     let elmId = originalTarget.getAttribute("id");
 
     switch (elmId) {
@@ -277,3 +284,9 @@ let ClickEventHandler = {
   }
 };
 ClickEventHandler.init();
+
+ContentLinkHandler.init(this);
+
+addEventListener("DOMWebNotificationClicked", function(event) {
+  sendAsyncMessage("DOMWebNotificationClicked", {});
+}, false);

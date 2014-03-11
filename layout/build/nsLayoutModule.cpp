@@ -29,7 +29,7 @@
 #include "nsIFrameUtil.h"
 #include "nsHTMLStyleSheet.h"
 #include "nsILayoutDebugger.h"
-#include "nsINameSpaceManager.h"
+#include "nsNameSpaceManager.h"
 #include "nsINodeInfo.h"
 #include "nsIObserver.h"
 #include "nsIObserverService.h"
@@ -84,10 +84,8 @@
 #include "nsZipArchive.h"
 #include "mozIApplicationClearPrivateDataParams.h"
 #include "mozilla/Attributes.h"
-#include "mozilla/dom/Activity.h"
 #include "mozilla/dom/DOMException.h"
 #include "mozilla/dom/DOMRequest.h"
-#include "mozilla/dom/EventSource.h"
 #include "mozilla/dom/indexedDB/IndexedDatabaseManager.h"
 #include "mozilla/dom/network/TCPSocketChild.h"
 #include "mozilla/dom/network/TCPSocketParent.h"
@@ -270,8 +268,6 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(XPathEvaluator)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(txNodeSetAdaptor, Init)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsDOMSerializer)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsXMLHttpRequest, Init)
-NS_GENERIC_FACTORY_CONSTRUCTOR(EventSource)
-NS_GENERIC_FACTORY_CONSTRUCTOR(Activity)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsDOMFileReader, Init)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsFormData)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsBlobProtocolHandler)
@@ -374,7 +370,7 @@ NS_IMPL_ISUPPORTS1(LayoutShutdownObserver, nsIObserver)
 NS_IMETHODIMP
 LayoutShutdownObserver::Observe(nsISupports *aSubject,
                                 const char *aTopic,
-                                const PRUnichar *someData)
+                                const char16_t *someData)
 {
   if (!strcmp(aTopic, NS_XPCOM_SHUTDOWN_OBSERVER_ID)) {
     Shutdown();
@@ -433,6 +429,10 @@ Initialize()
     NS_WARNING("Could not get an observer service.  We will leak on shutdown.");
   }
 
+#ifdef DEBUG
+  nsStyleContext::AssertStyleStructMaxDifferenceValid();
+#endif
+
   return NS_OK;
 }
 
@@ -472,7 +472,7 @@ nsresult NS_NewCanvasRenderingContextWebGL(nsIDOMWebGLRenderingContext** aResult
 nsresult NS_CreateFrameTraversal(nsIFrameTraversal** aResult);
 
 nsresult NS_NewDomSelection(nsISelection** aResult);
-nsresult NS_NewContentViewer(nsIContentViewer** aResult);
+already_AddRefed<nsIContentViewer> NS_NewContentViewer();
 nsresult NS_NewGenRegularIterator(nsIContentIterator** aResult);
 nsresult NS_NewGenSubtreeIterator(nsIContentIterator** aInstancePtrResult);
 nsresult NS_NewContentDocumentLoaderFactory(nsIDocumentLoaderFactory** aResult);
@@ -545,8 +545,7 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(inFlasher)
 NS_GENERIC_FACTORY_CONSTRUCTOR(inCSSValueSearch)
 NS_GENERIC_FACTORY_CONSTRUCTOR(inDOMUtils)
 
-MAKE_CTOR(CreateNameSpaceManager,         nsINameSpaceManager,         NS_GetNameSpaceManager)
-MAKE_CTOR(CreateContentViewer,            nsIContentViewer,            NS_NewContentViewer)
+MAKE_CTOR2(CreateContentViewer,           nsIContentViewer,            NS_NewContentViewer)
 MAKE_CTOR(CreateHTMLDocument,             nsIDocument,                 NS_NewHTMLDocument)
 MAKE_CTOR(CreateXMLDocument,              nsIDocument,                 NS_NewXMLDocument)
 MAKE_CTOR(CreateSVGDocument,              nsIDocument,                 NS_NewSVGDocument)
@@ -694,7 +693,6 @@ NS_DEFINE_NAMED_CID(IN_DEEPTREEWALKER_CID);
 NS_DEFINE_NAMED_CID(IN_FLASHER_CID);
 NS_DEFINE_NAMED_CID(IN_CSSVALUESEARCH_CID);
 NS_DEFINE_NAMED_CID(IN_DOMUTILS_CID);
-NS_DEFINE_NAMED_CID(NS_NAMESPACEMANAGER_CID);
 NS_DEFINE_NAMED_CID(NS_CONTENT_VIEWER_CID);
 NS_DEFINE_NAMED_CID(NS_HTMLDOCUMENT_CID);
 NS_DEFINE_NAMED_CID(NS_XMLDOCUMENT_CID);
@@ -747,8 +745,6 @@ NS_DEFINE_NAMED_CID(NS_MEDIASOURCEPROTOCOLHANDLER_CID);
 NS_DEFINE_NAMED_CID(NS_FONTTABLEPROTOCOLHANDLER_CID);
 NS_DEFINE_NAMED_CID(NS_HOSTOBJECTURI_CID);
 NS_DEFINE_NAMED_CID(NS_XMLHTTPREQUEST_CID);
-NS_DEFINE_NAMED_CID(NS_EVENTSOURCE_CID);
-NS_DEFINE_NAMED_CID(NS_DOMACTIVITY_CID);
 NS_DEFINE_NAMED_CID(NS_DOMPARSER_CID);
 NS_DEFINE_NAMED_CID(NS_DOMSESSIONSTORAGEMANAGER_CID);
 NS_DEFINE_NAMED_CID(NS_DOMLOCALSTORAGEMANAGER_CID);
@@ -983,7 +979,6 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   { &kIN_FLASHER_CID, false, nullptr, inFlasherConstructor },
   { &kIN_CSSVALUESEARCH_CID, false, nullptr, inCSSValueSearchConstructor },
   { &kIN_DOMUTILS_CID, false, nullptr, inDOMUtilsConstructor },
-  { &kNS_NAMESPACEMANAGER_CID, false, nullptr, CreateNameSpaceManager },
   { &kNS_CONTENT_VIEWER_CID, false, nullptr, CreateContentViewer },
   { &kNS_HTMLDOCUMENT_CID, false, nullptr, CreateHTMLDocument },
   { &kNS_XMLDOCUMENT_CID, false, nullptr, CreateXMLDocument },
@@ -1036,8 +1031,6 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   { &kNS_FONTTABLEPROTOCOLHANDLER_CID, false, nullptr, nsFontTableProtocolHandlerConstructor },
   { &kNS_HOSTOBJECTURI_CID, false, nullptr, nsHostObjectURIConstructor },
   { &kNS_XMLHTTPREQUEST_CID, false, nullptr, nsXMLHttpRequestConstructor },
-  { &kNS_EVENTSOURCE_CID, false, nullptr, EventSourceConstructor },
-  { &kNS_DOMACTIVITY_CID, false, nullptr, ActivityConstructor },
   { &kNS_DOMPARSER_CID, false, nullptr, DOMParserConstructor },
   { &kNS_XPCEXCEPTION_CID, false, nullptr, ExceptionConstructor },
   { &kNS_DOMSESSIONSTORAGEMANAGER_CID, false, nullptr, DOMSessionStorageManagerConstructor },
@@ -1137,7 +1130,6 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
   { "@mozilla.org/inspector/flasher;1", &kIN_FLASHER_CID },
   { "@mozilla.org/inspector/search;1?type=cssvalue", &kIN_CSSVALUESEARCH_CID },
   { "@mozilla.org/inspector/dom-utils;1", &kIN_DOMUTILS_CID },
-  { NS_NAMESPACEMANAGER_CONTRACTID, &kNS_NAMESPACEMANAGER_CID },
   { "@mozilla.org/xml/xml-document;1", &kNS_XMLDOCUMENT_CID },
   { "@mozilla.org/svg/svg-document;1", &kNS_SVGDOCUMENT_CID },
   { NS_DOMMULTIPARTBLOB_CONTRACTID, &kNS_DOMMULTIPARTBLOB_CID },
@@ -1146,7 +1138,6 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
   { "@mozilla.org/content/post-content-iterator;1", &kNS_CONTENTITERATOR_CID },
   { "@mozilla.org/content/pre-content-iterator;1", &kNS_PRECONTENTITERATOR_CID },
   { "@mozilla.org/content/subtree-content-iterator;1", &kNS_SUBTREEITERATOR_CID },
-  { "@mozilla.org/content/canvas-rendering-context;1?id=moz-webgl", &kNS_CANVASRENDERINGCONTEXTWEBGL_CID },
   { "@mozilla.org/content/canvas-rendering-context;1?id=experimental-webgl", &kNS_CANVASRENDERINGCONTEXTWEBGL_CID },
 #ifdef MOZ_WEBGL_CONFORMANT
   { "@mozilla.org/content/canvas-rendering-context;1?id=webgl", &kNS_CANVASRENDERINGCONTEXTWEBGL_CID },
@@ -1193,8 +1184,6 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
   { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX MEDIASOURCEURI_SCHEME, &kNS_MEDIASOURCEPROTOCOLHANDLER_CID },
   { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX FONTTABLEURI_SCHEME, &kNS_FONTTABLEPROTOCOLHANDLER_CID },
   { NS_XMLHTTPREQUEST_CONTRACTID, &kNS_XMLHTTPREQUEST_CID },
-  { NS_EVENTSOURCE_CONTRACTID, &kNS_EVENTSOURCE_CID },
-  { NS_DOMACTIVITY_CONTRACTID, &kNS_DOMACTIVITY_CID },
   { NS_DOMPARSER_CONTRACTID, &kNS_DOMPARSER_CID },
   { XPC_EXCEPTION_CONTRACTID, &kNS_XPCEXCEPTION_CID },
   { "@mozilla.org/dom/localStorage-manager;1", &kNS_DOMLOCALSTORAGEMANAGER_CID },

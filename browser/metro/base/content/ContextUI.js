@@ -22,6 +22,7 @@ var ContextUI = {
     Elements.browsers.addEventListener('URLChanged', this, true);
     Elements.browsers.addEventListener("AlertActive", this, true);
     Elements.browsers.addEventListener("AlertClose", this, true);
+    Elements.tabList.addEventListener('TabSelect', this, true);
     Elements.panelUI.addEventListener('ToolPanelShown', this, false);
     Elements.panelUI.addEventListener('ToolPanelHidden', this, false);
 
@@ -112,7 +113,7 @@ var ContextUI = {
     }
 
     if (shown) {
-      ContentAreaObserver.update(window.innerWidth, window.innerHeight);
+      ContentAreaObserver.updateContentArea();
     }
 
     return shown;
@@ -144,7 +145,7 @@ var ContextUI = {
     }
 
     if (dismissed) {
-      ContentAreaObserver.update(window.innerWidth, window.innerHeight);
+      ContentAreaObserver.updateContentArea();
     }
 
     return dismissed;
@@ -175,6 +176,7 @@ var ContextUI = {
   // Display the nav bar
   displayNavbar: function () {
     Elements.navbar.show();
+    Elements.chromeState.setAttribute("navbar", "visible");
     ContentAreaObserver.updateContentArea();
   },
 
@@ -189,6 +191,7 @@ var ContextUI = {
     if (!BrowserUI.isStartTabVisible) {
       Elements.autocomplete.closePopup();
       Elements.navbar.dismiss();
+      Elements.chromeState.removeAttribute("navbar");
       ContentAreaObserver.updateContentArea();
     }
   },
@@ -316,7 +319,9 @@ var ContextUI = {
   handleEvent: function handleEvent(aEvent) {
     switch (aEvent.type) {
       case "URLChanged":
-        if (aEvent.target == Browser.selectedBrowser) {
+        // "aEvent.detail" is a boolean value that indicates whether actual URL
+        // has changed ignoring URL fragment changes.
+        if (aEvent.target == Browser.selectedBrowser && aEvent.detail) {
           this.displayNavbar();
         }
         break;
@@ -363,6 +368,7 @@ var ContextUI = {
         break;
       case "AlertActive":
       case "AlertClose":
+      case "TabSelect":
         ContentAreaObserver.updateContentArea();
         break;
       case "MozFlyoutPanelShowing":

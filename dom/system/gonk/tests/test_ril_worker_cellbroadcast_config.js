@@ -9,34 +9,35 @@ function run_test() {
 
 add_test(function test_ril_worker_cellbroadcast_activate() {
   let worker = newWorker({
-    postRILMessage: function fakePostRILMessage(id, parcel) {
+    postRILMessage: function(id, parcel) {
       // Do nothing
     },
-    postMessage: function fakePostMessage(message) {
+    postMessage: function(message) {
       // Do nothing
     }
   });
+  let context = worker.ContextPool._contexts[0];
 
   let parcelTypes = [];
-  let org_newParcel = worker.Buf.newParcel;
-  worker.Buf.newParcel = function(type, options) {
+  let org_newParcel = context.Buf.newParcel;
+  context.Buf.newParcel = function(type, options) {
     parcelTypes.push(type);
     org_newParcel.apply(this, arguments);
   };
 
   function setup(isCdma) {
-    worker.RIL._isCdma = isCdma;
-    worker.RIL.cellBroadcastDisabled = false;
-    worker.RIL.mergedCellBroadcastConfig = [1, 2, 4, 7];  // 1, 4-6
+    context.RIL._isCdma = isCdma;
+    context.RIL.cellBroadcastDisabled = false;
+    context.RIL.mergedCellBroadcastConfig = [1, 2, 4, 7];  // 1, 4-6
     parcelTypes = [];
   }
 
   function test(isCdma, expectedRequest) {
     setup(isCdma);
-    worker.RIL.setCellBroadcastDisabled({disabled: true});
+    context.RIL.setCellBroadcastDisabled({disabled: true});
     // Makesure that request parcel is sent out.
     do_check_neq(parcelTypes.indexOf(expectedRequest), -1);
-    do_check_eq(worker.RIL.cellBroadcastDisabled, true);
+    do_check_eq(context.RIL.cellBroadcastDisabled, true);
   }
 
   test(false, REQUEST_GSM_SMS_BROADCAST_ACTIVATION);
@@ -48,13 +49,14 @@ add_test(function test_ril_worker_cellbroadcast_activate() {
 add_test(function test_ril_worker_cellbroadcast_config() {
   let currentParcel;
   let worker = newWorker({
-    postRILMessage: function fakePostRILMessage(id, parcel) {
+    postRILMessage: function(id, parcel) {
       currentParcel = parcel;
     },
-    postMessage: function fakePostMessage(message) {
+    postMessage: function(message) {
       // Do nothing
     }
   });
+  let context = worker.ContextPool._contexts[0];
 
   function U32ArrayFromParcelArray(pa) {
     do_print(pa);
@@ -71,7 +73,7 @@ add_test(function test_ril_worker_cellbroadcast_config() {
                             : REQUEST_GSM_SET_BROADCAST_SMS_CONFIG;
 
     let found = false;
-    worker.postRILMessage = function (id, parcel) {
+    worker.postRILMessage = function(id, parcel) {
       u32Parcel = U32ArrayFromParcelArray(Array.slice(parcel));
       if (u32Parcel[1] != parcelType) {
         return;
@@ -82,8 +84,8 @@ add_test(function test_ril_worker_cellbroadcast_config() {
       do_check_eq(u32Parcel.slice(3).toString(), expected);
     };
 
-    worker.RIL._isCdma = isCdma;
-    worker.RIL.setSmsBroadcastConfig(configs);
+    context.RIL._isCdma = isCdma;
+    context.RIL.setSmsBroadcastConfig(configs);
 
     // Makesure that request parcel is sent out.
     do_check_true(found);
@@ -106,19 +108,20 @@ add_test(function test_ril_worker_cellbroadcast_config() {
 
 add_test(function test_ril_worker_cellbroadcast_merge_config() {
   let worker = newWorker({
-    postRILMessage: function fakePostRILMessage(id, parcel) {
+    postRILMessage: function(id, parcel) {
       // Do nothing
     },
-    postMessage: function fakePostMessage(message) {
+    postMessage: function(message) {
       // Do nothing
     }
   });
+  let context = worker.ContextPool._contexts[0];
 
   function test(isCdma, configs, expected) {
-    worker.RIL._isCdma = isCdma;
-    worker.RIL.cellBroadcastConfigs = configs;
-    worker.RIL._mergeAllCellBroadcastConfigs();
-    do_check_eq(worker.RIL.mergedCellBroadcastConfig.toString(), expected);
+    context.RIL._isCdma = isCdma;
+    context.RIL.cellBroadcastConfigs = configs;
+    context.RIL._mergeAllCellBroadcastConfigs();
+    do_check_eq(context.RIL.mergedCellBroadcastConfig.toString(), expected);
   }
 
   let configs = {

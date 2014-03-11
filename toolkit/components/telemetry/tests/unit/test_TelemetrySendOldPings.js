@@ -10,22 +10,27 @@
  *    overdue and recent pings.
  */
 
-Components.utils.import("resource://gre/modules/Services.jsm");
+"use strict"
 
-// Get the TelemetryPing definitions directly so we can test it without going through xpcom.
-// That gives us Cc, Ci, Cr and Cu, as well as a number of consts like PREF_ENABLED,
-// and PREF_SERVER.
-Services.scriptloader.loadSubScript("resource://gre/components/TelemetryPing.js");
+const Cc = Components.classes;
+const Ci = Components.interfaces;
+const Cr = Components.results;
+const Cu = Components.utils;
 
-Cu.import("resource://testing-common/httpd.js");
-Cu.import("resource://gre/modules/Promise.jsm");
-Cu.import("resource://gre/modules/TelemetryFile.jsm");
+Cu.import("resource://gre/modules/Services.jsm", this);
+Cu.import("resource://testing-common/httpd.js", this);
+Cu.import("resource://gre/modules/Promise.jsm", this);
+Cu.import("resource://gre/modules/TelemetryFile.jsm", this);
+Cu.import("resource://gre/modules/TelemetryPing.jsm", this);
+Cu.import("resource://gre/modules/Task.jsm", this);
+let {OS: {File, Path, Constants}} = Cu.import("resource://gre/modules/osfile.jsm", {});
 
 // We increment TelemetryFile's MAX_PING_FILE_AGE and
-// OVERDUE_PING_FILE_AGE by 1ms so that our test pings exceed
-// those points in time.
-const EXPIRED_PING_FILE_AGE = TelemetryFile.MAX_PING_FILE_AGE + 1;
-const OVERDUE_PING_FILE_AGE = TelemetryFile.OVERDUE_PING_FILE_AGE + 1;
+// OVERDUE_PING_FILE_AGE by 1 minute so that our test pings exceed
+// those points in time, even taking into account file system imprecision.
+const ONE_MINUTE_MS = 60 * 1000;
+const EXPIRED_PING_FILE_AGE = TelemetryFile.MAX_PING_FILE_AGE + ONE_MINUTE_MS;
+const OVERDUE_PING_FILE_AGE = TelemetryFile.OVERDUE_PING_FILE_AGE + ONE_MINUTE_MS;
 
 const PING_SAVE_FOLDER = "saved-telemetry-pings";
 const PING_TIMEOUT_LENGTH = 5000;
@@ -48,29 +53,34 @@ let gSeenPings = 0;
  * @param aAge the age in milliseconds to offset from now. A value
  *             of 10 would make the ping 10ms older than now, for
  *             example.
- * @returns an Array with the created pings.
+ * @returns Promise
+ * @resolve an Array with the created pings.
  */
 function createSavedPings(aNum, aAge) {
-  // Create a TelemetryPing service that we can generate payloads from.
-  // Luckily, the TelemetryPing constructor does nothing that we need to
-  // clean up.
-  let pingService = new TelemetryPing();
-  let pings = [];
-  let age = Date.now() - aAge;
-  for (let i = 0; i < aNum; ++i) {
-    let payload = pingService.getPayload();
-    let ping = { slug: "test-ping-" + gCreatedPings, reason: "test", payload: payload };
-    TelemetryFile.savePing(ping);
-    if (aAge) {
-      // savePing writes to the file synchronously, so we're good to
-      // modify the lastModifedTime now.
-      let file = getSaveFileForPing(ping);
-      file.lastModifiedTime = age;
+  return Task.spawn(function*(){
+    // Create a TelemetryPing service that we can generate payloads from.
+    // Luckily, the TelemetryPing constructor does nothing that we need to
+    // clean up.
+    let pings = [];
+    let age = Date.now() - aAge;
+
+    for (let i = 0; i < aNum; ++i) {
+      let payload = TelemetryPing.getPayload();
+      let ping = { slug: "test-ping-" + gCreatedPings, reason: "test", payload: payload };
+
+      yield TelemetryFile.savePing(ping);
+
+      if (aAge) {
+        // savePing writes to the file synchronously, so we're good to
+        // modify the lastModifedTime now.
+        let file = getSavePathForPing(ping);
+        yield File.setDates(file, null, age);
+      }
+      gCreatedPings++;
+      pings.push(ping);
     }
-    gCreatedPings++;
-    pings.push(ping);
-  }
-  return pings;
+    return pings;
+  });
 }
 
 /**
@@ -78,87 +88,56 @@ function createSavedPings(aNum, aAge) {
  * exist.
  *
  * @param aPings an Array of pings to delete.
+ * @returns Promise
  */
 function clearPings(aPings) {
-  for (let ping of aPings) {
-    let file = getSaveFileForPing(ping);
-    if (file.exists()) {
-      file.remove(false);
+  return Task.spawn(function*() {
+    for (let ping of aPings) {
+      let path = getSavePathForPing(ping);
+      yield File.remove(path);
     }
-  }
+  });
 }
 
 /**
  * Returns a handle for the file that aPing should be
  * stored in locally.
  *
- * @returns nsILocalFile
+ * @returns path
  */
-function getSaveFileForPing(aPing) {
-  let file = Services.dirsvc.get("ProfD", Ci.nsILocalFile).clone();
-  file.append(PING_SAVE_FOLDER);
-  file.append(aPing.slug);
-  return file;
+function getSavePathForPing(aPing) {
+  return Path.join(Constants.Path.profileDir, PING_SAVE_FOLDER, aPing.slug);
 }
 
 /**
- * Wait for PING_TIMEOUT_LENGTH ms, and make sure we didn't receive
- * TelemetryPings in that time.
- *
- * @returns Promise
- */
-function assertReceivedNoPings() {
-  let deferred = Promise.defer();
-
-  do_timeout(PING_TIMEOUT_LENGTH, function() {
-    if (gSeenPings > 0) {
-      deferred.reject();
-    } else {
-      deferred.resolve();
-    }
-  });
-
-  return deferred.promise;
-}
-
-/**
- * Returns a Promise that rejects if the number of TelemetryPings
- * received by the HttpServer is not equal to aExpectedNum.
+ * Check if the number of TelemetryPings received by the
+ * HttpServer is not equal to aExpectedNum.
  *
  * @param aExpectedNum the number of pings we expect to receive.
- * @returns Promise
  */
 function assertReceivedPings(aExpectedNum) {
-  let deferred = Promise.defer();
-
-  do_timeout(PING_TIMEOUT_LENGTH, function() {
-    if (gSeenPings == aExpectedNum) {
-      deferred.resolve();
-    } else {
-      deferred.reject("Saw " + gSeenPings + " TelemetryPings, " +
-                      "but expected " + aExpectedNum);
-    }
-  })
-
-  return deferred.promise;
+  do_check_eq(gSeenPings, aExpectedNum);
 }
 
 /**
  * Throws if any pings in aPings is saved locally.
  *
  * @param aPings an Array of pings to check.
+ * @returns Promise
  */
 function assertNotSaved(aPings) {
-  let saved = 0;
-  for (let ping of aPings) {
-    let file = getSaveFileForPing(ping);
-    if (file.exists()) {
-      saved++;
+  return Task.spawn(function*() {
+    let saved = 0;
+    for (let ping of aPings) {
+      let file = getSavePathForPing(ping);
+      if (yield File.exists()) {
+        saved++;
+      }
     }
-  }
-  if (saved > 0) {
-    do_throw("Found " + saved + " unexpected saved pings.");
-  }
+    if (saved > 0) {
+      do_throw("Found " + saved + " unexpected saved pings.");
+    }
+  });
 }
 
 /**
@@ -190,8 +169,8 @@ function stopHttpServer() {
  * Teardown a TelemetryPing instance and clear out any pending
  * pings to put as back in the starting state.
  */
-function resetTelemetry(aPingService) {
-  aPingService.uninstall();
+function resetTelemetry() {
+  TelemetryPing.uninstall();
   // Quick and dirty way to clear TelemetryFile's pendingPings
   // collection, and put it back in its initial state.
   let gen = TelemetryFile.popPendingPings();
@@ -203,17 +182,15 @@ function resetTelemetry(aPingService) {
  * mode.
  */
 function startTelemetry() {
-  let service = new TelemetryPing();
-  service.setup(true);
-  return service;
+  return TelemetryPing.setup();
 }
 
 function run_test() {
   gHttpServer.registerPrefixHandler("/submit/telemetry/", pingHandler);
   gHttpServer.start(-1);
   do_get_profile();
-  Services.prefs.setBoolPref(PREF_ENABLED, true);
-  Services.prefs.setCharPref(PREF_SERVER,
+  Services.prefs.setBoolPref(TelemetryPing.Constants.PREF_ENABLED, true);
+  Services.prefs.setCharPref(TelemetryPing.Constants.PREF_SERVER,
                              "http://localhost:" + gHttpServer.identity.primaryPort);
   run_next_test();
 }
@@ -223,22 +200,22 @@ function run_test() {
  * immediately and never sent.
  */
 add_task(function test_expired_pings_are_deleted() {
-  let expiredPings = createSavedPings(EXPIRED_PINGS, EXPIRED_PING_FILE_AGE);
-  let pingService = startTelemetry();
-  yield assertReceivedNoPings();
-  assertNotSaved(expiredPings);
-  resetTelemetry(pingService);
-})
+  let expiredPings = yield createSavedPings(EXPIRED_PINGS, EXPIRED_PING_FILE_AGE);
+  yield startTelemetry();
+  assertReceivedPings(0);
+  yield assertNotSaved(expiredPings);
+  yield resetTelemetry();
+});
 
 /**
  * Test that really recent pings are not sent on Telemetry initialization.
  */
 add_task(function test_recent_pings_not_sent() {
-  let recentPings = createSavedPings(RECENT_PINGS);
-  let pingService = startTelemetry();
-  yield assertReceivedNoPings();
-  resetTelemetry(pingService);
-  clearPings(recentPings);
+  let recentPings = yield createSavedPings(RECENT_PINGS);
+  yield startTelemetry();
+  assertReceivedPings(0);
+  yield resetTelemetry();
+  yield clearPings(recentPings);
 });
 
 /**
@@ -247,18 +224,18 @@ add_task(function test_recent_pings_not_sent() {
  * should just be deleted.
  */
 add_task(function test_overdue_pings_trigger_send() {
-  let recentPings = createSavedPings(RECENT_PINGS);
-  let expiredPings = createSavedPings(EXPIRED_PINGS, EXPIRED_PING_FILE_AGE);
-  let overduePings = createSavedPings(OVERDUE_PINGS, OVERDUE_PING_FILE_AGE);
+  let recentPings = yield createSavedPings(RECENT_PINGS);
+  let expiredPings = yield createSavedPings(EXPIRED_PINGS, EXPIRED_PING_FILE_AGE);
+  let overduePings = yield createSavedPings(OVERDUE_PINGS, OVERDUE_PING_FILE_AGE);
 
-  let pingService = startTelemetry();
-  yield assertReceivedPings(TOTAL_EXPECTED_PINGS);
+  yield startTelemetry();
+  assertReceivedPings(TOTAL_EXPECTED_PINGS);
 
-  assertNotSaved(recentPings);
-  assertNotSaved(expiredPings);
-  assertNotSaved(overduePings);
-  resetTelemetry(pingService);
-})
+  yield assertNotSaved(recentPings);
+  yield assertNotSaved(expiredPings);
+  yield assertNotSaved(overduePings);
+  yield resetTelemetry();
+});
 
 add_task(function teardown() {
   yield stopHttpServer();

@@ -46,8 +46,9 @@ class InvalidTestPathError(Exception):
 class XPCShellRunner(MozbuildObject):
     """Run xpcshell tests."""
     def run_suite(self, **kwargs):
-        manifest = os.path.join(self.topobjdir, '_tests', 'xpcshell',
-            'xpcshell.ini')
+        from manifestparser import TestManifest
+        manifest = TestManifest(manifests=[os.path.join(self.topobjdir,
+            '_tests', 'xpcshell', 'xpcshell.ini')])
 
         return self._run_xpcshell_harness(manifest=manifest, **kwargs)
 
@@ -58,6 +59,9 @@ class XPCShellRunner(MozbuildObject):
                  # ignore parameters from other platforms' options
                  **kwargs):
         """Runs an individual xpcshell test."""
+        from mozbuild.testing import TestResolver
+        from manifestparser import TestManifest
+
         # TODO Bug 794506 remove once mach integrates with virtualenv.
         build_path = os.path.join(self.topobjdir, 'build')
         if build_path not in sys.path:
@@ -71,43 +75,34 @@ class XPCShellRunner(MozbuildObject):
                            rerun_failures=rerun_failures)
             return
 
-        path_arg = self._wrap_path_argument(test_file)
+        resolver = self._spawn(TestResolver)
+        tests = list(resolver.resolve_tests(path=test_file, flavor='xpcshell',
+            cwd=self.cwd))
 
-        test_obj_dir = os.path.join(self.topobjdir, '_tests', 'xpcshell',
-            path_arg.relpath())
-        if os.path.isfile(test_obj_dir):
-            test_obj_dir = mozpack.path.dirname(test_obj_dir)
+        if not tests:
+            raise InvalidTestPathError('We could not find an xpcshell test '
+                'for the passed test path. Please select a path that is '
+                'a test file or is a directory containing xpcshell tests.')
 
-        xpcshell_dirs = []
-        for base, dirs, files in os.walk(test_obj_dir):
-            if os.path.exists(mozpack.path.join(base, 'xpcshell.ini')):
-                xpcshell_dirs.append(base)
-
-        if not xpcshell_dirs:
-            raise InvalidTestPathError('An xpcshell.ini could not be found '
-                'for the passed test path. Please select a path whose '
-                'directory or subdirectories contain an xpcshell.ini file. '
-                'It is possible you received this error because the tree is '
-                'not built or tests are not enabled.')
+        # Dynamically write out a manifest holding all the discovered tests.
+        manifest = TestManifest()
+        manifest.tests.extend(tests)
 
         args = {
             'interactive': interactive,
             'keep_going': keep_going,
             'shuffle': shuffle,
             'sequential': sequential,
-            'test_dirs': xpcshell_dirs,
             'debugger': debugger,
             'debuggerArgs': debuggerArgs,
             'debuggerInteractive': debuggerInteractive,
-            'rerun_failures': rerun_failures
+            'rerun_failures': rerun_failures,
+            'manifest': manifest,
         }
-
-        if os.path.isfile(path_arg.srcdir_path()):
-            args['test_path'] = mozpack.path.basename(path_arg.srcdir_path())
 
         return self._run_xpcshell_harness(**args)
 
-    def _run_xpcshell_harness(self, test_dirs=None, manifest=None,
+    def _run_xpcshell_harness(self, manifest,
                               test_path=None, shuffle=False, interactive=False,
                               keep_going=False, sequential=False,
                               debugger=None, debuggerArgs=None, debuggerInteractive=None,
@@ -125,8 +120,12 @@ class XPCShellRunner(MozbuildObject):
 
         tests_dir = os.path.join(self.topobjdir, '_tests', 'xpcshell')
         modules_dir = os.path.join(self.topobjdir, '_tests', 'modules')
+        # We want output from the test to be written immediately if we are only
+        # running a single test.
+        verbose_output = test_path is not None or (manifest and len(manifest.test_paths())==1)
 
         args = {
+            'manifest': manifest,
             'xpcshell': os.path.join(self.bindir, 'xpcshell'),
             'mozInfo': os.path.join(self.topobjdir, 'mozinfo.json'),
             'symbolsPath': os.path.join(self.distdir, 'crashreporter-symbols'),
@@ -146,18 +145,8 @@ class XPCShellRunner(MozbuildObject):
             'debuggerArgs': debuggerArgs,
             'debuggerInteractive': debuggerInteractive,
             'on_message': (lambda obj, msg: xpcshell.log.info(msg.decode('utf-8', 'replace'))) \
-                            if test_path is not None else None,
+                            if verbose_output else None,
         }
-
-        if manifest is not None:
-            args['manifest'] = manifest
-        elif test_dirs is not None:
-            if isinstance(test_dirs, list):
-                args['testdirs'] = test_dirs
-            else:
-                args['testdirs'] = [test_dirs]
-        else:
-            raise Exception('One of test_dirs or manifest must be provided.')
 
         if test_path is not None:
             args['testPath'] = test_path
@@ -339,6 +328,7 @@ class MachCommands(MachCommandBase):
             xpcshell = self._spawn(AndroidXPCShellRunner)
         else:
             xpcshell = self._spawn(XPCShellRunner)
+        xpcshell.cwd = self._mach_context.cwd
 
         try:
             return xpcshell.run_test(**params)

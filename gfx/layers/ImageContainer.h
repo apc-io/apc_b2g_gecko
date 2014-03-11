@@ -10,7 +10,6 @@
 #include <sys/types.h>                  // for int32_t
 #include "ImageTypes.h"                 // for ImageFormat, etc
 #include "gfxASurface.h"                // for gfxASurface, etc
-#include "gfxPoint.h"                   // for gfxIntSize
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT_HELPER2
 #include "mozilla/Mutex.h"              // for Mutex
 #include "mozilla/ReentrantMonitor.h"   // for ReentrantMonitorAutoEnter, etc
@@ -27,7 +26,10 @@
 #include "nsSize.h"                     // for nsIntSize
 #include "nsTArray.h"                   // for nsTArray
 #include "mozilla/Atomics.h"
+#include "mozilla/WeakPtr.h"
 #include "nsThreadUtils.h"
+#include "mozilla/gfx/2D.h"
+#include "nsDataHashtable.h"
 
 #ifndef XPCOM_GLUE_AVOID_NSPR
 /**
@@ -41,6 +43,9 @@
  * gfxASurface. When AddRefing, we assert that we're on the main thread.
  * When Releasing, if we're not on the main thread, we post an event to
  * the main thread to do the actual release.
+ *
+ * This should be removed after after Image::DeprecatedGetAsSurface is
+ * removed. It is replaced by nsMainThreadSourceSurfaceRef
  */
 class nsMainThreadSurfaceRef;
 
@@ -48,6 +53,49 @@ template <>
 class nsAutoRefTraits<nsMainThreadSurfaceRef> {
 public:
   typedef gfxASurface* RawRef;
+
+  /**
+   * The XPCOM event that will do the actual release on the main thread.
+   */
+  class SurfaceReleaser : public nsRunnable {
+  public:
+    SurfaceReleaser(RawRef aRef) : mRef(aRef) {}
+    NS_IMETHOD Run() {
+      mRef->Release();
+      return NS_OK;
+    }
+    RawRef mRef;
+  };
+
+  static RawRef Void() { return nullptr; }
+  static void Release(RawRef aRawRef)
+  {
+    if (NS_IsMainThread()) {
+      aRawRef->Release();
+      return;
+    }
+    nsCOMPtr<nsIRunnable> runnable = new SurfaceReleaser(aRawRef);
+    NS_DispatchToMainThread(runnable);
+  }
+  static void AddRef(RawRef aRawRef)
+  {
+    NS_ASSERTION(NS_IsMainThread(),
+                 "Can only add a reference on the main thread");
+    aRawRef->AddRef();
+  }
+};
+
+/**
+ * Same purpose as nsMainThreadSurfaceRef byt holds a gfx::SourceSurface instead.
+ * The specialization of nsMainThreadSurfaceRef should be removed after
+ * Image::DeprecatedGetAsSurface is removed
+ */
+class nsMainThreadSourceSurfaceRef;
+
+template <>
+class nsAutoRefTraits<nsMainThreadSourceSurfaceRef> {
+public:
+  typedef mozilla::gfx::SourceSurface* RawRef;
 
   /**
    * The XPCOM event that will do the actual release on the main thread.
@@ -100,6 +148,8 @@ class ImageClient;
 class SharedPlanarYCbCrImage;
 class DeprecatedSharedPlanarYCbCrImage;
 class TextureClient;
+class CompositableClient;
+class CompositableForwarder;
 class SurfaceDescriptor;
 
 struct ImageBackendData
@@ -119,7 +169,7 @@ public:
      * For use with the CompositableClient only (so that the later can
      * synchronize the TextureClient with the TextureHost).
      */
-    virtual TextureClient* GetTextureClient() = 0;
+    virtual TextureClient* GetTextureClient(CompositableClient* aClient) = 0;
 };
 
 /**
@@ -147,7 +197,7 @@ public:
   ImageFormat GetFormat() { return mFormat; }
   void* GetImplData() { return mImplData; }
 
-  virtual already_AddRefed<gfxASurface> GetAsSurface() = 0;
+  virtual already_AddRefed<gfxASurface> DeprecatedGetAsSurface() = 0;
   virtual gfx::IntSize GetSize() = 0;
   virtual nsIntRect GetPictureRect()
   {
@@ -155,14 +205,16 @@ public:
   }
 
   ImageBackendData* GetBackendData(LayersBackend aBackend)
-  { return mBackendData[aBackend]; }
+  { return mBackendData[size_t(aBackend)]; }
   void SetBackendData(LayersBackend aBackend, ImageBackendData* aData)
-  { mBackendData[aBackend] = aData; }
+  { mBackendData[size_t(aBackend)] = aData; }
 
   int32_t GetSerial() { return mSerial; }
 
   void MarkSent() { mSent = true; }
   bool IsSentToCompositor() { return mSent; }
+
+  virtual TemporaryRef<gfx::SourceSurface> GetAsSourceSurface() = 0;
 
 protected:
   Image(void* aImplData, ImageFormat aFormat) :
@@ -172,7 +224,7 @@ protected:
     mSent(false)
   {}
 
-  nsAutoPtr<ImageBackendData> mBackendData[mozilla::layers::LAYERS_LAST];
+  nsAutoPtr<ImageBackendData> mBackendData[size_t(mozilla::layers::LayersBackend::LAYERS_LAST)];
 
   void* mImplData;
   int32_t mSerial;
@@ -214,21 +266,6 @@ private:
   uint32_t mRecycledBufferSize;
 };
 
-/**
- * Returns true if aFormat is in the given format array.
- */
-static inline bool
-FormatInList(const ImageFormat* aFormats, uint32_t aNumFormats,
-             ImageFormat aFormat)
-{
-  for (uint32_t i = 0; i < aNumFormats; ++i) {
-    if (aFormats[i] == aFormat) {
-      return true;
-    }
-  }
-  return false;
-}
-
 class CompositionNotifySink
 {
 public:
@@ -261,8 +298,7 @@ protected:
   ImageFactory() {}
   virtual ~ImageFactory() {}
 
-  virtual already_AddRefed<Image> CreateImage(const ImageFormat* aFormats,
-                                              uint32_t aNumFormats,
+  virtual already_AddRefed<Image> CreateImage(ImageFormat aFormat,
                                               const gfx::IntSize &aScaleHint,
                                               BufferRecycleBin *aRecycleBin);
 
@@ -305,7 +341,7 @@ struct RemoteImageData {
   bool mWasUpdated;
   Type mType;
   Format mFormat;
-  gfxIntSize mSize;
+  gfx::IntSize mSize;
   union {
     struct {
       /* This pointer is set by a remote process, however it will be set to
@@ -345,9 +381,10 @@ struct RemoteImageData {
  * updates the shared state to point to the new image and the old image
  * is immediately released (not true in Normal or Asynchronous modes).
  */
-class ImageContainer {
+class ImageContainer : public SupportsWeakPtr<ImageContainer> {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(ImageContainer)
 public:
+  MOZ_DECLARE_REFCOUNTED_TYPENAME(ImageContainer)
 
   enum { DISABLE_ASYNC = 0x0, ENABLE_ASYNC = 0x01 };
 
@@ -363,8 +400,7 @@ public:
    * Can be called on any thread. This method takes mReentrantMonitor
    * when accessing thread-shared state.
    */
-  already_AddRefed<Image> CreateImage(const ImageFormat* aFormats,
-                                      uint32_t aNumFormats);
+  already_AddRefed<Image> CreateImage(ImageFormat aFormat);
 
   /**
    * Set an Image as the current image to display. The Image must have
@@ -484,7 +520,7 @@ public:
    * the lock methods should be used to avoid the copy, however this should be
    * avoided if the surface is required for a long period of time.
    */
-  already_AddRefed<gfxASurface> GetCurrentAsSurface(gfx::IntSize* aSizeResult);
+  already_AddRefed<gfxASurface> DeprecatedGetCurrentAsSurface(gfx::IntSize* aSizeResult);
 
   /**
    * This is similar to GetCurrentAsSurface, however this does not make a copy
@@ -494,8 +530,19 @@ public:
    * type of image. Optionally a pointer can be passed to receive the current
    * image.
    */
-  already_AddRefed<gfxASurface> LockCurrentAsSurface(gfx::IntSize* aSizeResult,
-                                                     Image** aCurrentImage = nullptr);
+  already_AddRefed<gfxASurface> DeprecatedLockCurrentAsSurface(gfx::IntSize* aSizeResult,
+                                                               Image** aCurrentImage = nullptr);
+
+  /**
+   * Same as GetCurrentAsSurface but for Moz2D
+   */
+  TemporaryRef<gfx::SourceSurface> GetCurrentAsSourceSurface(gfx::IntSize* aSizeResult);
+
+  /**
+   * Same as LockCurrentAsSurface but for Moz2D
+   */
+  TemporaryRef<gfx::SourceSurface> LockCurrentAsSourceSurface(gfx::IntSize* aSizeResult,
+                                                              Image** aCurrentImage = nullptr);
 
   /**
    * Returns the size of the image in pixels.
@@ -511,7 +558,7 @@ public:
    * Can be called on any thread. This method takes mReentrantMonitor
    * when accessing thread-shared state.
    */
-  void SetScaleHint(const gfxIntSize& aScaleHint)
+  void SetScaleHint(const gfx::IntSize& aScaleHint)
   { mScaleHint = aScaleHint; }
 
   void SetImageFactory(ImageFactory *aFactory)
@@ -638,7 +685,7 @@ protected:
   // create images for this container.
   nsRefPtr<ImageFactory> mImageFactory;
 
-  gfxIntSize mScaleHint;
+  gfx::IntSize mScaleHint;
 
   nsRefPtr<BufferRecycleBin> mRecycleBin;
 
@@ -668,8 +715,8 @@ class AutoLockImage
 {
 public:
   AutoLockImage(ImageContainer *aContainer) : mContainer(aContainer) { mImage = mContainer->LockCurrentImage(); }
-  AutoLockImage(ImageContainer *aContainer, gfxASurface **aSurface) : mContainer(aContainer) {
-    *aSurface = mContainer->LockCurrentAsSurface(&mSize, getter_AddRefs(mImage)).get();
+  AutoLockImage(ImageContainer *aContainer, RefPtr<gfx::SourceSurface> *aSurface) : mContainer(aContainer) {
+    *aSurface = mContainer->LockCurrentAsSourceSurface(&mSize, getter_AddRefs(mImage));
   }
   ~AutoLockImage() { if (mContainer) { mContainer->UnlockCurrentImage(); } }
 
@@ -706,19 +753,19 @@ struct PlanarYCbCrData {
   // Luminance buffer
   uint8_t* mYChannel;
   int32_t mYStride;
-  gfxIntSize mYSize;
+  gfx::IntSize mYSize;
   int32_t mYSkip;
   // Chroma buffers
   uint8_t* mCbChannel;
   uint8_t* mCrChannel;
   int32_t mCbCrStride;
-  gfxIntSize mCbCrSize;
+  gfx::IntSize mCbCrSize;
   int32_t mCbSkip;
   int32_t mCrSkip;
   // Picture region
   uint32_t mPicX;
   uint32_t mPicY;
-  gfxIntSize mPicSize;
+  gfx::IntSize mPicSize;
   StereoMode mStereoMode;
 
   nsIntRect GetPictureRect() const {
@@ -731,7 +778,7 @@ struct PlanarYCbCrData {
     : mYChannel(nullptr), mYStride(0), mYSize(0, 0), mYSkip(0)
     , mCbChannel(nullptr), mCrChannel(nullptr)
     , mCbCrStride(0), mCbCrSize(0, 0) , mCbSkip(0), mCrSkip(0)
-    , mPicX(0), mPicY(0), mPicSize(0, 0), mStereoMode(STEREO_MODE_MONO)
+    , mPicX(0), mPicY(0), mPicSize(0, 0), mStereoMode(StereoMode::MONO)
   {}
 };
 
@@ -842,7 +889,8 @@ protected:
    */
   virtual uint8_t* AllocateBuffer(uint32_t aSize);
 
-  already_AddRefed<gfxASurface> GetAsSurface();
+  already_AddRefed<gfxASurface> DeprecatedGetAsSurface();
+  TemporaryRef<gfx::SourceSurface> GetAsSourceSurface();
 
   void SetOffscreenFormat(gfxImageFormat aFormat) { mOffscreenFormat = aFormat; }
   gfxImageFormat GetOffscreenFormat();
@@ -852,7 +900,8 @@ protected:
   Data mData;
   gfx::IntSize mSize;
   gfxImageFormat mOffscreenFormat;
-  nsCountedRef<nsMainThreadSurfaceRef> mSurface;
+  nsCountedRef<nsMainThreadSurfaceRef> mDeprecatedSurface;
+  nsCountedRef<nsMainThreadSourceSurfaceRef> mSourceSurface;
   nsRefPtr<BufferRecycleBin> mRecycleBin;
 };
 
@@ -861,11 +910,16 @@ protected:
  * device output color space. This class is very simple as all backends
  * have to know about how to deal with drawing a cairo image.
  */
-class CairoImage : public Image {
+class CairoImage : public Image,
+                   public ISharedImage {
 public:
   struct Data {
-    gfxASurface* mSurface;
-    gfxIntSize mSize;
+    gfxASurface* mDeprecatedSurface;
+    gfx::IntSize mSize;
+
+    // mSourceSurface wraps mDeprrecatedSurface's data, therefore it should not
+    // outlive mDeprecatedSurface
+    RefPtr<gfx::SourceSurface> mSourceSurface;
   };
 
   /**
@@ -875,36 +929,52 @@ public:
    */
   void SetData(const Data& aData)
   {
-    mSurface = aData.mSurface;
+    mDeprecatedSurface = aData.mDeprecatedSurface;
     mSize = aData.mSize;
+    mSourceSurface = aData.mSourceSurface;
   }
 
-
-  virtual already_AddRefed<gfxASurface> GetAsSurface()
+  virtual TemporaryRef<gfx::SourceSurface> GetAsSourceSurface()
   {
-    nsRefPtr<gfxASurface> surface = mSurface.get();
+    return mSourceSurface.get();
+  }
+
+  virtual already_AddRefed<gfxASurface> DeprecatedGetAsSurface()
+  {
+    nsRefPtr<gfxASurface> surface = mDeprecatedSurface.get();
     return surface.forget();
   }
 
+  virtual ISharedImage* AsSharedImage() { return this; }
+  virtual uint8_t* GetBuffer() { return nullptr; }
+  virtual TextureClient* GetTextureClient(CompositableClient* aClient);
+
   gfx::IntSize GetSize() { return mSize; }
 
-  CairoImage() : Image(nullptr, CAIRO_SURFACE) {}
+  CairoImage();
+  ~CairoImage();
 
-  nsCountedRef<nsMainThreadSurfaceRef> mSurface;
-  gfxIntSize mSize;
+  nsCountedRef<nsMainThreadSurfaceRef> mDeprecatedSurface;
+  gfx::IntSize mSize;
+
+  // mSourceSurface wraps mDeprrecatedSurface's data, therefore it should not
+  // outlive mDeprecatedSurface
+  nsCountedRef<nsMainThreadSourceSurfaceRef> mSourceSurface;
+  nsDataHashtable<nsUint32HashKey, RefPtr<TextureClient> >  mTextureClients;
 };
 
 class RemoteBitmapImage : public Image {
 public:
-  RemoteBitmapImage() : Image(nullptr, REMOTE_IMAGE_BITMAP) {}
+  RemoteBitmapImage() : Image(nullptr, ImageFormat::REMOTE_IMAGE_BITMAP) {}
 
-  already_AddRefed<gfxASurface> GetAsSurface();
+  already_AddRefed<gfxASurface> DeprecatedGetAsSurface();
+  TemporaryRef<gfx::SourceSurface> GetAsSourceSurface();
 
   gfx::IntSize GetSize() { return mSize; }
 
   unsigned char *mData;
   int mStride;
-  gfxIntSize mSize;
+  gfx::IntSize mSize;
   RemoteImageData::Format mFormat;
 };
 

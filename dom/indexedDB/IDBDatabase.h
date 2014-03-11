@@ -189,7 +189,7 @@ public:
   uint64_t
   Version() const;
 
-  already_AddRefed<nsIDOMDOMStringList>
+  already_AddRefed<mozilla::dom::DOMStringList>
   GetObjectStoreNames(ErrorResult& aRv) const;
 
   already_AddRefed<IDBObjectStore>
@@ -230,7 +230,7 @@ public:
   virtual void LastRelease() MOZ_OVERRIDE;
 
 private:
-  IDBDatabase();
+  IDBDatabase(IDBWrapperCache* aOwnerCache);
   ~IDBDatabase();
 
   void OnUnlink();

@@ -12,6 +12,7 @@ namespace jit {
 
 #define MIR_OPCODE_LIST(_)                                                  \
     _(Constant)                                                             \
+    _(CloneLiteral)                                                         \
     _(Parameter)                                                            \
     _(Callee)                                                               \
     _(TableSwitch)                                                          \
@@ -37,8 +38,6 @@ namespace jit {
     _(GetArgumentsObjectArg)                                                \
     _(SetArgumentsObjectArg)                                                \
     _(ComputeThis)                                                          \
-    _(PrepareCall)                                                          \
-    _(PassArg)                                                              \
     _(Call)                                                                 \
     _(ApplyArgs)                                                            \
     _(Bail)                                                                 \
@@ -94,13 +93,17 @@ namespace jit {
     _(NewStringObject)                                                      \
     _(InitElem)                                                             \
     _(InitElemGetterSetter)                                                 \
+    _(MutateProto)                                                          \
     _(InitProp)                                                             \
     _(InitPropGetterSetter)                                                 \
     _(Start)                                                                \
     _(OsrEntry)                                                             \
     _(Nop)                                                                  \
     _(RegExp)                                                               \
+    _(RegExpExec)                                                           \
     _(RegExpTest)                                                           \
+    _(RegExpReplace)                                                        \
+    _(StringReplace)                                                        \
     _(Lambda)                                                               \
     _(ImplicitThis)                                                         \
     _(Slots)                                                                \
@@ -132,6 +135,7 @@ namespace jit {
     _(InitializedLength)                                                    \
     _(SetInitializedLength)                                                 \
     _(Not)                                                                  \
+    _(NeuterCheck)                                                          \
     _(BoundsCheck)                                                          \
     _(BoundsCheckLower)                                                     \
     _(InArray)                                                              \
@@ -185,6 +189,7 @@ namespace jit {
     _(SetDOMProperty)                                                       \
     _(IsCallable)                                                           \
     _(HaveSameClass)                                                        \
+    _(HasClass)                                                              \
     _(AsmJSNeg)                                                             \
     _(AsmJSUnsignedToDouble)                                                \
     _(AsmJSUnsignedToFloat32)                                               \
@@ -208,9 +213,10 @@ namespace jit {
     _(AbortPar)                                                             \
     _(LambdaPar)                                                            \
     _(RestPar)                                                              \
-    _(ForkJoinSlice)                                                        \
-    _(GuardThreadLocalObject)                                               \
-    _(CheckInterruptPar)                                                    \
+    _(ForkJoinContext)                                                      \
+    _(ForkJoinGetSlice)                                                     \
+    _(GuardThreadExclusive)                                                 \
+    _(InterruptCheckPar)                                                    \
     _(RecompileCheck)
 
 // Forward declarations of MIR types.

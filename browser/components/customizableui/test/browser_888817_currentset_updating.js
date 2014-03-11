@@ -6,9 +6,10 @@
 
 // Adding, moving and removing items should update the relevant currentset attributes
 add_task(function() {
+  ok(CustomizableUI.inDefaultState, "Should be in the default state when we start");
   let personalbar = document.getElementById(CustomizableUI.AREA_BOOKMARKS);
   setToolbarVisibility(personalbar, true);
-  ok(CustomizableUI.inDefaultState, "Should be in the default state when we start");
+  ok(!CustomizableUI.inDefaultState, "Making the bookmarks toolbar visible takes it out of the default state");
 
   let navbar = document.getElementById(CustomizableUI.AREA_NAVBAR);
   let personalbar = document.getElementById(CustomizableUI.AREA_BOOKMARKS);
@@ -45,7 +46,7 @@ add_task(function() {
   is(otherPersonalbar.getAttribute("currentset"), personalbarCurrentset,
      "Should have updated other window's currentSet after remove.");
 
-  otherWin.close();
+  yield promiseWindowClosed(otherWin);
   // Reset in asyncCleanup will put our button back for us.
 });
 

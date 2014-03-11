@@ -49,7 +49,6 @@ class JSFunction : public JSObject
         // 0x0800 is available
         INTERPRETED_LAZY = 0x1000,  /* function is interpreted but doesn't have a script yet */
         ARROW            = 0x2000,  /* ES6 '(args) => body' syntax */
-        SH_WRAPPABLE     = 0x4000,  /* self-hosted function is wrappable, doesn't need to be cloned */
 
         /* Derived Flags values for convenience: */
         NATIVE_FUN = 0,
@@ -105,12 +104,10 @@ class JSFunction : public JSObject
     }
 
     size_t nargs() const {
-        js::AutoThreadSafeAccess ts(this);
         return nargs_;
     }
 
     uint16_t flags() const {
-        js::AutoThreadSafeAccess ts(this);
         return flags_;
     }
 
@@ -129,19 +126,11 @@ class JSFunction : public JSObject
     bool isSelfHostedBuiltin()      const { return flags() & SELF_HOSTED; }
     bool isSelfHostedConstructor()  const { return flags() & SELF_HOSTED_CTOR; }
     bool hasRest()                  const { return flags() & HAS_REST; }
-    bool isWrappable()              const {
-        JS_ASSERT_IF(flags() & SH_WRAPPABLE, isSelfHostedBuiltin());
-        return flags() & SH_WRAPPABLE;
-    }
 
-    // Functions can change between being lazily interpreted and having scripts
-    // when under the compilation lock.
     bool isInterpretedLazy()        const {
-        JS_ASSERT(js::CurrentThreadCanReadCompilationData());
         return flags() & INTERPRETED_LAZY;
     }
     bool hasScript()                const {
-        JS_ASSERT(js::CurrentThreadCanReadCompilationData());
         return flags() & INTERPRETED;
     }
 
@@ -179,7 +168,7 @@ class JSFunction : public JSObject
         return isLambda() && displayAtom() && !hasGuessedAtom();
     }
     bool hasParallelNative() const {
-        return isNative() && jitInfo() && !!jitInfo()->parallelNative;
+        return isNative() && jitInfo() && jitInfo()->hasParallelNative();
     }
 
     bool isBuiltinFunctionConstructor();
@@ -213,12 +202,6 @@ class JSFunction : public JSObject
         flags_ |= SELF_HOSTED_CTOR;
     }
 
-    void makeWrappable() {
-        JS_ASSERT(isSelfHostedBuiltin());
-        JS_ASSERT(!isWrappable());
-        flags_ |= SH_WRAPPABLE;
-    }
-
     void setIsFunctionPrototype() {
         JS_ASSERT(!isFunctionPrototype());
         flags_ |= IS_FUN_PROTO;
@@ -238,7 +221,6 @@ class JSFunction : public JSObject
     void initAtom(JSAtom *atom) { atom_.init(atom); }
 
     JSAtom *displayAtom() const {
-        js::AutoThreadSafeAccess ts(this);
         return atom_;
     }
 
@@ -258,7 +240,6 @@ class JSFunction : public JSObject
      * activations (stack frames) of the function.
      */
     JSObject *environment() const {
-        js::AutoThreadSafeAccess ts(this);
         JS_ASSERT(isInterpreted());
         return u.i.env_;
     }
@@ -279,6 +260,7 @@ class JSFunction : public JSObject
     static inline size_t offsetOfAtom() { return offsetof(JSFunction, atom_); }
 
     static bool createScriptForLazilyInterpretedFunction(JSContext *cx, js::HandleFunction fun);
+    void relazify(JSTracer *trc);
 
     // Function Scripts
     //
@@ -308,11 +290,9 @@ class JSFunction : public JSObject
             JS::RootedFunction self(cx, this);
             if (!createScriptForLazilyInterpretedFunction(cx, self))
                 return nullptr;
-            JS_ASSERT(self->hasScript());
-            return self->u.i.s.script_;
+            return self->nonLazyScript();
         }
-        JS_ASSERT(hasScript());
-        return u.i.s.script_;
+        return nonLazyScript();
     }
 
     JSScript *existingScript() {
@@ -329,15 +309,23 @@ class JSFunction : public JSObject
             flags_ |= INTERPRETED;
             initScript(script);
         }
-        JS_ASSERT(hasScript());
-        return u.i.s.script_;
+        return nonLazyScript();
     }
 
     JSScript *nonLazyScript() const {
-        js::AutoThreadSafeAccess ts(this);
         JS_ASSERT(hasScript());
-        JS_ASSERT(js::CurrentThreadCanReadCompilationData());
+        JS_ASSERT(u.i.s.script_);
         return u.i.s.script_;
+    }
+
+    // Returns non-callsited-clone version of this.  Use when return
+    // value can flow to arbitrary JS (see Bug 944975).
+    JSFunction* originalFunction() {
+        if (this->hasScript() && this->nonLazyScript()->isCallsiteClone()) {
+            return this->nonLazyScript()->donorFunction();
+        } else {
+            return this;
+        }
     }
 
     js::HeapPtrScript &mutableScript() {
@@ -346,16 +334,12 @@ class JSFunction : public JSObject
     }
 
     js::LazyScript *lazyScript() const {
-        js::AutoThreadSafeAccess ts(this);
         JS_ASSERT(isInterpretedLazy() && u.i.s.lazy_);
-        JS_ASSERT(js::CurrentThreadCanReadCompilationData());
         return u.i.s.lazy_;
     }
 
     js::LazyScript *lazyScriptOrNull() const {
-        js::AutoThreadSafeAccess ts(this);
         JS_ASSERT(isInterpretedLazy());
-        JS_ASSERT(js::CurrentThreadCanReadCompilationData());
         return u.i.s.lazy_;
     }
 
@@ -389,8 +373,9 @@ class JSFunction : public JSObject
     void setUnlazifiedScript(JSScript *script) {
         // Note: createScriptForLazilyInterpretedFunction triggers a barrier on
         // lazy script before it is overwritten here.
-        JS_ASSERT(js::CurrentThreadCanWriteCompilationData());
         JS_ASSERT(isInterpretedLazy());
+        if (!lazyScript()->maybeScript())
+            lazyScript()->initScript(script);
         flags_ &= ~INTERPRETED_LAZY;
         flags_ |= INTERPRETED;
         initScript(script);
@@ -404,7 +389,6 @@ class JSFunction : public JSObject
     }
 
     JSNative native() const {
-        js::AutoThreadSafeAccess ts(this);
         JS_ASSERT(isNative());
         return u.n.native;
     }
@@ -429,7 +413,6 @@ class JSFunction : public JSObject
     }
 
     const JSJitInfo *jitInfo() const {
-        js::AutoThreadSafeAccess ts(this);
         JS_ASSERT(isNative());
         return u.n.jitinfo;
     }

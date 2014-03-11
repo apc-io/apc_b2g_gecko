@@ -546,7 +546,7 @@ class LDefinition
             return LDefinition::SLOTS;
           case MIRType_Pointer:
             return LDefinition::GENERAL;
-          case MIRType_ForkJoinSlice:
+          case MIRType_ForkJoinContext:
             return LDefinition::GENERAL;
           default:
             MOZ_ASSUME_UNREACHABLE("unexpected type");
@@ -1369,8 +1369,22 @@ public:
 
 class LIRGraph
 {
+    struct ValueHasher
+    {
+        typedef Value Lookup;
+        static HashNumber hash(const Value &v) {
+            return HashNumber(v.asRawBits());
+        }
+        static bool match(const Value &lhs, const Value &rhs) {
+            return lhs == rhs;
+        }
+    };
+
+
     Vector<LBlock *, 16, IonAllocPolicy> blocks_;
     Vector<Value, 0, IonAllocPolicy> constantPool_;
+    typedef HashMap<Value, uint32_t, ValueHasher, IonAllocPolicy> ConstantPoolMap;
+    ConstantPoolMap constantPoolMap_;
     Vector<LInstruction *, 0, IonAllocPolicy> safepoints_;
     Vector<LInstruction *, 0, IonAllocPolicy> nonCallSafepoints_;
     uint32_t numVirtualRegisters_;
@@ -1392,6 +1406,9 @@ class LIRGraph
   public:
     LIRGraph(MIRGraph *mir);
 
+    bool init() {
+        return constantPoolMap_.init();
+    }
     MIRGraph &mir() const {
         return mir_;
     }
@@ -1459,9 +1476,6 @@ class LIRGraph
     }
     Value *constantPool() {
         return &constantPool_[0];
-    }
-    const Value &getConstant(size_t index) const {
-        return constantPool_[index];
     }
     void setEntrySnapshot(LSnapshot *snapshot) {
         JS_ASSERT(!entrySnapshot_);
@@ -1541,14 +1555,14 @@ LAllocation::toRegister() const
 #endif
 
 #include "jit/LIR-Common.h"
-#if defined(JS_CPU_X86) || defined(JS_CPU_X64)
-# if defined(JS_CPU_X86)
+#if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)
+# if defined(JS_CODEGEN_X86)
 #  include "jit/x86/LIR-x86.h"
-# elif defined(JS_CPU_X64)
+# elif defined(JS_CODEGEN_X64)
 #  include "jit/x64/LIR-x64.h"
 # endif
 # include "jit/shared/LIR-x86-shared.h"
-#elif defined(JS_CPU_ARM)
+#elif defined(JS_CODEGEN_ARM)
 # include "jit/arm/LIR-arm.h"
 #endif
 

@@ -184,6 +184,7 @@ function whereToOpenLink( e, ignoreButton, ignoreAlt )
  *   postData             (nsIInputStream)
  *   referrerURI          (nsIURI)
  *   relatedToCurrent     (boolean)
+ *   skipTabAnimation     (boolean)
  */
 function openUILinkIn(url, where, aAllowThirdPartyFixup, aPostData, aReferrerURI) {
   var params;
@@ -218,6 +219,7 @@ function openLinkIn(url, where, params) {
   var aDisallowInheritPrincipal = params.disallowInheritPrincipal;
   var aInitiatingDoc        = params.initiatingDoc;
   var aIsPrivate            = params.private;
+  var aSkipTabAnimation     = params.skipTabAnimation;
 
   if (where == "save") {
     if (!aInitiatingDoc) {
@@ -300,8 +302,10 @@ function openLinkIn(url, where, params) {
   switch (where) {
   case "current":
     let flags = Ci.nsIWebNavigation.LOAD_FLAGS_NONE;
-    if (aAllowThirdPartyFixup)
+    if (aAllowThirdPartyFixup) {
       flags |= Ci.nsIWebNavigation.LOAD_FLAGS_ALLOW_THIRD_PARTY_FIXUP;
+      flags |= Ci.nsIWebNavigation.LOAD_FLAGS_FIXUP_SCHEME_TYPOS;
+    }
     if (aDisallowInheritPrincipal)
       flags |= Ci.nsIWebNavigation.LOAD_FLAGS_DISALLOW_INHERIT_OWNER;
     w.gBrowser.loadURIWithFlags(url, flags, aReferrerURI, null, aPostData);
@@ -318,6 +322,7 @@ function openLinkIn(url, where, params) {
                        inBackground: loadInBackground,
                        allowThirdPartyFixup: aAllowThirdPartyFixup,
                        relatedToCurrent: aRelatedToCurrent,
+                       skipAnimation: aSkipTabAnimation,
                        disableMCB: aDisableMCB});
     break;
   }
@@ -423,8 +428,13 @@ function isBidiEnabled() {
   if (getBoolPref("bidi.browser.ui", false))
     return true;
 
-  // if the pref isn't set, check for an RTL locale and force the pref to true
-  // if we find one.
+  // then check intl.uidirection.<locale>
+  var chromeReg = Components.classes["@mozilla.org/chrome/chrome-registry;1"].
+                  getService(Components.interfaces.nsIXULChromeRegistry);
+  if (chromeReg.isLocaleRTL("global"))
+    return true;
+
+  // now see if the system locale is an RTL one.
   var rv = false;
 
   try {
@@ -436,6 +446,7 @@ function isBidiEnabled() {
       case "ar-":
       case "he-":
       case "fa-":
+      case "ug-":
       case "ur-":
       case "syr":
         rv = true;
@@ -551,7 +562,17 @@ function openHealthReport()
  */
 function openFeedbackPage()
 {
-  openUILinkIn("https://input.mozilla.org/feedback", "tab");
+  var url = Components.classes["@mozilla.org/toolkit/URLFormatterService;1"]
+                      .getService(Components.interfaces.nsIURLFormatter)
+                      .formatURLPref("app.feedback.baseURL");
+  openUILinkIn(url, "tab");
+}
+
+function openTourPage()
+{
+  let scope = {}
+  Components.utils.import("resource:///modules/UITour.jsm", scope);
+  openUILinkIn(scope.UITour.url, "tab");
 }
 
 function buildHelpMenu()
@@ -639,41 +660,6 @@ function openNewWindowWith(aURL, aDocument, aPostData, aAllowThirdPartyFixup, aR
                postData: aPostData,
                allowThirdPartyFixup: aAllowThirdPartyFixup,
                referrerURI: aDocument ? aDocument.documentURIObject : aReferrer });
-}
-
-/**
- * isValidFeed: checks whether the given data represents a valid feed.
- *
- * @param  aLink
- *         An object representing a feed with title, href and type.
- * @param  aPrincipal
- *         The principal of the document, used for security check.
- * @param  aIsFeed
- *         Whether this is already a known feed or not, if true only a security
- *         check will be performed.
- */ 
-function isValidFeed(aLink, aPrincipal, aIsFeed)
-{
-  if (!aLink || !aPrincipal)
-    return false;
-
-  var type = aLink.type.toLowerCase().replace(/^\s+|\s*(?:;.*)?$/g, "");
-  if (!aIsFeed) {
-    aIsFeed = (type == "application/rss+xml" ||
-               type == "application/atom+xml");
-  }
-
-  if (aIsFeed) {
-    try {
-      urlSecurityCheck(aLink.href, aPrincipal,
-                       Components.interfaces.nsIScriptSecurityManager.DISALLOW_INHERIT_PRINCIPAL);
-      return type || "application/rss+xml";
-    }
-    catch(ex) {
-    }
-  }
-
-  return null;
 }
 
 // aCalledFromModal is optional

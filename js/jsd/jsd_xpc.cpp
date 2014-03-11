@@ -20,6 +20,7 @@
 #include "nsICategoryManager.h"
 #include "nsIJSRuntimeService.h"
 #include "nsIThreadInternal.h"
+#include "nsIScriptError.h"
 #include "nsTArray.h"
 #include "nsThreadUtils.h"
 #include "nsMemory.h"
@@ -978,7 +979,7 @@ jsdScript::CreatePPLineMap()
 {
     AutoSafeJSContext cx;
     JSAutoCompartment ac(cx, JSD_GetDefaultGlobal (mCx)); // Just in case.
-    JS::RootedObject obj(cx, JS_NewObject(cx, nullptr, nullptr, nullptr));
+    JS::RootedObject obj(cx, JS_NewObject(cx, nullptr, JS::NullPtr(), JS::NullPtr()));
     if (!obj)
         return nullptr;
     JS::RootedFunction fun(cx, JSD_GetJSFunction (mCx, mScript));
@@ -1213,7 +1214,7 @@ jsdScript::GetFunctionName(nsACString &_rval)
 }
 
 NS_IMETHODIMP
-jsdScript::GetParameterNames(uint32_t* count, PRUnichar*** paramNames)
+jsdScript::GetParameterNames(uint32_t* count, char16_t*** paramNames)
 {
     ASSERT_VALID_EPHEMERAL;
     AutoSafeJSContext cx;
@@ -1234,8 +1235,8 @@ jsdScript::GetParameterNames(uint32_t* count, PRUnichar*** paramNames)
         return NS_OK;
     }
 
-    PRUnichar **ret =
-        static_cast<PRUnichar**>(NS_Alloc(nargs * sizeof(PRUnichar*)));
+    char16_t **ret =
+        static_cast<char16_t**>(NS_Alloc(nargs * sizeof(char16_t*)));
     if (!ret)
         return NS_ERROR_OUT_OF_MEMORY;
 
@@ -1655,11 +1656,7 @@ jsdContext::GetJSContext(JSContext **_rval)
 #define JSOPTION_DONT_REPORT_UNCAUGHT           JS_BIT(8)
 #define JSOPTION_NO_DEFAULT_COMPARTMENT_OBJECT  JS_BIT(11)
 #define JSOPTION_NO_SCRIPT_RVAL                 JS_BIT(12)
-#define JSOPTION_BASELINE                       JS_BIT(14)
-#define JSOPTION_TYPE_INFERENCE                 JS_BIT(16)
 #define JSOPTION_STRICT_MODE                    JS_BIT(17)
-#define JSOPTION_ION                            JS_BIT(18)
-#define JSOPTION_ASMJS                          JS_BIT(19)
 #define JSOPTION_MASK                           JS_BITMASK(20)
 
 NS_IMETHODIMP
@@ -1673,11 +1670,7 @@ jsdContext::GetOptions(uint32_t *_rval)
            | (JS::ContextOptionsRef(mJSCx).dontReportUncaught() ? JSOPTION_DONT_REPORT_UNCAUGHT : 0)
            | (JS::ContextOptionsRef(mJSCx).noDefaultCompartmentObject() ? JSOPTION_NO_DEFAULT_COMPARTMENT_OBJECT : 0)
            | (JS::ContextOptionsRef(mJSCx).noScriptRval() ? JSOPTION_NO_SCRIPT_RVAL : 0)
-           | (JS::ContextOptionsRef(mJSCx).strictMode() ? JSOPTION_STRICT_MODE : 0)
-           | (JS::ContextOptionsRef(mJSCx).baseline() ? JSOPTION_BASELINE : 0)
-           | (JS::ContextOptionsRef(mJSCx).typeInference() ? JSOPTION_TYPE_INFERENCE : 0)
-           | (JS::ContextOptionsRef(mJSCx).ion() ? JSOPTION_ION : 0)
-           | (JS::ContextOptionsRef(mJSCx).asmJS() ? JSOPTION_ASMJS : 0);
+           | (JS::ContextOptionsRef(mJSCx).strictMode() ? JSOPTION_STRICT_MODE : 0);
     return NS_OK;
 }
 
@@ -1698,11 +1691,7 @@ jsdContext::SetOptions(uint32_t options)
                                 .setDontReportUncaught(options & JSOPTION_DONT_REPORT_UNCAUGHT)
                                 .setNoDefaultCompartmentObject(options & JSOPTION_NO_DEFAULT_COMPARTMENT_OBJECT)
                                 .setNoScriptRval(options & JSOPTION_NO_SCRIPT_RVAL)
-                                .setStrictMode(options & JSOPTION_STRICT_MODE)
-                                .setBaseline(options & JSOPTION_BASELINE)
-                                .setTypeInference(options & JSOPTION_TYPE_INFERENCE)
-                                .setIon(options & JSOPTION_ION)
-                                .setAsmJS(options & JSOPTION_ASMJS);
+                                .setStrictMode(options & JSOPTION_STRICT_MODE);
     return NS_OK;
 }
 
@@ -2364,16 +2353,14 @@ jsdValue::Refresh()
 }
 
 NS_IMETHODIMP
-jsdValue::GetWrappedValue(JSContext* aCx, JS::Value* aRetval)
+jsdValue::GetWrappedValue(JSContext* aCx, JS::MutableHandle<JS::Value> aRetval)
 {
     ASSERT_VALID_EPHEMERAL;
 
-    JS::RootedValue value(aCx, JSD_GetValueWrappedJSVal(mCx, mValue));
-    if (!JS_WrapValue(aCx, &value)) {
+    aRetval.set(JSD_GetValueWrappedJSVal(mCx, mValue));
+    if (!JS_WrapValue(aCx, aRetval))
         return NS_ERROR_FAILURE;
-    }
 
-    *aRetval = value;
     return NS_OK;
 }
 
@@ -2465,11 +2452,30 @@ jsdService::AsyncOn (jsdIActivationCallback *activationCallback)
 {
     nsresult  rv;
 
+    // Warn that JSD is deprecated, unless the caller has told us
+    // that they know already.
+    if (mDeprecationAcknowledged) {
+        mDeprecationAcknowledged = false;
+    } else if (!mWarnedAboutDeprecation) {
+        // In any case, warn only once.
+        mWarnedAboutDeprecation = true;
+
+        // Ignore errors: simply being unable to print the message
+        // shouldn't (effectively) disable JSD.
+        nsContentUtils::ReportToConsoleNonLocalized(
+            NS_LITERAL_STRING("\
+The jsdIDebuggerService and its associated interfaces are deprecated. \
+Please use Debugger, via IJSDebugger, instead."),
+            nsIScriptError::warningFlag,
+            NS_LITERAL_CSTRING("JSD"),
+            nullptr);
+    }
+
     nsCOMPtr<nsIXPConnect> xpc = do_GetService(nsIXPConnect::GetCID(), &rv);
     if (NS_FAILED(rv)) return rv;
 
     mActivationCallback = activationCallback;
-    
+
     return xpc->SetDebugModeWhenPossible(true, true);
 }
 
@@ -2987,7 +2993,7 @@ jsdService::ClearAllBreakpoints (void)
 }
 
 NS_IMETHODIMP
-jsdService::WrapValue(const JS::Value &value, jsdIValue **_rval)
+jsdService::WrapValue(JS::Handle<JS::Value> value, jsdIValue **_rval)
 {
     ASSERT_VALID_CONTEXT;
     JSDValue *jsdv = JSD_NewValue(mCx, value);
@@ -3040,6 +3046,13 @@ jsdService::ExitNestedEventLoop (uint32_t *_rval)
     *_rval = mNestedLoopLevel;    
     return NS_OK;
 }    
+
+NS_IMETHODIMP
+jsdService::AcknowledgeDeprecation()
+{
+    mDeprecationAcknowledged = true;
+    return NS_OK;
+}
 
 /* hook attribute get/set functions */
 
@@ -3329,7 +3342,7 @@ NS_IMPL_ISUPPORTS1(jsdASObserver, nsIObserver)
 
 NS_IMETHODIMP
 jsdASObserver::Observe (nsISupports *aSubject, const char *aTopic,
-                        const PRUnichar *aData)
+                        const char16_t *aData)
 {
     nsresult rv;
 

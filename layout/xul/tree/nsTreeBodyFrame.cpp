@@ -11,7 +11,7 @@
 
 #include "nsCOMPtr.h"
 #include "nsPresContext.h"
-#include "nsINameSpaceManager.h"
+#include "nsNameSpaceManager.h"
 
 #include "nsTreeBodyFrame.h"
 #include "nsTreeSelection.h"
@@ -1399,7 +1399,7 @@ nsTreeBodyFrame::AdjustForCellText(nsAutoString& aText,
           uint32_t length = aText.Length();
           uint32_t i;
           for (i = 0; i < length; ++i) {
-            PRUnichar ch = aText[i];
+            char16_t ch = aText[i];
             // XXX this is horrible and doesn't handle clusters
             cwidth = aRenderingContext.GetWidth(ch);
             if (twidth + cwidth > width)
@@ -1418,7 +1418,7 @@ nsTreeBodyFrame::AdjustForCellText(nsAutoString& aText,
           int32_t length = aText.Length();
           int32_t i;
           for (i=length-1; i >= 0; --i) {
-            PRUnichar ch = aText[i];
+            char16_t ch = aText[i];
             cwidth = aRenderingContext.GetWidth(ch);
             if (twidth + cwidth > width)
               break;
@@ -1440,7 +1440,7 @@ nsTreeBodyFrame::AdjustForCellText(nsAutoString& aText,
           int32_t length = aText.Length();
           int32_t rightPos = length - 1;
           for (int32_t leftPos = 0; leftPos < rightPos; ++leftPos) {
-            PRUnichar ch = aText[leftPos];
+            char16_t ch = aText[leftPos];
             cwidth = aRenderingContext.GetWidth(ch);
             twidth += cwidth;
             if (twidth > width)
@@ -2522,7 +2522,7 @@ nsTreeBodyFrame::CalcHorzWidth(const ScrollParts& aParts)
   return width;
 }
 
-NS_IMETHODIMP
+nsresult
 nsTreeBodyFrame::GetCursor(const nsPoint& aPoint,
                            nsIFrame::Cursor& aCursor)
 {
@@ -2563,7 +2563,7 @@ static uint32_t GetDropEffect(WidgetGUIEvent* aEvent)
   return action;
 }
 
-NS_IMETHODIMP
+nsresult
 nsTreeBodyFrame::HandleEvent(nsPresContext* aPresContext,
                              WidgetGUIEvent* aEvent,
                              nsEventStatus* aEventStatus)
@@ -3524,7 +3524,7 @@ nsTreeBodyFrame::PaintImage(int32_t              aRowIndex,
 
     gfxContext* ctx = aRenderingContext.ThebesContext();
     if (opacity != 1.0f) {
-      ctx->PushGroup(GFX_CONTENT_COLOR_ALPHA);
+      ctx->PushGroup(gfxContentType::COLOR_ALPHA);
     }
 
     nsLayoutUtils::DrawImage(&aRenderingContext, image,
@@ -3639,7 +3639,7 @@ nsTreeBodyFrame::PaintText(int32_t              aRowIndex,
 
   gfxContext* ctx = aRenderingContext.ThebesContext();
   if (opacity != 1.0f) {
-    ctx->PushGroup(GFX_CONTENT_COLOR_ALPHA);
+    ctx->PushGroup(gfxContentType::COLOR_ALPHA);
   }
 
   nsLayoutUtils::DrawString(this, &aRenderingContext, text.get(), text.Length(),
@@ -4654,7 +4654,7 @@ class nsOverflowChecker : public nsRunnable
 {
 public:
   nsOverflowChecker(nsTreeBodyFrame* aFrame) : mFrame(aFrame) {}
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() MOZ_OVERRIDE
   {
     if (mFrame.IsAlive()) {
       nsTreeBodyFrame* tree = static_cast<nsTreeBodyFrame*>(mFrame.GetFrame());

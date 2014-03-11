@@ -11,3 +11,12 @@ SOURCES += [
 LIBRARY_NAME = 'omxplugingb'
 
 FORCE_SHARED_LIB = True
+
+LOCAL_INCLUDES += [
+    '../../../content/media/plugins',
+    '../include/gb',
+    '../include/gb/media/stagefright/openmax',
+]
+
+# Don't use STL wrappers; this isn't Gecko code
+DISABLE_STL_WRAPPING = True

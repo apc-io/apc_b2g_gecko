@@ -18,7 +18,6 @@
 #include "jsanalyze.h"
 #include "jsapi.h"
 #include "jsatom.h"
-#include "jsautooplen.h"
 #include "jscntxt.h"
 #include "jscompartment.h"
 #include "jsfun.h"
@@ -33,6 +32,7 @@
 #include "frontend/BytecodeCompiler.h"
 #include "frontend/SourceNotes.h"
 #include "js/CharacterEncoding.h"
+#include "vm/Opcodes.h"
 #include "vm/ScopeObject.h"
 #include "vm/Shape.h"
 #include "vm/StringBuffer.h"
@@ -53,17 +53,10 @@ using js::frontend::IsIdentifier;
  */
 JS_STATIC_ASSERT(sizeof(uint32_t) * JS_BITS_PER_BYTE >= INDEX_LIMIT_LOG2 + 1);
 
-/* Verify JSOP_XXX_LENGTH constant definitions. */
-#define OPDEF(op,val,name,token,length,nuses,ndefs,format)               \
-    JS_STATIC_ASSERT(op##_LENGTH == length);
-#include "jsopcode.tbl"
-#undef OPDEF
-
 const JSCodeSpec js_CodeSpec[] = {
-#define OPDEF(op,val,name,token,length,nuses,ndefs,format) \
-    {length,nuses,ndefs,format},
-#include "jsopcode.tbl"
-#undef OPDEF
+#define MAKE_CODESPEC(op,val,name,token,length,nuses,ndefs,format)  {length,nuses,ndefs,format},
+    FOR_EACH_OPCODE(MAKE_CODESPEC)
+#undef MAKE_CODESPEC
 };
 
 const unsigned js_NumCodeSpecs = JS_ARRAY_LENGTH(js_CodeSpec);
@@ -73,10 +66,9 @@ const unsigned js_NumCodeSpecs = JS_ARRAY_LENGTH(js_CodeSpec);
  * bytecode or null.
  */
 static const char * const CodeToken[] = {
-#define OPDEF(op,val,name,token,length,nuses,ndefs,format) \
-    token,
-#include "jsopcode.tbl"
-#undef OPDEF
+#define TOKEN(op, val, name, token, ...)  token,
+    FOR_EACH_OPCODE(TOKEN)
+#undef TOKEN
 };
 
 /*
@@ -84,10 +76,9 @@ static const char * const CodeToken[] = {
  * and JIT debug spew.
  */
 const char * const js_CodeName[] = {
-#define OPDEF(op,val,name,token,length,nuses,ndefs,format) \
-    name,
-#include "jsopcode.tbl"
-#undef OPDEF
+#define OPNAME(op, val, name, ...)  name,
+    FOR_EACH_OPCODE(OPNAME)
+#undef OPNAME
 };
 
 /************************************************************************/
@@ -126,8 +117,6 @@ js::StackUses(JSScript *script, jsbytecode *pc)
     switch (op) {
       case JSOP_POPN:
         return GET_UINT16(pc);
-      case JSOP_POPNV:
-        return GET_UINT16(pc) + 1;
       default:
         /* stack: fun, this, [argc arguments] */
         JS_ASSERT(op == JSOP_NEW || op == JSOP_CALL || op == JSOP_EVAL ||
@@ -304,8 +293,8 @@ AssertStackDepth(JSScript *script, uint32_t offset, uint32_t stackDepth) {
      *
      *     call js_DumpScriptDepth(cx, script, pc)
      */
-    JS_ASSERT_IF(script->hasAnalysis() && script->analysis()->maybeCode(offset),
-                 script->analysis()->getCode(offset).stackDepth == stackDepth);
+    if (script->hasAnalysis())
+        script->analysis()->assertMatchingStackDepthAtOffset(offset, stackDepth);
 }
 
 namespace {
@@ -410,7 +399,8 @@ class BytecodeParser
     }
 
     uint32_t numSlots() {
-        return 1 + (script_->function() ? script_->function()->nargs() : 0) + script_->nfixed();
+        return 1 + script_->nfixed() +
+               (script_->functionNonDelazifying() ? script_->functionNonDelazifying()->nargs() : 0);
     }
 
     uint32_t maximumStackDepth() {
@@ -475,6 +465,16 @@ BytecodeParser::simulateOp(JSOp op, uint32_t offset, uint32_t *offsetStack, uint
             offsetStack[stackDepth + 3] = offsetStack[stackDepth + 1];
         }
         break;
+
+      case JSOP_DUPAT: {
+        JS_ASSERT(ndefs == 1);
+        jsbytecode *pc = script_->offsetToPC(offset);
+        unsigned n = GET_UINT24(pc);
+        JS_ASSERT(n < stackDepth);
+        if (offsetStack)
+            offsetStack[stackDepth] = offsetStack[stackDepth - 1 - n];
+        break;
+      }
 
       case JSOP_SWAP:
         JS_ASSERT(ndefs == 2);
@@ -814,7 +814,7 @@ static char *
 QuoteString(Sprinter *sp, JSString *str, uint32_t quote);
 
 static bool
-ToDisassemblySource(JSContext *cx, jsval v, JSAutoByteString *bytes)
+ToDisassemblySource(JSContext *cx, HandleValue v, JSAutoByteString *bytes)
 {
     if (JSVAL_IS_STRING(v)) {
         Sprinter sprinter(cx);
@@ -840,13 +840,13 @@ ToDisassemblySource(JSContext *cx, jsval v, JSAutoByteString *bytes)
 
     if (!JSVAL_IS_PRIMITIVE(v)) {
         JSObject *obj = JSVAL_TO_OBJECT(v);
-        if (obj->is<BlockObject>()) {
-            char *source = JS_sprintf_append(nullptr, "depth %d {",
-                                             obj->as<BlockObject>().stackDepth());
+        if (obj->is<StaticBlockObject>()) {
+            Rooted<StaticBlockObject*> block(cx, &obj->as<StaticBlockObject>());
+            char *source = JS_sprintf_append(nullptr, "depth %d {", block->localOffset());
             if (!source)
                 return false;
 
-            Shape::Range<CanGC> r(cx, obj->lastProperty());
+            Shape::Range<CanGC> r(cx, block->lastProperty());
 
             while (!r.empty()) {
                 Rooted<Shape*> shape(cx, &r.front());
@@ -860,7 +860,8 @@ ToDisassemblySource(JSContext *cx, jsval v, JSAutoByteString *bytes)
 
                 r.popFront();
                 source = JS_sprintf_append(source, "%s: %d%s",
-                                           bytes.ptr(), shape->shortid(),
+                                           bytes.ptr(),
+                                           block->shapeToIndex(*shape),
                                            !r.empty() ? ", " : "");
                 if (!source)
                     return false;
@@ -874,7 +875,8 @@ ToDisassemblySource(JSContext *cx, jsval v, JSAutoByteString *bytes)
         }
 
         if (obj->is<JSFunction>()) {
-            JSString *str = JS_DecompileFunction(cx, &obj->as<JSFunction>(), JS_DONT_PRETTY_PRINT);
+            RootedFunction fun(cx, &obj->as<JSFunction>());
+            JSString *str = JS_DecompileFunction(cx, fun, JS_DONT_PRETTY_PRINT);
             if (!str)
                 return false;
             return bytes->encodeLatin1(cx, str);
@@ -940,17 +942,18 @@ js_Disassemble1(JSContext *cx, HandleScript script, jsbytecode *pc,
       }
 
       case JOF_SCOPECOORD: {
-        Value v = StringValue(ScopeCoordinateName(cx->runtime()->scopeCoordinateNameCache, script, pc));
+        RootedValue v(cx,
+            StringValue(ScopeCoordinateName(cx->runtime()->scopeCoordinateNameCache, script, pc)));
         JSAutoByteString bytes;
         if (!ToDisassemblySource(cx, v, &bytes))
             return 0;
         ScopeCoordinate sc(pc);
-        Sprint(sp, " %s (hops = %u, slot = %u)", bytes.ptr(), sc.hops, sc.slot);
+        Sprint(sp, " %s (hops = %u, slot = %u)", bytes.ptr(), sc.hops(), sc.slot());
         break;
       }
 
       case JOF_ATOM: {
-        Value v = StringValue(script->getAtom(GET_UINT32_INDEX(pc)));
+        RootedValue v(cx, StringValue(script->getAtom(GET_UINT32_INDEX(pc))));
         JSAutoByteString bytes;
         if (!ToDisassemblySource(cx, v, &bytes))
             return 0;
@@ -959,7 +962,7 @@ js_Disassemble1(JSContext *cx, HandleScript script, jsbytecode *pc,
       }
 
       case JOF_DOUBLE: {
-        Value v = script->getConst(GET_UINT32_INDEX(pc));
+        RootedValue v(cx, script->getConst(GET_UINT32_INDEX(pc)));
         JSAutoByteString bytes;
         if (!ToDisassemblySource(cx, v, &bytes))
             return 0;
@@ -977,7 +980,8 @@ js_Disassemble1(JSContext *cx, HandleScript script, jsbytecode *pc,
         JSObject *obj = script->getObject(GET_UINT32_INDEX(pc));
         {
             JSAutoByteString bytes;
-            if (!ToDisassemblySource(cx, ObjectValue(*obj), &bytes))
+            RootedValue v(cx, ObjectValue(*obj));
+            if (!ToDisassemblySource(cx, v, &bytes))
                 return 0;
             Sprint(sp, " %s", bytes.ptr());
         }
@@ -987,7 +991,8 @@ js_Disassemble1(JSContext *cx, HandleScript script, jsbytecode *pc,
       case JOF_REGEXP: {
         JSObject *obj = script->getRegExp(GET_UINT32_INDEX(pc));
         JSAutoByteString bytes;
-        if (!ToDisassemblySource(cx, ObjectValue(*obj), &bytes))
+        RootedValue v(cx, ObjectValue(*obj));
+        if (!ToDisassemblySource(cx, v, &bytes))
             return 0;
         Sprint(sp, " %s", bytes.ptr());
         break;
@@ -1018,34 +1023,19 @@ js_Disassemble1(JSContext *cx, HandleScript script, jsbytecode *pc,
         break;
 
       case JOF_LOCAL:
-        Sprint(sp, " %u", GET_SLOTNO(pc));
+        Sprint(sp, " %u", GET_LOCALNO(pc));
         break;
-
-      case JOF_SLOTOBJECT: {
-        Sprint(sp, " %u", GET_SLOTNO(pc));
-        JSObject *obj = script->getObject(GET_UINT32_INDEX(pc + SLOTNO_LEN));
-        JSAutoByteString bytes;
-        if (!ToDisassemblySource(cx, ObjectValue(*obj), &bytes))
-            return 0;
-        Sprint(sp, " %s", bytes.ptr());
-        break;
-      }
 
       {
         int i;
-
-      case JOF_UINT16PAIR:
-        i = (int)GET_UINT16(pc);
-        Sprint(sp, " %d", i);
-        pc += UINT16_LEN;
-        /* FALL THROUGH */
 
       case JOF_UINT16:
         i = (int)GET_UINT16(pc);
         goto print_int;
 
       case JOF_UINT24:
-        JS_ASSERT(op == JSOP_UINT24 || op == JSOP_NEWARRAY || op == JSOP_INITELEM_ARRAY);
+        JS_ASSERT(op == JSOP_UINT24 || op == JSOP_NEWARRAY || op == JSOP_INITELEM_ARRAY ||
+                  op == JSOP_DUPAT);
         i = (int)GET_UINT24(pc);
         goto print_int;
 
@@ -1456,9 +1446,8 @@ struct ExpressionDecompiler
     bool init();
     bool decompilePCForStackOperand(jsbytecode *pc, int i);
     bool decompilePC(jsbytecode *pc);
-    JSAtom *getVar(unsigned slot);
+    JSAtom *getLocal(uint32_t local, jsbytecode *pc);
     JSAtom *getArg(unsigned slot);
-    JSAtom *findLetVar(jsbytecode *pc, unsigned depth);
     JSAtom *loadAtom(jsbytecode *pc);
     bool quote(JSString *s, uint32_t quote);
     bool write(const char *s);
@@ -1512,6 +1501,8 @@ ExpressionDecompiler::decompilePC(jsbytecode *pc)
       case JSOP_CALLGNAME:
       case JSOP_NAME:
       case JSOP_CALLNAME:
+      case JSOP_GETINTRINSIC:
+      case JSOP_CALLINTRINSIC:
         return write(loadAtom(pc));
       case JSOP_GETARG:
       case JSOP_CALLARG: {
@@ -1521,19 +1512,10 @@ ExpressionDecompiler::decompilePC(jsbytecode *pc)
       }
       case JSOP_GETLOCAL:
       case JSOP_CALLLOCAL: {
-        unsigned i = GET_SLOTNO(pc);
-        JSAtom *atom;
-        if (i >= script->nfixed()) {
-            i -= script->nfixed();
-            JS_ASSERT(i < unsigned(parser.stackDepthAtPC(pc)));
-            atom = findLetVar(pc, i);
-            if (!atom)
-                return decompilePCForStackOperand(pc, i); // Destructing temporary
-        } else {
-            atom = getVar(i);
-        }
-        JS_ASSERT(atom);
-        return write(atom);
+        uint32_t i = GET_LOCALNO(pc);
+        if (JSAtom *atom = getLocal(i, pc))
+            return write(atom);
+        return write("(intermediate value)");
       }
       case JSOP_CALLALIASEDVAR:
       case JSOP_GETALIASEDVAR: {
@@ -1659,24 +1641,6 @@ ExpressionDecompiler::loadAtom(jsbytecode *pc)
 }
 
 JSAtom *
-ExpressionDecompiler::findLetVar(jsbytecode *pc, unsigned depth)
-{
-    for (JSObject *chain = script->getBlockScope(pc); chain; chain = chain->getParent()) {
-        StaticBlockObject &block = chain->as<StaticBlockObject>();
-        uint32_t blockDepth = block.stackDepth();
-        uint32_t blockCount = block.slotCount();
-        if (uint32_t(depth - blockDepth) < uint32_t(blockCount)) {
-            for (Shape::Range<NoGC> r(block.lastProperty()); !r.empty(); r.popFront()) {
-                const Shape &shape = r.front();
-                if (shape.shortid() == int(depth - blockDepth))
-                    return JSID_TO_ATOM(shape.propid());
-            }
-        }
-    }
-    return nullptr;
-}
-
-JSAtom *
 ExpressionDecompiler::getArg(unsigned slot)
 {
     JS_ASSERT(fun);
@@ -1685,12 +1649,34 @@ ExpressionDecompiler::getArg(unsigned slot)
 }
 
 JSAtom *
-ExpressionDecompiler::getVar(unsigned slot)
+ExpressionDecompiler::getLocal(uint32_t local, jsbytecode *pc)
 {
-    JS_ASSERT(fun);
-    slot += fun->nargs();
-    JS_ASSERT(slot < script->bindings.count());
-    return (*localNames)[slot].name();
+    JS_ASSERT(local < script->nfixed());
+    if (local < script->nfixedvars()) {
+        JS_ASSERT(fun);
+        uint32_t slot = local + fun->nargs();
+        JS_ASSERT(slot < script->bindings.count());
+        return (*localNames)[slot].name();
+    }
+    for (NestedScopeObject *chain = script->getStaticScope(pc);
+         chain;
+         chain = chain->enclosingNestedScope()) {
+        if (!chain->is<StaticBlockObject>())
+            continue;
+        StaticBlockObject &block = chain->as<StaticBlockObject>();
+        if (local < block.localOffset())
+            continue;
+        local -= block.localOffset();
+        if (local >= block.numVariables())
+            return nullptr;
+        for (Shape::Range<NoGC> r(block.lastProperty()); !r.empty(); r.popFront()) {
+            const Shape &shape = r.front();
+            if (block.shapeToIndex(shape) == local)
+                return JSID_TO_ATOM(shape.propid());
+        }
+        break;
+    }
+    return nullptr;
 }
 
 bool
@@ -1708,7 +1694,7 @@ ExpressionDecompiler::getOutput(char **res)
 }  // anonymous namespace
 
 static bool
-FindStartPC(JSContext *cx, ScriptFrameIter &iter, int spindex, int skipStackHits, Value v,
+FindStartPC(JSContext *cx, const FrameIter &iter, int spindex, int skipStackHits, Value v,
             jsbytecode **valuepc)
 {
     jsbytecode *current = *valuepc;
@@ -1779,9 +1765,9 @@ DecompileExpressionFromStack(JSContext *cx, int spindex, int skipStackHits, Hand
     return true;
 #endif
 
-    ScriptFrameIter frameIter(cx);
+    FrameIter frameIter(cx);
 
-    if (frameIter.done())
+    if (frameIter.done() || !frameIter.hasScript())
         return true;
 
     RootedScript script(cx, frameIter.script());
@@ -1857,7 +1843,7 @@ DecompileArgumentFromStack(JSContext *cx, int formalIndex, char **res)
      * Settle on the nearest script frame, which should be the builtin that
      * called the intrinsic.
      */
-    ScriptFrameIter frameIter(cx);
+    FrameIter frameIter(cx);
     JS_ASSERT(!frameIter.done());
 
     /*
@@ -1865,7 +1851,7 @@ DecompileArgumentFromStack(JSContext *cx, int formalIndex, char **res)
      * intrinsic.
      */
     ++frameIter;
-    if (frameIter.done())
+    if (frameIter.done() || !frameIter.hasScript())
         return true;
 
     RootedScript script(cx, frameIter.script());
@@ -2036,8 +2022,8 @@ js::GetPCCountScriptSummary(JSContext *cx, size_t index)
     AppendJSONProperty(buf, "line");
     NumberValueToStringBuffer(cx, Int32Value(script->lineno()), buf);
 
-    if (script->function()) {
-        JSAtom *atom = script->function()->displayAtom();
+    if (script->functionNonDelazifying()) {
+        JSAtom *atom = script->functionNonDelazifying()->displayAtom();
         if (atom) {
             AppendJSONProperty(buf, "name");
             if (!(str = StringToSource(cx, atom)))
@@ -2169,7 +2155,7 @@ GetPCCountJSON(JSContext *cx, const ScriptAndCounts &sac, StringBuffer &buf)
         }
 
         {
-            ExpressionDecompiler ed(cx, script, script->function());
+            ExpressionDecompiler ed(cx, script, script->functionDelazifying());
             if (!ed.init())
                 return false;
             if (!ed.decompilePC(pc))
@@ -2280,7 +2266,7 @@ js::GetPCCountScriptContents(JSContext *cx, size_t index)
 
     StringBuffer buf(cx);
 
-    if (!script->function() && !script->compileAndGo())
+    if (!script->functionNonDelazifying() && !script->compileAndGo())
         return buf.finishString();
 
     {

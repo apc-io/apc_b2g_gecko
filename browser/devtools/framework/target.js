@@ -7,7 +7,7 @@
 const {Cc, Ci, Cu} = require("chrome");
 
 var promise = require("sdk/core/promise");
-var EventEmitter = require("devtools/shared/event-emitter");
+var EventEmitter = require("devtools/toolkit/event-emitter");
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "DebuggerServer",
@@ -284,6 +284,7 @@ TabTarget.prototype = {
           this._remote.reject("Unable to attach to the tab");
           return;
         }
+        this.activeTab = aTabClient;
         this.threadActor = aResponse.threadActor;
         this._remote.resolve(null);
       });
@@ -303,6 +304,7 @@ TabTarget.prototype = {
               this._form = tab;
               return true;
             }
+            return false;
           });
           if (!this._form) {
             this._form = aResponse.tabs[aResponse.selected];
@@ -350,6 +352,8 @@ TabTarget.prototype = {
    * Setup listeners for remote debugging, updating existing ones as necessary.
    */
   _setupRemoteListeners: function TabTarget__setupRemoteListeners() {
+    this.client.addListener("closed", this.destroy);
+
     this._onTabDetached = (aType, aPacket) => {
       // We have to filter message to ensure that this detach is for this tab
       if (aPacket.from == this._form.actor) {
@@ -382,6 +386,7 @@ TabTarget.prototype = {
    * Teardown listeners for remote debugging.
    */
   _teardownRemoteListeners: function TabTarget__teardownRemoteListeners() {
+    this.client.removeListener("closed", this.destroy);
     this.client.removeListener("tabNavigated", this._onTabNavigated);
     this.client.removeListener("tabDetached", this._onTabDetached);
   },
@@ -443,11 +448,14 @@ TabTarget.prototype = {
       this._teardownListeners();
     }
 
+    let cleanupAndResolve = () => {
+      this._cleanup();
+      this._destroyer.resolve(null);
+    };
     // If this target was not remoted, the promise will be resolved before the
     // function returns.
     if (this._tab && !this._client) {
-      this._cleanup();
-      this._destroyer.resolve(null);
+      cleanupAndResolve();
     } else if (this._client) {
       // If, on the other hand, this target was remoted, the promise will be
       // resolved after the remote connection is closed.
@@ -456,15 +464,15 @@ TabTarget.prototype = {
       if (this.isLocalTab) {
         // We started with a local tab and created the client ourselves, so we
         // should close it.
-        this._client.close(() => {
-          this._cleanup();
-          this._destroyer.resolve(null);
-        });
+        this._client.close(cleanupAndResolve);
       } else {
         // The client was handed to us, so we are not responsible for closing
-        // it.
-        this._cleanup();
-        this._destroyer.resolve(null);
+        // it. We just need to detach from the tab, if already attached.
+        if (this.activeTab) {
+          this.activeTab.detach(cleanupAndResolve);
+        } else {
+          cleanupAndResolve();
+        }
       }
     }
 
@@ -480,6 +488,7 @@ TabTarget.prototype = {
     } else {
       promiseTargets.delete(this._form);
     }
+    this.activeTab = null;
     this._client = null;
     this._tab = null;
     this._form = null;
@@ -553,7 +562,11 @@ TabWebProgressListener.prototype = {
    */
   destroy: function TWPL_destroy() {
     if (this.target.tab) {
-      this.target.tab.linkedBrowser.removeProgressListener(this);
+      try {
+        this.target.tab.linkedBrowser.removeProgressListener(this);
+      } catch (ex) {
+        // This can throw when a tab crashes in e10s.
+      }
     }
     this.target._webProgressListener = null;
     this.target._navRequest = null;

@@ -32,9 +32,15 @@ public:
     return mImpl->gl();
   }
 
-  virtual ShaderProgramOGL* GetProgram(ShaderProgramType aType) MOZ_OVERRIDE
+  virtual ShaderProgramOGL* GetProgram(GLenum aTarget, gfx::SurfaceFormat aFormat) MOZ_OVERRIDE
   {
-    return mImpl->GetProgram(aType);
+    ShaderConfigOGL config = ShaderConfigFromTargetAndFormat(aTarget, aFormat);
+    return mImpl->GetShaderProgramFor(config);
+  }
+
+  virtual const gfx::Matrix4x4& GetProjMatrix() const MOZ_OVERRIDE
+  {
+    return mImpl->GetProjMatrix();
   }
 
   virtual void BindAndDrawQuad(ShaderProgramOGL *aProg) MOZ_OVERRIDE
@@ -50,7 +56,7 @@ private:
 GLManager::CreateGLManager(LayerManagerComposite* aManager)
 {
   if (aManager &&
-      Compositor::GetBackend() == LAYERS_OPENGL) {
+      Compositor::GetBackend() == LayersBackend::LAYERS_OPENGL) {
     return new GLManagerCompositor(static_cast<CompositorOGL*>(
       aManager->GetCompositor()));
   }

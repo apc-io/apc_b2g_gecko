@@ -10,7 +10,6 @@
 #include "nsIBaseWindow.h"
 #include "nsIDocShellTreeOwner.h"
 #include "nsIDocument.h"
-#include "nsIDOMDocument.h"
 #include "nsIDOMHTMLDocument.h"
 #include "nsIDOMHTMLElement.h"
 #include "nsRange.h"
@@ -24,16 +23,17 @@
 #include "nsEventStateManager.h"
 #include "nsISelectionPrivate.h"
 #include "nsISelectionController.h"
+#include "mozilla/dom/TouchEvent.h"
 #include "mozilla/MouseEvents.h"
 #include "mozilla/TouchEvents.h"
 #include "nsView.h"
 #include "nsGkAtoms.h"
-#include "nsDOMTouchEvent.h"
 
 #include "nsComponentManagerUtils.h"
 
 #include "nsITreeBoxObject.h"
 #include "nsITreeColumns.h"
+#include "mozilla/dom/Element.h"
 
 using namespace mozilla;
 
@@ -141,7 +141,7 @@ nsCoreUtils::DispatchTouchEvent(uint32_t aEventType, int32_t aX, int32_t aY,
                                 nsIContent* aContent, nsIFrame* aFrame,
                                 nsIPresShell* aPresShell, nsIWidget* aRootWidget)
 {
-  if (!nsDOMTouchEvent::PrefEnabled())
+  if (!dom::TouchEvent::PrefEnabled())
     return;
 
   WidgetTouchEvent event(true, aEventType, aRootWidget);
@@ -149,9 +149,8 @@ nsCoreUtils::DispatchTouchEvent(uint32_t aEventType, int32_t aX, int32_t aY,
   event.time = PR_IntervalNow();
 
   // XXX: Touch has an identifier of -1 to hint that it is synthesized.
-  nsRefPtr<mozilla::dom::Touch> t =
-    new mozilla::dom::Touch(-1, nsIntPoint(aX, aY),
-                            nsIntPoint(1, 1), 0.0f, 1.0f);
+  nsRefPtr<dom::Touch> t = new dom::Touch(-1, nsIntPoint(aX, aY),
+                                          nsIntPoint(1, 1), 0.0f, 1.0f);
   t->SetTarget(aContent);
   event.touches.AppendElement(t);
   nsEventStatus status = nsEventStatus_eIgnore;
@@ -216,8 +215,8 @@ nsCoreUtils::GetRoleContent(nsINode *aNode)
 {
   nsCOMPtr<nsIContent> content(do_QueryInterface(aNode));
   if (!content) {
-    nsCOMPtr<nsIDOMDocument> domDoc(do_QueryInterface(aNode));
-    if (domDoc) {
+    nsCOMPtr<nsIDocument> doc(do_QueryInterface(aNode));
+    if (doc) {
       nsCOMPtr<nsIDOMHTMLDocument> htmlDoc(do_QueryInterface(aNode));
       if (htmlDoc) {
         nsCOMPtr<nsIDOMHTMLElement> bodyElement;
@@ -225,9 +224,7 @@ nsCoreUtils::GetRoleContent(nsINode *aNode)
         content = do_QueryInterface(bodyElement);
       }
       else {
-        nsCOMPtr<nsIDOMElement> docElement;
-        domDoc->GetDocumentElement(getter_AddRefs(docElement));
-        content = do_QueryInterface(docElement);
+        return doc->GetDocumentElement();
       }
     }
   }
@@ -416,9 +413,7 @@ nsCoreUtils::IsContentDocument(nsIDocument *aDocument)
   nsCOMPtr<nsIDocShellTreeItem> docShellTreeItem = aDocument->GetDocShell();
   NS_ASSERTION(docShellTreeItem, "No document shell tree item for document!");
 
-  int32_t contentType;
-  docShellTreeItem->GetItemType(&contentType);
-  return (contentType == nsIDocShellTreeItem::typeContent);
+  return (docShellTreeItem->ItemType() == nsIDocShellTreeItem::typeContent);
 }
 
 bool
@@ -653,38 +648,3 @@ nsCoreUtils::IsWhitespaceString(const nsSubstring& aString)
 
   return iterBegin == iterEnd;
 }
-
-
-////////////////////////////////////////////////////////////////////////////////
-// nsAccessibleDOMStringList
-////////////////////////////////////////////////////////////////////////////////
-
-NS_IMPL_ISUPPORTS1(nsAccessibleDOMStringList, nsIDOMDOMStringList)
-
-NS_IMETHODIMP
-nsAccessibleDOMStringList::Item(uint32_t aIndex, nsAString& aResult)
-{
-  if (aIndex >= mNames.Length())
-    SetDOMStringToNull(aResult);
-  else
-    aResult = mNames.ElementAt(aIndex);
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsAccessibleDOMStringList::GetLength(uint32_t* aLength)
-{
-  *aLength = mNames.Length();
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsAccessibleDOMStringList::Contains(const nsAString& aString, bool* aResult)
-{
-  *aResult = mNames.Contains(aString);
-
-  return NS_OK;
-}
-

@@ -11,6 +11,7 @@
 #include "nsPrintfCString.h"
 #include "prenv.h"
 #include "GLContext.h"
+#include "gfxPrefs.h"
 
 namespace mozilla {
 namespace gl {
@@ -34,15 +35,7 @@ static const char *sEGLExtensionNames[] = {
 
 static PRLibrary* LoadApitraceLibrary()
 {
-    static bool sUseApitraceInitialized = false;
-    static bool sUseApitrace = false;
-
-    if (!sUseApitraceInitialized) {
-        sUseApitrace = Preferences::GetBool("gfx.apitrace.enabled", false);
-        sUseApitraceInitialized = true;
-    }
-
-    if (!sUseApitrace) {
+    if (!gfxPrefs::UseApitrace()) {
         return nullptr;
     }
 

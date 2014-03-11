@@ -12,7 +12,6 @@
 #include "nsHttpChannel.h"
 #include "nsHttpAuthCache.h"
 #include "nsStandardURL.h"
-#include "nsIDOMConnection.h"
 #include "nsIDOMWindow.h"
 #include "nsIDOMNavigator.h"
 #include "nsIMozNavigatorNetwork.h"
@@ -63,18 +62,7 @@
 #include "nsCocoaFeatures.h"
 #endif
 
-#if defined(XP_OS2)
-#define INCL_DOSMISC
-#include <os2.h>
-#endif
-
-#if defined(MOZ_WIDGET_GONK)
-#include "nsINetworkManager.h"
-#endif
-
 //-----------------------------------------------------------------------------
-using namespace mozilla;
-using namespace mozilla::net;
 #include "mozilla/net/HttpChannelChild.h"
 
 
@@ -108,6 +96,9 @@ extern PRThread *gSocketThread;
 #define NS_HTTP_PROTOCOL_FLAGS (URI_STD | ALLOWS_PROXY | ALLOWS_PROXY_HTTP | URI_LOADABLE_BY_ANYONE)
 
 //-----------------------------------------------------------------------------
+
+namespace mozilla {
+namespace net {
 
 static nsresult
 NewURI(const nsACString &aSpec,
@@ -151,6 +142,7 @@ nsHttpHandler::nsHttpHandler()
     , mProxyPipelining(true)
     , mIdleTimeout(PR_SecondsToInterval(10))
     , mSpdyTimeout(PR_SecondsToInterval(180))
+    , mResponseTimeout(PR_SecondsToInterval(600))
     , mMaxRequestAttempts(10)
     , mMaxRequestDelay(10)
     , mIdleSynTimeout(250)
@@ -188,9 +180,11 @@ nsHttpHandler::nsHttpHandler()
     , mEnableSpdy(false)
     , mSpdyV3(true)
     , mSpdyV31(true)
+    , mHttp2DraftEnabled(true)
+    , mEnforceHttp2TlsProfile(true)
     , mCoalesceSpdy(true)
     , mSpdyPersistentSettings(false)
-    , mAllowSpdyPush(true)
+    , mAllowPush(true)
     , mSpdySendingChunkSize(ASpdySession::kSendingChunkSize)
     , mSpdySendBufferSize(ASpdySession::kTCPSendBufferSize)
     , mSpdyPushAllowance(32768)
@@ -203,13 +197,11 @@ nsHttpHandler::nsHttpHandler()
     , mRequestTokenBucketMinParallelism(6)
     , mRequestTokenBucketHz(100)
     , mRequestTokenBucketBurst(32)
-    , mCriticalRequestPrioritization(true)
-    , mEthernetBytesRead(0)
-    , mEthernetBytesWritten(0)
-    , mCellBytesRead(0)
-    , mCellBytesWritten(0)
-    , mNetworkTypeKnown(false)
-    , mNetworkTypeWasEthernet(true)
+    , mTCPKeepaliveShortLivedEnabled(false)
+    , mTCPKeepaliveShortLivedTimeS(60)
+    , mTCPKeepaliveShortLivedIdleTimeS(10)
+    , mTCPKeepaliveLongLivedEnabled(false)
+    , mTCPKeepaliveLongLivedIdleTimeS(600)
 {
 #if defined(PR_LOGGING)
     gHttpLog = PR_NewLogModule("nsHttp");
@@ -283,7 +275,8 @@ nsHttpHandler::Init()
         prefBranch->AddObserver(DONOTTRACK_HEADER_ENABLED, this, true);
         prefBranch->AddObserver(DONOTTRACK_HEADER_VALUE, this, true);
         prefBranch->AddObserver(TELEMETRY_ENABLED, this, true);
-
+        prefBranch->AddObserver(HTTP_PREF("tcp_keepalive.short_lived_connections"), this, true);
+        prefBranch->AddObserver(HTTP_PREF("tcp_keepalive.long_lived_connections"), this, true);
         PrefsChanged(prefBranch, nullptr);
     }
 
@@ -372,8 +365,8 @@ nsHttpHandler::MakeNewRequestTokenBucket()
     if (!mConnMgr)
         return;
 
-    nsRefPtr<mozilla::net::EventTokenBucket> tokenBucket =
-        new mozilla::net::EventTokenBucket(RequestTokenBucketHz(),
+    nsRefPtr<EventTokenBucket> tokenBucket =
+        new EventTokenBucket(RequestTokenBucketHz(),
                                            RequestTokenBucketBurst());
     mConnMgr->UpdateRequestTokenBucket(tokenBucket);
 }
@@ -671,8 +664,6 @@ nsHttpHandler::InitUserAgentComponents()
     mPlatform.AssignLiteral(
 #if defined(ANDROID)
     "Android"
-#elif defined(XP_OS2)
-    "OS/2"
 #elif defined(XP_WIN)
     "Windows"
 #elif defined(XP_MACOSX)
@@ -697,20 +688,7 @@ nsHttpHandler::InitUserAgentComponents()
 
 #ifndef MOZ_UA_OS_AGNOSTIC
     // Gather OS/CPU.
-#if defined(XP_OS2)
-    ULONG os2ver = 0;
-    DosQuerySysInfo(QSV_VERSION_MINOR, QSV_VERSION_MINOR,
-                    &os2ver, sizeof(os2ver));
-    if (os2ver == 11)
-        mOscpu.AssignLiteral("2.11");
-    else if (os2ver == 30)
-        mOscpu.AssignLiteral("Warp 3");
-    else if (os2ver == 40)
-        mOscpu.AssignLiteral("Warp 4");
-    else if (os2ver == 45)
-        mOscpu.AssignLiteral("Warp 4.5");
-
-#elif defined(XP_WIN)
+#if defined(XP_WIN)
     OSVERSIONINFO info = { sizeof(OSVERSIONINFO) };
 #pragma warning(push)
 #pragma warning(disable:4996)
@@ -860,6 +838,12 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
                 mConnMgr->UpdateParam(nsHttpConnectionMgr::MAX_REQUEST_DELAY,
                                       mMaxRequestDelay);
         }
+    }
+
+    if (PREF_CHANGED(HTTP_PREF("response.timeout"))) {
+        rv = prefs->GetIntPref(HTTP_PREF("response.timeout"), &val);
+        if (NS_SUCCEEDED(rv))
+            mResponseTimeout = PR_SecondsToInterval(clamped(val, 0, 0xffff));
     }
 
     if (PREF_CHANGED(HTTP_PREF("max-connections"))) {
@@ -1156,6 +1140,18 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
             mSpdyV31 = cVar;
     }
 
+    if (PREF_CHANGED(HTTP_PREF("spdy.enabled.http2draft"))) {
+        rv = prefs->GetBoolPref(HTTP_PREF("spdy.enabled.http2draft"), &cVar);
+        if (NS_SUCCEEDED(rv))
+            mHttp2DraftEnabled = cVar;
+    }
+
+    if (PREF_CHANGED(HTTP_PREF("spdy.enforce-tls-profile"))) {
+        rv = prefs->GetBoolPref(HTTP_PREF("spdy.enforce-tls-profile"), &cVar);
+        if (NS_SUCCEEDED(rv))
+            mEnforceHttp2TlsProfile = cVar;
+    }
+
     if (PREF_CHANGED(HTTP_PREF("spdy.coalesce-hostnames"))) {
         rv = prefs->GetBoolPref(HTTP_PREF("spdy.coalesce-hostnames"), &cVar);
         if (NS_SUCCEEDED(rv))
@@ -1176,9 +1172,10 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
     }
 
     if (PREF_CHANGED(HTTP_PREF("spdy.chunk-size"))) {
+        // keep this within http/2 ranges of 1 to 2^14-1
         rv = prefs->GetIntPref(HTTP_PREF("spdy.chunk-size"), &val);
         if (NS_SUCCEEDED(rv))
-            mSpdySendingChunkSize = (uint32_t) clamped(val, 1, 0x7fffffff);
+            mSpdySendingChunkSize = (uint32_t) clamped(val, 1, 0x3fff);
     }
 
     // The amount of idle seconds on a spdy connection before initiating a
@@ -1203,7 +1200,7 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
         rv = prefs->GetBoolPref(HTTP_PREF("spdy.allow-push"),
                                 &cVar);
         if (NS_SUCCEEDED(rv))
-            mAllowSpdyPush = cVar;
+            mAllowPush = cVar;
     }
 
     if (PREF_CHANGED(HTTP_PREF("spdy.push-allowance"))) {
@@ -1396,8 +1393,49 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
     }
     if (requestTokenBucketUpdated) {
         mRequestTokenBucket =
-            new mozilla::net::EventTokenBucket(RequestTokenBucketHz(),
-                                               RequestTokenBucketBurst());
+            new EventTokenBucket(RequestTokenBucketHz(),
+                                 RequestTokenBucketBurst());
+    }
+
+    // Keepalive values for initial and idle connections.
+    if (PREF_CHANGED(HTTP_PREF("tcp_keepalive.short_lived_connections"))) {
+        rv = prefs->GetBoolPref(
+            HTTP_PREF("tcp_keepalive.short_lived_connections"), &cVar);
+        if (NS_SUCCEEDED(rv) && cVar != mTCPKeepaliveShortLivedEnabled) {
+            mTCPKeepaliveShortLivedEnabled = cVar;
+        }
+    }
+
+    if (PREF_CHANGED(HTTP_PREF("tcp_keepalive.short_lived_time"))) {
+        rv = prefs->GetIntPref(
+            HTTP_PREF("tcp_keepalive.short_lived_time"), &val);
+        if (NS_SUCCEEDED(rv) && val > 0)
+            mTCPKeepaliveShortLivedTimeS = clamped(val, 1, 300); // Max 5 mins.
+    }
+
+    if (PREF_CHANGED(HTTP_PREF("tcp_keepalive.short_lived_idle_time"))) {
+        rv = prefs->GetIntPref(
+            HTTP_PREF("tcp_keepalive.short_lived_idle_time"), &val);
+        if (NS_SUCCEEDED(rv) && val > 0)
+            mTCPKeepaliveShortLivedIdleTimeS = clamped(val,
+                                                       1, kMaxTCPKeepIdle);
+    }
+
+    // Keepalive values for Long-lived Connections.
+    if (PREF_CHANGED(HTTP_PREF("tcp_keepalive.long_lived_connections"))) {
+        rv = prefs->GetBoolPref(
+            HTTP_PREF("tcp_keepalive.long_lived_connections"), &cVar);
+        if (NS_SUCCEEDED(rv) && cVar != mTCPKeepaliveLongLivedEnabled) {
+            mTCPKeepaliveLongLivedEnabled = cVar;
+        }
+    }
+
+    if (PREF_CHANGED(HTTP_PREF("tcp_keepalive.long_lived_idle_time"))) {
+        rv = prefs->GetIntPref(
+            HTTP_PREF("tcp_keepalive.long_lived_idle_time"), &val);
+        if (NS_SUCCEEDED(rv) && val > 0)
+            mTCPKeepaliveLongLivedIdleTimeS = clamped(val,
+                                                      1, kMaxTCPKeepIdle);
     }
 
 #undef PREF_CHANGED
@@ -1535,14 +1573,13 @@ nsHttpHandler::SetAcceptEncodings(const char *aAcceptEncodings)
 // nsHttpHandler::nsISupports
 //-----------------------------------------------------------------------------
 
-NS_IMPL_ISUPPORTS7(nsHttpHandler,
+NS_IMPL_ISUPPORTS6(nsHttpHandler,
                    nsIHttpProtocolHandler,
                    nsIProxiedProtocolHandler,
                    nsIProtocolHandler,
                    nsIObserver,
                    nsISupportsWeakReference,
-                   nsISpeculativeConnect,
-                   nsIHttpDataUsage)
+                   nsISpeculativeConnect)
 
 //-----------------------------------------------------------------------------
 // nsHttpHandler::nsIProtocolHandler
@@ -1575,7 +1612,7 @@ nsHttpHandler::NewURI(const nsACString &aSpec,
                       nsIURI *aBaseURI,
                       nsIURI **aURI)
 {
-    return ::NewURI(aSpec, aCharset, aBaseURI, NS_HTTP_DEFAULT_PORT, aURI);
+    return mozilla::net::NewURI(aSpec, aCharset, aBaseURI, NS_HTTP_DEFAULT_PORT, aURI);
 }
 
 NS_IMETHODIMP
@@ -1747,7 +1784,7 @@ nsHttpHandler::GetCacheSessionNameForStoragePolicy(
 NS_IMETHODIMP
 nsHttpHandler::Observe(nsISupports *subject,
                        const char *topic,
-                       const PRUnichar *data)
+                       const char16_t *data)
 {
     LOG(("nsHttpHandler::Observe [topic=\"%s\"]\n", topic));
 
@@ -1866,248 +1903,45 @@ nsHttpHandler::SpeculativeConnect(nsIURI *aURI,
     return SpeculativeConnect(ci, aCallbacks);
 }
 
-// nsIHttpDataUsage
-
-NS_IMETHODIMP
-nsHttpHandler::GetEthernetBytesRead(uint64_t *aEthernetBytesRead)
-{
-    MOZ_ASSERT(NS_IsMainThread());
-    *aEthernetBytesRead = mEthernetBytesRead;
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-nsHttpHandler::GetEthernetBytesWritten(uint64_t *aEthernetBytesWritten)
-{
-    MOZ_ASSERT(NS_IsMainThread());
-    *aEthernetBytesWritten = mEthernetBytesWritten;
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-nsHttpHandler::GetCellBytesRead(uint64_t *aCellBytesRead)
-{
-    MOZ_ASSERT(NS_IsMainThread());
-    *aCellBytesRead = mCellBytesRead;
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-nsHttpHandler::GetCellBytesWritten(uint64_t *aCellBytesWritten)
-{
-    MOZ_ASSERT(NS_IsMainThread());
-    *aCellBytesWritten = mCellBytesWritten;
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-nsHttpHandler::ResetHttpDataUsage()
-{
-    MOZ_ASSERT(NS_IsMainThread());
-    mEthernetBytesRead = mEthernetBytesWritten = 0;
-    mCellBytesRead = mCellBytesWritten = 0;
-    return NS_OK;
-}
-
-class DataUsageEvent : public nsRunnable
-{
-public:
-    explicit DataUsageEvent(nsIInterfaceRequestor *cb,
-                            uint64_t bytesRead,
-                            uint64_t bytesWritten)
-        : mCB(cb), mRead(bytesRead), mWritten(bytesWritten) { }
-    
-  NS_IMETHOD Run() MOZ_OVERRIDE
-  {
-    MOZ_ASSERT(NS_IsMainThread());
-    if (gHttpHandler)
-        gHttpHandler->UpdateDataUsage(mCB, mRead, mWritten);
-    return NS_OK;
-  }
-
-private:
-  ~DataUsageEvent() { }
-  nsCOMPtr<nsIInterfaceRequestor> mCB;
-  uint64_t mRead;
-  uint64_t mWritten;
-};
-
-void
-nsHttpHandler::UpdateDataUsage(nsIInterfaceRequestor *cb,
-                               uint64_t bytesRead, uint64_t bytesWritten)
-{
-    if (!IsTelemetryEnabled())
-        return;
-
-    if (!NS_IsMainThread()) {
-        nsRefPtr<nsIRunnable> event = new DataUsageEvent(cb, bytesRead, bytesWritten);
-        NS_DispatchToMainThread(event);
-        return;
-    }
-    
-    bool isEthernet = true;
-
-    if (NS_FAILED(GetNetworkEthernetInfo(cb, &isEthernet))) {
-        // without a window it is hard for android to determine the network type
-        // so on failures we will just use the last value
-        if (!mNetworkTypeKnown)
-            return;
-        isEthernet = mNetworkTypeWasEthernet;
-    }
-
-    if (isEthernet) {
-        mEthernetBytesRead += bytesRead;
-        mEthernetBytesWritten += bytesWritten;
-    } else {
-        mCellBytesRead += bytesRead;
-        mCellBytesWritten += bytesWritten;
-    }
-}
-
-nsresult
-nsHttpHandler::GetNetworkEthernetInfo(nsIInterfaceRequestor *cb,
-                                      bool *aEthernet)
-{
-    NS_ENSURE_ARG_POINTER(aEthernet);
-
-    nsresult rv = GetNetworkEthernetInfoInner(cb, aEthernet);
-    if (NS_SUCCEEDED(rv)) {
-        mNetworkTypeKnown = true;
-        mNetworkTypeWasEthernet = *aEthernet;
-    }
-    return rv;
-}
-
-// aEthernet and aGateway are required out parameters
-// on b2g and desktop gateway cannot be determined yet and
-// this function returns ERROR_NOT_IMPLEMENTED.
-nsresult
-nsHttpHandler::GetNetworkInfo(nsIInterfaceRequestor *cb,
-                              bool *aEthernet,
-                              uint32_t *aGateway)
-{
-    NS_ENSURE_ARG_POINTER(aEthernet);
-    NS_ENSURE_ARG_POINTER(aGateway);
-
-    nsresult rv = GetNetworkInfoInner(cb, aEthernet, aGateway);
-    if (NS_SUCCEEDED(rv)) {
-        mNetworkTypeKnown = true;
-        mNetworkTypeWasEthernet = *aEthernet;
-    }
-    return rv;
-}
-
-nsresult
-nsHttpHandler::GetNetworkInfoInner(nsIInterfaceRequestor *cb,
-                                   bool *aEthernet,
-                                   uint32_t *aGateway)
-{
-    NS_ENSURE_ARG_POINTER(aEthernet);
-    NS_ENSURE_ARG_POINTER(aGateway);
-
-    *aGateway = 0;
-    *aEthernet = true;
-    
-#if defined(MOZ_WIDGET_GONK)
-    // b2g only allows you to ask for ethernet or not right now.
-    return NS_ERROR_NOT_IMPLEMENTED;
-#endif
-
-#if defined(ANDROID)
-    if (!cb)
-        return NS_ERROR_FAILURE;
-
-    nsCOMPtr<nsIDOMWindow> domWindow;
-    cb->GetInterface(NS_GET_IID(nsIDOMWindow), getter_AddRefs(domWindow));
-    if (!domWindow)
-        return NS_ERROR_FAILURE;
-
-    nsCOMPtr<nsIDOMNavigator> domNavigator;
-    domWindow->GetNavigator(getter_AddRefs(domNavigator));
-    nsCOMPtr<nsIMozNavigatorNetwork> networkNavigator =
-        do_QueryInterface(domNavigator);
-    if (!networkNavigator)
-        return NS_ERROR_FAILURE;
-
-    nsCOMPtr<nsIDOMMozConnection> mozConnection;
-    networkNavigator->GetMozConnection(getter_AddRefs(mozConnection));
-    nsCOMPtr<nsINetworkProperties> networkProperties =
-        do_QueryInterface(mozConnection);
-    if (!networkProperties)
-        return NS_ERROR_FAILURE;
-
-    nsresult rv;
-    rv = networkProperties->GetDhcpGateway(aGateway);
-    if (NS_FAILED(rv))
-        return rv;
-
-    return networkProperties->GetIsWifi(aEthernet);
-#endif
-
-    // desktop does not currently know about the gateway
-    return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-nsresult
-nsHttpHandler::GetNetworkEthernetInfoInner(nsIInterfaceRequestor *cb,
-                                           bool *aEthernet)
-{
-    *aEthernet = true;
-    
-#if defined(MOZ_WIDGET_GONK)
-    int32_t networkType;
-    nsCOMPtr<nsINetworkManager> networkManager = 
-        do_GetService("@mozilla.org/network/manager;1");
-    if (!networkManager)
-        return NS_ERROR_FAILURE;
-    if (NS_FAILED(networkManager->GetPreferredNetworkType(&networkType)))
-        return NS_ERROR_FAILURE;
-    *aEthernet = networkType == nsINetworkInterface::NETWORK_TYPE_WIFI;
-    return NS_OK;
-#endif
-
-#if defined(ANDROID)
-    if (!cb)
-        return NS_ERROR_FAILURE;
-
-    nsCOMPtr<nsIDOMWindow> domWindow;
-    cb->GetInterface(NS_GET_IID(nsIDOMWindow), getter_AddRefs(domWindow));
-    if (!domWindow)
-        return NS_ERROR_FAILURE;
-
-    nsCOMPtr<nsIDOMNavigator> domNavigator;
-    domWindow->GetNavigator(getter_AddRefs(domNavigator));
-    nsCOMPtr<nsIMozNavigatorNetwork> networkNavigator =
-        do_QueryInterface(domNavigator);
-    if (!networkNavigator)
-        return NS_ERROR_FAILURE;
-
-    nsCOMPtr<nsIDOMMozConnection> mozConnection;
-    networkNavigator->GetMozConnection(getter_AddRefs(mozConnection));
-    nsCOMPtr<nsINetworkProperties> networkProperties =
-        do_QueryInterface(mozConnection);
-    if (!networkProperties)
-        return NS_ERROR_FAILURE;
-
-    return networkProperties->GetIsWifi(aEthernet);
-#endif
-
-    // desktop assumes never on cell data
-    *aEthernet = true;
-    return NS_OK;
-}
-
 void
 nsHttpHandler::TickleWifi(nsIInterfaceRequestor *cb)
 {
     if (!cb || !mWifiTickler)
         return;
 
+    // If B2G requires a similar mechanism nsINetworkManager, currently only avail
+    // on B2G, contains the necessary information on wifi and gateway
+
+    nsCOMPtr<nsIDOMWindow> domWindow;
+    cb->GetInterface(NS_GET_IID(nsIDOMWindow), getter_AddRefs(domWindow));
+    if (!domWindow)
+        return;
+
+    nsCOMPtr<nsIDOMNavigator> domNavigator;
+    domWindow->GetNavigator(getter_AddRefs(domNavigator));
+    nsCOMPtr<nsIMozNavigatorNetwork> networkNavigator =
+        do_QueryInterface(domNavigator);
+    if (!networkNavigator)
+        return;
+
+    nsCOMPtr<nsISupports> mozConnection;
+    networkNavigator->GetMozConnection(getter_AddRefs(mozConnection));
+    nsCOMPtr<nsINetworkProperties> networkProperties =
+        do_QueryInterface(mozConnection);
+    if (!networkProperties)
+        return;
+
     uint32_t gwAddress;
     bool isWifi;
+    nsresult rv;
 
-    nsresult rv = GetNetworkInfo(cb, &isWifi, &gwAddress);
-    if (NS_FAILED(rv) || !gwAddress || !isWifi)
+    rv = networkProperties->GetDhcpGateway(&gwAddress);
+    if (NS_SUCCEEDED(rv))
+        rv = networkProperties->GetIsWifi(&isWifi);
+    if (NS_FAILED(rv))
+        return;
+
+    if (!gwAddress || !isWifi)
         return;
 
     mWifiTickler->SetIPV4Address(gwAddress);
@@ -2161,7 +1995,7 @@ nsHttpsHandler::NewURI(const nsACString &aSpec,
                        nsIURI *aBaseURI,
                        nsIURI **_retval)
 {
-    return ::NewURI(aSpec, aOriginCharset, aBaseURI, NS_HTTPS_DEFAULT_PORT, _retval);
+    return mozilla::net::NewURI(aSpec, aOriginCharset, aBaseURI, NS_HTTPS_DEFAULT_PORT, _retval);
 }
 
 NS_IMETHODIMP
@@ -2180,3 +2014,6 @@ nsHttpsHandler::AllowPort(int32_t aPort, const char *aScheme, bool *_retval)
     *_retval = false;
     return NS_OK;
 }
+
+} // namespace mozilla::net
+} // namespace mozilla

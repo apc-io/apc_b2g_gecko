@@ -17,20 +17,41 @@ GARBAGE_DIRS = \
 	libs \
 	res \
 	src \
+	binaries \
 	$(NULL)
 
 ANDROID=$(ANDROID_SDK)/../../tools/android
 
 TARGET= $(notdir $(ANDROID_SDK))
 
+PACKAGE_DEPS = \
+	assets/libxul.so \
+	build.xml \
+	src/org/mozilla/geckoviewexample/GeckoViewExample.java \
+	$(CURDIR)/res/layout/main.xml \
+	$(CURDIR)/AndroidManifest.xml \
+	$(NULL)
+
+$(CURDIR)/res/layout/main.xml: $(srcdir)/main.xml
+	$(NSINSTALL) $(srcdir)/main.xml res/layout/
+
+$(CURDIR)/AndroidManifest.xml: $(srcdir)/AndroidManifest.xml
+	$(NSINSTALL) $(srcdir)/AndroidManifest.xml $(CURDIR)
+
+src/org/mozilla/geckoviewexample/GeckoViewExample.java: $(srcdir)/GeckoViewExample.java
+	$(NSINSTALL) $(srcdir)/GeckoViewExample.java src/org/mozilla/geckoviewexample/
+
+assets/libxul.so: $(DIST)/geckoview_library/geckoview_assets.zip FORCE
+	$(UNZIP) -o $(DIST)/geckoview_library/geckoview_assets.zip
+
 build.xml:
 	$(ANDROID) create project --name GeckoViewExample --target $(TARGET) --path $(CURDIR) --activity GeckoViewExample --package org.mozilla.geckoviewexample
 	$(ANDROID) update project --target $(TARGET) --path $(CURDIR) --library $(DEPTH)/mobile/android/geckoview_library
-	$(UNZIP) -o $(DIST)/geckoview_library/geckoview_assets.zip
+	$(RM) $(CURDIR)/res/layout/main.xml
 	$(NSINSTALL) $(srcdir)/main.xml res/layout/
-	$(NSINSTALL) $(srcdir)/AndroidManifest.xml .
-	$(NSINSTALL) $(srcdir)/GeckoViewExample.java src/org/mozilla/geckoviewexample/
+	$(RM) $(CURDIR)/AndroidManifest.xml
+	$(NSINSTALL) $(srcdir)/AndroidManifest.xml $(CURDIR)
 	echo jar.libs.dir=libs >> project.properties
 
-package: build.xml
+package: $(PACKAGE_DEPS) FORCE
 	ant debug

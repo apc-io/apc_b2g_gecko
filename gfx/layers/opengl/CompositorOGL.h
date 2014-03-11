@@ -24,17 +24,19 @@
 #include "nsAutoPtr.h"                  // for nsRefPtr, nsAutoPtr
 #include "nsCOMPtr.h"                   // for already_AddRefed
 #include "nsDebug.h"                    // for NS_ASSERTION, NS_WARNING
+#include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "nsSize.h"                     // for nsIntSize
 #include "nsTArray.h"                   // for nsAutoTArray, nsTArray, etc
 #include "nsThreadUtils.h"              // for nsRunnable
-#include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
 #include "nsXULAppAPI.h"                // for XRE_GetProcessType
 #include "nscore.h"                     // for NS_IMETHOD
 #include "VBOArena.h"                   // for gl::VBOArena
+#ifdef MOZ_WIDGET_GONK
+#include <ui/GraphicBuffer.h>
+#endif
 
 class gfx3DMatrix;
 class nsIWidget;
-struct gfxMatrix;
 
 namespace mozilla {
 class TimeStamp;
@@ -52,15 +54,14 @@ class GLManagerCompositor;
 class TextureSource;
 struct Effect;
 struct EffectChain;
-struct FPSState;
 
 class CompositorOGL : public Compositor
 {
   typedef mozilla::gl::GLContext GLContext;
-  typedef ShaderProgramType ProgramType;
   
   friend class GLManagerCompositor;
 
+  std::map<ShaderConfigOGL, ShaderProgramOGL*> mPrograms;
 public:
   CompositorOGL(nsIWidget *aWidget, int aSurfaceWidth = -1, int aSurfaceHeight = -1,
                 bool aUseExternalSurfaceSize = false);
@@ -76,7 +77,7 @@ public:
 
   virtual TextureFactoryIdentifier GetTextureFactoryIdentifier() MOZ_OVERRIDE
   {
-    return TextureFactoryIdentifier(LAYERS_OPENGL,
+    return TextureFactoryIdentifier(LayersBackend::LAYERS_OPENGL,
                                     XRE_GetProcessType(),
                                     GetMaxTextureSize(),
                                     mFBOTextureTarget == LOCAL_GL_TEXTURE_2D,
@@ -112,7 +113,7 @@ public:
 
 
   virtual void EndFrame() MOZ_OVERRIDE;
-  virtual void EndFrameForExternalComposition(const gfxMatrix& aTransform) MOZ_OVERRIDE;
+  virtual void EndFrameForExternalComposition(const gfx::Matrix& aTransform) MOZ_OVERRIDE;
   virtual void AbortFrame() MOZ_OVERRIDE;
 
   virtual bool SupportsPartialTextureUpdate() MOZ_OVERRIDE;
@@ -145,31 +146,30 @@ public:
   }
 
   virtual void PrepareViewport(const gfx::IntSize& aSize,
-                               const gfxMatrix& aWorldTransform) MOZ_OVERRIDE;
+                               const gfx::Matrix& aWorldTransform) MOZ_OVERRIDE;
 
 
 #ifdef MOZ_DUMP_PAINTING
   virtual const char* Name() const MOZ_OVERRIDE { return "OGL"; }
 #endif // MOZ_DUMP_PAINTING
 
-  virtual void NotifyLayersTransaction() MOZ_OVERRIDE;
+  virtual LayersBackend GetBackendType() const MOZ_OVERRIDE {
+    return LayersBackend::LAYERS_OPENGL;
+  }
 
   virtual void Pause() MOZ_OVERRIDE;
   virtual bool Resume() MOZ_OVERRIDE;
 
   virtual nsIWidget* GetWidget() const MOZ_OVERRIDE { return mWidget; }
 
-  GLContext* gl() const { return mGLContext; }
-  ShaderProgramType GetFBOLayerProgramType() const {
-    return mFBOTextureTarget == LOCAL_GL_TEXTURE_RECTANGLE_ARB ?
-           RGBARectLayerProgramType : RGBALayerProgramType;
-  }
-  gfx::SurfaceFormat GetFBOFormat() const {
-    return gfx::FORMAT_R8G8B8A8;
-  }
+#ifdef MOZ_WIDGET_GONK
+  virtual CompositorBackendSpecificData* GetCompositorBackendSpecificData() MOZ_OVERRIDE;
+#endif
 
-  virtual void SaveState() MOZ_OVERRIDE;
-  virtual void RestoreState() MOZ_OVERRIDE;
+  GLContext* gl() const { return mGLContext; }
+  gfx::SurfaceFormat GetFBOFormat() const {
+    return gfx::SurfaceFormat::R8G8B8A8;
+  }
 
   /**
    * The compositor provides with temporary textures for use with direct
@@ -178,6 +178,10 @@ public:
    * (see https://wiki.mozilla.org/Platform/GFX/Gralloc)
    */
   GLuint GetTemporaryTexture(GLenum aUnit);
+
+  const gfx::Matrix4x4& GetProjMatrix() const {
+    return mProjMatrix;
+  }
 private:
   virtual void DrawQuadInternal(const gfx::Rect& aRect,
                                 const gfx::Rect& aClipRect,
@@ -195,32 +199,14 @@ private:
   nsIWidget *mWidget;
   nsIntSize mWidgetSize;
   nsRefPtr<GLContext> mGLContext;
+  gfx::Matrix4x4 mProjMatrix;
 
   /** The size of the surface we are rendering to */
   nsIntSize mSurfaceSize;
 
   ScreenPoint mRenderOffset;
 
-  /** Helper-class used by Initialize **/
-  class ReadDrawFPSPref MOZ_FINAL : public nsRunnable {
-  public:
-    NS_IMETHOD Run() MOZ_OVERRIDE;
-  };
-
   already_AddRefed<mozilla::gl::GLContext> CreateContext();
-
-  /** Shader Programs */
-  struct ShaderProgramVariations {
-    nsAutoTArray<nsAutoPtr<ShaderProgramOGL>, NumMaskTypes> mVariations;
-    ShaderProgramVariations() {
-      MOZ_COUNT_CTOR(ShaderProgramVariations);
-      mVariations.SetLength(NumMaskTypes);
-    }
-    ~ShaderProgramVariations() {
-      MOZ_COUNT_DTOR(ShaderProgramVariations);
-    }
-  };
-  nsTArray<ShaderProgramVariations> mPrograms;
 
   /** Texture target to use for FBOs */
   GLenum mFBOTextureTarget;
@@ -255,35 +241,23 @@ private:
    */
   bool mFrameInProgress;
 
+  /*
+   * Clear aRect on FrameBuffer.
+   */
+  virtual void clearFBRect(const gfx::Rect* aRect);
+
   /* Start a new frame. If aClipRectIn is null and aClipRectOut is non-null,
    * sets *aClipRectOut to the screen dimensions.
    */
   virtual void BeginFrame(const nsIntRegion& aInvalidRegion,
                           const gfx::Rect *aClipRectIn,
-                          const gfxMatrix& aTransform,
-                          const gfx::Rect& aRenderBounds, 
+                          const gfx::Matrix& aTransform,
+                          const gfx::Rect& aRenderBounds,
                           gfx::Rect *aClipRectOut = nullptr,
                           gfx::Rect *aRenderBoundsOut = nullptr) MOZ_OVERRIDE;
 
-  ShaderProgramType GetProgramTypeForEffect(Effect* aEffect) const;
-
-  /**
-   * Updates all layer programs with a new projection matrix.
-   */
-  void SetLayerProgramProjectionMatrix(const gfx3DMatrix& aMatrix);
-
-  /**
-   * Helper method for Initialize, creates all valid variations of a program
-   * and adds them to mPrograms
-   */
-  void AddPrograms(ShaderProgramType aType);
-
-  ShaderProgramOGL* GetProgram(ShaderProgramType aType,
-                               MaskType aMask = MaskNone) {
-    MOZ_ASSERT(ProgramProfileOGL::ProgramExists(aType, aMask),
-               "Invalid program type.");
-    return mPrograms[aType].mVariations[aMask];
-  }
+  ShaderConfigOGL GetShaderConfigFor(Effect *aEffect, MaskType aMask = MaskNone) const;
+  ShaderProgramOGL* GetShaderProgramFor(const ShaderConfigOGL &aConfig);
 
   /**
    * Create a FBO backed by a texture.
@@ -312,6 +286,7 @@ private:
                        bool aFlipped = false,
                        GLuint aDrawMode = LOCAL_GL_TRIANGLE_STRIP);
   void BindAndDrawQuadWithTextureRect(ShaderProgramOGL *aProg,
+                                      const gfx3DMatrix& aTextureTransform,
                                       const gfx::Rect& aTexCoordRect,
                                       TextureSource *aTexture);
 
@@ -321,21 +296,55 @@ private:
    * Copies the content of our backbuffer to the set transaction target.
    * Does not restore the target FBO, so only call from EndFrame.
    */
-  void CopyToTarget(gfx::DrawTarget* aTarget, const gfxMatrix& aWorldMatrix);
+  void CopyToTarget(gfx::DrawTarget* aTarget, const gfx::Matrix& aWorldMatrix);
 
   /**
-   * Records the passed frame timestamp and returns the current estimated FPS.
+   * Implements the flipping of the y-axis to convert from layers/compositor
+   * coordinates to OpenGL coordinates.
+   *
+   * Indeed, the only coordinate system that OpenGL knows has the y-axis
+   * pointing upwards, but the layers/compositor coordinate system has the
+   * y-axis pointing downwards, for good reason as Web pages are typically
+   * scrolled downwards. So, some flipping has to take place; FlippedY does it.
    */
-  double AddFrameAndGetFps(const TimeStamp& timestamp);
+  GLint FlipY(GLint y) const { return mHeight - y; }
 
   bool mDestroyed;
 
-  nsAutoPtr<FPSState> mFPS;
   // Textures used for direct texturing of buffers like gralloc.
   // The index of the texture in this array must correspond to the texture unit.
   nsTArray<GLuint> mTextures;
-  static bool sDrawFPS;
+
+  /**
+   * Height of the OpenGL context's primary framebuffer in pixels. Used by
+   * FlipY for the y-flipping calculation.
+   */
+  GLint mHeight;
+
+#ifdef MOZ_WIDGET_GONK
+  RefPtr<CompositorBackendSpecificData> mCompositorBackendSpecificData;
+#endif
 };
+
+#ifdef MOZ_WIDGET_GONK
+class CompositorOGLGonkBackendSpecificData : public CompositorBackendSpecificData
+{
+public:
+  CompositorOGLGonkBackendSpecificData(CompositorOGL* aCompositor);
+  virtual ~CompositorOGLGonkBackendSpecificData();
+
+  GLuint GetTexture();
+  void EndFrame();
+
+private:
+  gl::GLContext* gl() const;
+
+  RefPtr<CompositorOGL> mCompositor;
+
+  nsTArray<GLuint> mCreatedTextures;
+  nsTArray<GLuint> mUnusedTextures;
+};
+#endif
 
 }
 }

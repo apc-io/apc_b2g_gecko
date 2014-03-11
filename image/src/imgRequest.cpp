@@ -27,6 +27,7 @@
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsISupportsPrimitives.h"
 #include "nsIScriptSecurityManager.h"
+#include "nsContentUtils.h"
 
 #include "nsICacheEntry.h"
 
@@ -600,8 +601,7 @@ NS_IMETHODIMP imgRequest::OnStartRequest(nsIRequest *aRequest, nsISupports *ctxt
   /* Get our principal */
   nsCOMPtr<nsIChannel> chan(do_QueryInterface(aRequest));
   if (chan) {
-    nsCOMPtr<nsIScriptSecurityManager> secMan =
-      do_GetService("@mozilla.org/scriptsecuritymanager;1");
+    nsCOMPtr<nsIScriptSecurityManager> secMan = nsContentUtils::GetSecurityManager();
     if (secMan) {
       nsresult rv = secMan->GetChannelPrincipal(chan,
                                                 getter_AddRefs(mPrincipal));
@@ -637,7 +637,7 @@ NS_IMETHODIMP imgRequest::OnStartRequest(nsIRequest *aRequest, nsISupports *ctxt
     PR_LOG(GetImgLog(), PR_LOG_WARNING,
            ("[this=%p] imgRequest::OnStartRequest -- "
             "RetargetDeliveryTo rv %d=%s\n",
-            this, NS_SUCCEEDED(rv) ? "succeeded" : "failed", rv));
+            this, rv, NS_SUCCEEDED(rv) ? "succeeded" : "failed"));
   }
 
   return NS_OK;

@@ -14,7 +14,7 @@
 #include "nsDOMEventTargetHelper.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/StaticPtr.h"
-#include "DOMRequest.h"
+#include "mozilla/dom/DOMRequest.h"
 
 #define DEVICESTORAGE_PICTURES   "pictures"
 #define DEVICESTORAGE_VIDEOS     "videos"
@@ -23,6 +23,7 @@
 #define DEVICESTORAGE_SDCARD     "sdcard"
 #define DEVICESTORAGE_CRASHES    "crashes"
 
+class DeviceStorageFile;
 class nsIInputStream;
 
 namespace mozilla {
@@ -30,7 +31,12 @@ namespace dom {
 class DeviceStorageEnumerationParameters;
 class DOMCursor;
 class DOMRequest;
+class Promise;
+class DeviceStorageFileSystem;
 } // namespace dom
+namespace ipc {
+class FileDescriptor;
+}
 } // namespace mozilla
 
 class DeviceStorageFile MOZ_FINAL
@@ -95,13 +101,17 @@ public:
 
   void GetDiskFreeSpace(int64_t* aSoFar);
   void GetStatus(nsAString& aStatus);
+  void GetStorageStatus(nsAString& aStatus);
   void DoFormat(nsAString& aStatus);
+  void DoMount(nsAString& aStatus);
+  void DoUnmount(nsAString& aStatus);
   static void GetRootDirectoryForType(const nsAString& aStorageType,
                                       const nsAString& aStorageName,
                                       nsIFile** aFile);
 
   nsresult CalculateSizeAndModifiedDate();
   nsresult CalculateMimeType();
+  nsresult CreateFileDescriptor(mozilla::ipc::FileDescriptor& aFileDescriptor);
 
 private:
   void Init();
@@ -149,6 +159,8 @@ class nsDOMDeviceStorage MOZ_FINAL
     EnumerationParameters;
   typedef mozilla::dom::DOMCursor DOMCursor;
   typedef mozilla::dom::DOMRequest DOMRequest;
+  typedef mozilla::dom::Promise Promise;
+  typedef mozilla::dom::DeviceStorageFileSystem DeviceStorageFileSystem;
 public:
   typedef nsTArray<nsString> VolumeNameArray;
 
@@ -175,7 +187,7 @@ public:
                                    bool aUseCapture,
                                    ErrorResult& aRv) MOZ_OVERRIDE;
 
-  nsDOMDeviceStorage();
+  nsDOMDeviceStorage(nsPIDOMWindow* aWindow);
 
   nsresult Init(nsPIDOMWindow* aWindow, const nsAString& aType,
                 const nsAString& aVolName);
@@ -239,10 +251,16 @@ public:
   already_AddRefed<DOMRequest> UsedSpace(ErrorResult& aRv);
   already_AddRefed<DOMRequest> Available(ErrorResult& aRv);
   already_AddRefed<DOMRequest> Format(ErrorResult& aRv);
+  already_AddRefed<DOMRequest> StorageStatus(ErrorResult& aRv);
+  already_AddRefed<DOMRequest> Mount(ErrorResult& aRv);
+  already_AddRefed<DOMRequest> Unmount(ErrorResult& aRv);
 
   bool Default();
 
   // Uses XPCOM GetStorageName
+
+  already_AddRefed<Promise>
+  GetRoot();
 
   static void
   CreateDeviceStorageFor(nsPIDOMWindow* aWin,
@@ -305,6 +323,7 @@ private:
   class VolumeNameCache : public mozilla::RefCounted<VolumeNameCache>
   {
   public:
+    MOZ_DECLARE_REFCOUNTED_TYPENAME(VolumeNameCache)
     nsTArray<nsString>  mVolumeNames;
   };
   static mozilla::StaticRefPtr<VolumeNameCache> sVolumeNameCache;
@@ -320,6 +339,8 @@ private:
       DEVICE_STORAGE_TYPE_SHARED,
       DEVICE_STORAGE_TYPE_EXTERNAL
   };
+
+  nsRefPtr<DeviceStorageFileSystem> mFileSystem;
 };
 
 #endif

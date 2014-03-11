@@ -127,18 +127,31 @@ nsRuleNode::ChildrenHashOps = {
 //  - if the display value (argument) is not a block-type
 //    then we set it to a valid block display value
 //  - For enforcing the floated/positioned element CSS2 rules
+//  - We allow the behavior of "list-item" to be customized.
+//    CSS21 says that position/float do not convert 'list-item' to 'block',
+//    but it explicitly does not define whether 'list-item' should be
+//    converted to block *on the root node*. To allow for flexibility
+//    (so that we don't have to support a list-item root node), this method
+//    lets the caller pick either behavior, using the 'aConvertListItem' arg.
+//    Reference: http://www.w3.org/TR/CSS21/visuren.html#dis-pos-flo
 /* static */
 void
-nsRuleNode::EnsureBlockDisplay(uint8_t& display)
+nsRuleNode::EnsureBlockDisplay(uint8_t& display,
+                               bool aConvertListItem /* = false */)
 {
   // see if the display value is already a block
   switch (display) {
+  case NS_STYLE_DISPLAY_LIST_ITEM :
+    if (aConvertListItem) {
+      display = NS_STYLE_DISPLAY_BLOCK;
+      break;
+    } // else, fall through to share the 'break' for non-changing display vals
   case NS_STYLE_DISPLAY_NONE :
     // never change display:none *ever*
   case NS_STYLE_DISPLAY_TABLE :
   case NS_STYLE_DISPLAY_BLOCK :
-  case NS_STYLE_DISPLAY_LIST_ITEM :
   case NS_STYLE_DISPLAY_FLEX :
+  case NS_STYLE_DISPLAY_GRID :
     // do not muck with these at all - already blocks
     // This is equivalent to nsStyleDisplay::IsBlockOutside.  (XXX Maybe we
     // should just call that?)
@@ -154,6 +167,11 @@ nsRuleNode::EnsureBlockDisplay(uint8_t& display)
   case NS_STYLE_DISPLAY_INLINE_FLEX:
     // make inline flex containers into flex containers
     display = NS_STYLE_DISPLAY_FLEX;
+    break;
+
+  case NS_STYLE_DISPLAY_INLINE_GRID:
+    // make inline grid containers into grid containers
+    display = NS_STYLE_DISPLAY_GRID;
     break;
 
   default :
@@ -850,7 +868,7 @@ static bool SetColor(const nsCSSValue& aValue, const nscolor aParentColor,
   bool    result = false;
   nsCSSUnit unit = aValue.GetUnit();
 
-  if (eCSSUnit_Color == unit) {
+  if (aValue.IsNumericColorUnit()) {
     aResult = aValue.GetColorValue();
     result = true;
   }
@@ -1083,6 +1101,10 @@ static void SetStyleImage(nsStyleContext* aStyleContext,
                           nsStyleImage& aResult,
                           bool& aCanStoreInRuleTree)
 {
+  if (aValue.GetUnit() == eCSSUnit_Null) {
+    return;
+  }
+
   aResult.SetNull();
 
   switch (aValue.GetUnit()) {
@@ -1111,6 +1133,8 @@ static void SetStyleImage(nsStyleContext* aStyleContext,
     case eCSSUnit_Element:
       aResult.SetElementId(aValue.GetStringBufferValue());
       break;
+    case eCSSUnit_Initial:
+    case eCSSUnit_Unset:
     case eCSSUnit_None:
       break;
     default:
@@ -1861,7 +1885,8 @@ AreAllMathMLPropertiesUndefined(const nsRuleData* aRuleData)
     aRuleData->ValueForScriptLevel()->GetUnit() == eCSSUnit_Null &&
     aRuleData->ValueForScriptSizeMultiplier()->GetUnit() == eCSSUnit_Null &&
     aRuleData->ValueForScriptMinSize()->GetUnit() == eCSSUnit_Null &&
-    aRuleData->ValueForMathVariant()->GetUnit() == eCSSUnit_Null;
+    aRuleData->ValueForMathVariant()->GetUnit() == eCSSUnit_Null &&
+    aRuleData->ValueForMathDisplay()->GetUnit() == eCSSUnit_Null;
 }
 #endif
 
@@ -1911,13 +1936,13 @@ nsRuleNode::CheckSpecifiedProperties(const nsStyleStructID aSID,
   if (inherited == total)
     result = eRuleFullInherited;
   else if (specified == total
-           // MathML defines 4 properties in Font that will never be set when
-           // MathML is not in use. Therefore if all but four
+           // MathML defines 5 properties in Font that will never be set when
+           // MathML is not in use. Therefore if all but five
            // properties have been set, and MathML is not enabled, we can treat
            // this as fully specified. Code in nsMathMLElementFactory will
            // rebuild the rule tree and style data when MathML is first enabled
            // (see nsMathMLElement::BindToTree).
-           || (aSID == eStyleStruct_Font && specified + 4 == total &&
+           || (aSID == eStyleStruct_Font && specified + 5 == total &&
                !mPresContext->Document()->GetMathMLEnabled())
           ) {
     if (inherited == 0)
@@ -2047,11 +2072,12 @@ nsRuleNode::ResolveVariableReferences(const nsStyleStructID aSID,
       &aContext->StyleVariables()->mVariables;
     nsCSSValueTokenStream* tokenStream = value->GetTokenStreamValue();
 
+    // XXX Should pass in sheet here (see bug 952338).
     parser.ParsePropertyWithVariableReferences(
         tokenStream->mPropertyID, tokenStream->mShorthandPropertyID,
         tokenStream->mTokenStream, variables, aRuleData,
         tokenStream->mSheetURI, tokenStream->mBaseURI,
-        tokenStream->mSheetPrincipal, tokenStream->mSheet,
+        tokenStream->mSheetPrincipal, nullptr,
         tokenStream->mLineNumber, tokenStream->mLineOffset);
     aRuleData->mCanStoreInRuleTree = false;
     anyTokenStreams = true;
@@ -3295,7 +3321,7 @@ nsRuleNode::SetFont(nsPresContext* aPresContext, nsStyleContext* aContext,
     if (aGenericFontID == kGenericFont_NONE) {
       // only bother appending fallback fonts if this isn't a fallback generic font itself
       if (!aFont->mFont.name.IsEmpty())
-        aFont->mFont.name.Append((PRUnichar)',');
+        aFont->mFont.name.Append((char16_t)',');
       // defaultVariableFont.name should always be "serif" or "sans-serif".
       aFont->mFont.name.Append(defaultVariableFont->name);
     }
@@ -3336,6 +3362,13 @@ nsRuleNode::SetFont(nsPresContext* aPresContext, nsStyleContext* aContext,
               aCanStoreInRuleTree,
               SETDSC_ENUMERATED | SETDSC_UNSET_INHERIT,
               aParentFont->mMathVariant, NS_MATHML_MATHVARIANT_NONE,
+              0, 0, 0, 0);
+
+  // -moz-math-display: enum, inherit, initial
+  SetDiscrete(*aRuleData->ValueForMathDisplay(), aFont->mMathDisplay,
+              aCanStoreInRuleTree,
+              SETDSC_ENUMERATED | SETDSC_UNSET_INHERIT,
+              aParentFont->mMathDisplay, NS_MATHML_DISPLAYSTYLE_INLINE,
               0, 0, 0, 0);
 
   // font-smoothing: enum, inherit, initial
@@ -3447,11 +3480,19 @@ nsRuleNode::SetFont(nsPresContext* aPresContext, nsStyleContext* aContext,
   const nsCSSValue* scriptLevelValue = aRuleData->ValueForScriptLevel();
   if (eCSSUnit_Integer == scriptLevelValue->GetUnit()) {
     // "relative"
+    aCanStoreInRuleTree = false;
     aFont->mScriptLevel = ClampTo8Bit(aParentFont->mScriptLevel + scriptLevelValue->GetIntValue());
   }
   else if (eCSSUnit_Number == scriptLevelValue->GetUnit()) {
     // "absolute"
     aFont->mScriptLevel = ClampTo8Bit(int32_t(scriptLevelValue->GetFloatValue()));
+  }
+  else if (eCSSUnit_Auto == scriptLevelValue->GetUnit()) {
+    // auto
+    aCanStoreInRuleTree = false;
+    aFont->mScriptLevel = ClampTo8Bit(aParentFont->mScriptLevel +
+                                      (aParentFont->mMathDisplay ==
+                                       NS_MATHML_DISPLAYSTYLE_INLINE ? 1 : 0));
   }
   else if (eCSSUnit_Inherit == scriptLevelValue->GetUnit() ||
            eCSSUnit_Unset == scriptLevelValue->GetUnit()) {
@@ -4196,6 +4237,14 @@ nsRuleNode::ComputeTextData(void* aStartStruct,
               NS_STYLE_TEXT_SIZE_ADJUST_NONE, // none value
               0, 0);
 
+  // -moz-text-discard: enum, inherit, initial
+  SetDiscrete(*aRuleData->ValueForControlCharacterVisibility(),
+              text->mControlCharacterVisibility,
+              canStoreInRuleTree,
+              SETDSC_ENUMERATED | SETDSC_UNSET_INHERIT,
+              parentText->mControlCharacterVisibility,
+              NS_STYLE_CONTROL_CHARACTER_VISIBILITY_HIDDEN, 0, 0, 0, 0);
+
   // text-orientation: enum, inherit, initial
   SetDiscrete(*aRuleData->ValueForTextOrientation(), text->mTextOrientation,
               canStoreInRuleTree,
@@ -4723,18 +4772,7 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
                          display, parentDisplay, aRuleData,
                          canStoreInRuleTree);
 
-  if (!display->mTransitions.SetLength(numTransitions)) {
-    NS_WARNING("failed to allocate transitions array");
-    display->mTransitions.SetLength(1);
-    NS_ABORT_IF_FALSE(display->mTransitions.Length() == 1,
-                      "could not allocate using auto array buffer");
-    numTransitions = 1;
-    FOR_ALL_TRANSITION_PROPS(p) {
-      TransitionPropData& d = transitionPropData[p];
-
-      d.num = 1;
-    }
-  }
+  display->mTransitions.SetLength(numTransitions);
 
   FOR_ALL_TRANSITION_PROPS(p) {
     const TransitionPropInfo& i = transitionPropInfo[p];
@@ -4820,8 +4858,9 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
       if (val.GetUnit() == eCSSUnit_Ident) {
         nsDependentString
           propertyStr(property.list->mValue.GetStringBufferValue());
-        nsCSSProperty prop = nsCSSProps::LookupProperty(propertyStr,
-                                                        nsCSSProps::eEnabled);
+        nsCSSProperty prop =
+          nsCSSProps::LookupProperty(propertyStr,
+                                     nsCSSProps::eEnabledForAllContent);
         if (prop == eCSSProperty_UNKNOWN) {
           transition->SetUnknownProperty(propertyStr);
         } else {
@@ -4890,18 +4929,7 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
                          display, parentDisplay, aRuleData,
                          canStoreInRuleTree);
 
-  if (!display->mAnimations.SetLength(numAnimations)) {
-    NS_WARNING("failed to allocate animations array");
-    display->mAnimations.SetLength(1);
-    NS_ABORT_IF_FALSE(display->mAnimations.Length() == 1,
-                      "could not allocate using auto array buffer");
-    numAnimations = 1;
-    FOR_ALL_ANIMATION_PROPS(p) {
-      TransitionPropData& d = animationPropData[p];
-
-      d.num = 1;
-    }
-  }
+  display->mAnimations.SetLength(numAnimations);
 
   FOR_ALL_ANIMATION_PROPS(p) {
     const TransitionPropInfo& i = animationPropInfo[p];
@@ -5086,7 +5114,7 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
                animIterationCount.unit == eCSSUnit_Unset) {
       animation->SetIterationCount(1.0f);
     } else if (animIterationCount.list) {
-      switch(animIterationCount.list->mValue.GetUnit()) {
+      switch (animIterationCount.list->mValue.GetUnit()) {
         case eCSSUnit_Enumerated:
           NS_ABORT_IF_FALSE(animIterationCount.list->mValue.GetIntValue() ==
                               NS_STYLE_ANIMATION_ITERATION_COUNT_INFINITE,
@@ -5223,6 +5251,16 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
               parentDisplay->mBreakInside,
               NS_STYLE_PAGE_BREAK_AUTO, 0, 0, 0, 0);
 
+  // touch-action: none, auto, enum, inherit, initial
+  SetDiscrete(*aRuleData->ValueForTouchAction(), display->mTouchAction,
+              canStoreInRuleTree,
+              SETDSC_ENUMERATED | SETDSC_AUTO | SETDSC_NONE |
+                SETDSC_UNSET_INITIAL,
+              parentDisplay->mTouchAction,
+              NS_STYLE_TOUCH_ACTION_AUTO,
+              NS_STYLE_TOUCH_ACTION_AUTO,
+              NS_STYLE_TOUCH_ACTION_NONE, 0, 0);
+
   // float: enum, inherit, initial
   SetDiscrete(*aRuleData->ValueForFloat(),
               display->mFloats, canStoreInRuleTree,
@@ -5272,6 +5310,12 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
     if (display->mOverflowY == NS_STYLE_OVERFLOW_VISIBLE)
       display->mOverflowY = NS_STYLE_OVERFLOW_AUTO;
   }
+
+  SetDiscrete(*aRuleData->ValueForOverflowClipBox(), display->mOverflowClipBox,
+              canStoreInRuleTree,
+              SETDSC_ENUMERATED | SETDSC_UNSET_INITIAL,
+              parentDisplay->mOverflowClipBox,
+              NS_STYLE_OVERFLOW_CLIP_BOX_PADDING_BOX, 0, 0, 0, 0);
 
   SetDiscrete(*aRuleData->ValueForResize(), display->mResize, canStoreInRuleTree,
               SETDSC_ENUMERATED | SETDSC_UNSET_INITIAL,
@@ -5430,6 +5474,65 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
     NS_ABORT_IF_FALSE(false, "unrecognized transform unit");
   }
 
+  /* Convert the nsCSSValueList into a will-change bitfield for fast lookup */
+  const nsCSSValue* willChangeValue = aRuleData->ValueForWillChange();
+  switch (willChangeValue->GetUnit()) {
+  case eCSSUnit_Null:
+    break;
+
+  case eCSSUnit_List:
+  case eCSSUnit_ListDep: {
+    display->mWillChange.Clear();
+    display->mWillChangeBitField = 0;
+    for (const nsCSSValueList* item = willChangeValue->GetListValue();
+         item; item = item->mNext)
+    {
+      if (item->mValue.UnitHasStringValue()) {
+        nsAutoString buffer;
+        item->mValue.GetStringValue(buffer);
+        display->mWillChange.AppendElement(buffer);
+
+        if (buffer.EqualsLiteral("transform")) {
+          display->mWillChangeBitField |= NS_STYLE_WILL_CHANGE_TRANSFORM;
+        }
+        if (buffer.EqualsLiteral("opacity")) {
+          display->mWillChangeBitField |= NS_STYLE_WILL_CHANGE_OPACITY;
+        }
+        if (buffer.EqualsLiteral("scroll-position")) {
+          display->mWillChangeBitField |= NS_STYLE_WILL_CHANGE_SCROLL;
+        }
+
+        nsCSSProperty prop =
+          nsCSSProps::LookupProperty(buffer,
+                                     nsCSSProps::eEnabledForAllContent);
+        if (prop != eCSSProperty_UNKNOWN &&
+            nsCSSProps::PropHasFlags(prop,
+                                     CSS_PROPERTY_CREATES_STACKING_CONTEXT))
+        {
+          display->mWillChangeBitField |= NS_STYLE_WILL_CHANGE_STACKING_CONTEXT;
+        }
+      }
+    }
+    break;
+  }
+
+  case eCSSUnit_Inherit:
+    display->mWillChange = parentDisplay->mWillChange;
+    display->mWillChangeBitField = parentDisplay->mWillChangeBitField;
+    canStoreInRuleTree = false;
+    break;
+
+  case eCSSUnit_Initial:
+  case eCSSUnit_Unset:
+  case eCSSUnit_Auto:
+    display->mWillChange.Clear();
+    display->mWillChangeBitField = 0;
+    break;
+
+  default:
+    MOZ_ASSERT(false, "unrecognized will-change unit");
+  }
+
   /* Convert -moz-transform-origin. */
   const nsCSSValue* transformOriginValue =
     aRuleData->ValueForTransformOrigin();
@@ -5496,7 +5599,7 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
 
   SetCoord(*aRuleData->ValueForPerspective(), 
            display->mChildPerspective, parentDisplay->mChildPerspective,
-           SETCOORD_LAH | SETCOORD_INITIAL_ZERO | SETCOORD_NONE |
+           SETCOORD_LAH | SETCOORD_INITIAL_NONE | SETCOORD_NONE |
              SETCOORD_UNSET_INITIAL,
            aContext, mPresContext, canStoreInRuleTree);
 
@@ -5642,24 +5745,6 @@ nsRuleNode::ComputeColorData(void* aStartStruct,
 }
 
 // information about how to compute values for background-* properties
-template <class SpecifiedValueItem>
-struct InitialInheritLocationFor {
-};
-
-template <>
-struct InitialInheritLocationFor<nsCSSValueList> {
-  static nsCSSValue nsCSSValueList::* Location() {
-    return &nsCSSValueList::mValue;
-  }
-};
-
-template <>
-struct InitialInheritLocationFor<nsCSSValuePairList> {
-  static nsCSSValue nsCSSValuePairList::* Location() {
-    return &nsCSSValuePairList::mXValue;
-  }
-};
-
 template <class SpecifiedValueItem, class ComputedValueItem>
 struct BackgroundItemComputer {
 };
@@ -6634,18 +6719,14 @@ nsRuleNode::ComputeBorderData(void* aStartStruct,
 
   // border-image-source
   const nsCSSValue* borderImageSource = aRuleData->ValueForBorderImageSource();
-  if (borderImageSource->GetUnit() == eCSSUnit_Image) {
-    NS_SET_IMAGE_REQUEST_WITH_DOC(border->SetBorderImage,
-                                  aContext,
-                                  borderImageSource->GetImageValue);
-  } else if (borderImageSource->GetUnit() == eCSSUnit_Inherit) {
+  if (borderImageSource->GetUnit() == eCSSUnit_Inherit) {
     canStoreInRuleTree = false;
-    NS_SET_IMAGE_REQUEST(border->SetBorderImage, aContext,
-                         parentBorder->GetBorderImage());
-  } else if (borderImageSource->GetUnit() == eCSSUnit_Initial ||
-             borderImageSource->GetUnit() == eCSSUnit_Unset ||
-             borderImageSource->GetUnit() == eCSSUnit_None) {
-    border->SetBorderImage(nullptr);
+    border->mBorderImageSource = parentBorder->mBorderImageSource;
+  } else {
+    SetStyleImage(aContext,
+                  *borderImageSource,
+                  border->mBorderImageSource,
+                  canStoreInRuleTree);
   }
 
   nsCSSValue borderImageSliceValue;
@@ -6723,8 +6804,7 @@ nsRuleNode::ComputeBorderData(void* aStartStruct,
               parentBorder->mBorderImageRepeatV,
               NS_STYLE_BORDER_IMAGE_REPEAT_STRETCH, 0, 0, 0, 0);
 
-  if (border->HasBorderImage())
-    border->TrackImage(aContext->PresContext());
+  border->TrackImage(aContext->PresContext());
 
   COMPUTE_END_RESET(Border, border)
 }
@@ -7843,18 +7923,6 @@ SetSVGOpacity(const nsCSSValue& aValue,
   }
 }
 
-template <typename FieldT, typename T>
-static bool
-SetTextContextValue(const nsCSSValue& aValue, FieldT& aField, T aFallbackValue)
-{
-  if (aValue.GetUnit() != eCSSUnit_Enumerated ||
-      aValue.GetIntValue() != NS_STYLE_STROKE_PROP_CONTEXT_VALUE) {
-    return false;
-  }
-  aField = aFallbackValue;
-  return true;
-}
-
 const void*
 nsRuleNode::ComputeSVGData(void* aStartStruct,
                            const nsRuleData* aRuleData,
@@ -8315,7 +8383,7 @@ nsRuleNode::ComputeSVGResetData(void* aStartStruct,
     case eCSSUnit_ListDep: {
       svgReset->mFilters.Clear();
       const nsCSSValueList* cur = filterValue->GetListValue();
-      while(cur) {
+      while (cur) {
         nsStyleFilter styleFilter;
         if (!SetStyleFilterToCSSValue(&styleFilter, cur->mValue, aContext,
                                       mPresContext, canStoreInRuleTree)) {
@@ -8617,15 +8685,15 @@ nsRuleNode::HasAuthorSpecifiedRules(nsStyleContext* aStyleContext,
   // Number of properties we care about
   size_t nValues = 0;
 
-  nsCSSValue* values[NS_ARRAY_LENGTH(backgroundValues) +
-                     NS_ARRAY_LENGTH(borderValues) +
-                     NS_ARRAY_LENGTH(paddingValues) +
-                     NS_ARRAY_LENGTH(textShadowValues)];
+  nsCSSValue* values[MOZ_ARRAY_LENGTH(backgroundValues) +
+                     MOZ_ARRAY_LENGTH(borderValues) +
+                     MOZ_ARRAY_LENGTH(paddingValues) +
+                     MOZ_ARRAY_LENGTH(textShadowValues)];
 
-  nsCSSProperty properties[NS_ARRAY_LENGTH(backgroundValues) +
-                           NS_ARRAY_LENGTH(borderValues) +
-                           NS_ARRAY_LENGTH(paddingValues) +
-                           NS_ARRAY_LENGTH(textShadowValues)];
+  nsCSSProperty properties[MOZ_ARRAY_LENGTH(backgroundValues) +
+                           MOZ_ARRAY_LENGTH(borderValues) +
+                           MOZ_ARRAY_LENGTH(paddingValues) +
+                           MOZ_ARRAY_LENGTH(textShadowValues)];
 
   if (ruleTypeMask & NS_AUTHOR_SPECIFIED_BACKGROUND) {
     for (uint32_t i = 0, i_end = ArrayLength(backgroundValues);

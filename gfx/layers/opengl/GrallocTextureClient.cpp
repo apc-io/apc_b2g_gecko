@@ -5,17 +5,20 @@
 
 #ifdef MOZ_WIDGET_GONK
 
+#include "mozilla/gfx/2D.h"
 #include "mozilla/layers/GrallocTextureClient.h"
-#include "mozilla/layers/CompositableClient.h"
 #include "mozilla/layers/CompositableForwarder.h"
 #include "mozilla/layers/ISurfaceAllocator.h"
 #include "mozilla/layers/ShadowLayerUtilsGralloc.h"
-#include "GrallocImages.h"
 #include "gfx2DGlue.h"
+#include "gfxASurface.h"
+#include "gfxImageSurface.h"            // for gfxImageSurface
+#include "GrallocImages.h"
 
 namespace mozilla {
 namespace layers {
 
+using namespace mozilla::gfx;
 using namespace android;
 
 class GraphicBufferLockedTextureClientData : public TextureClientData {
@@ -34,7 +37,6 @@ public:
 
   virtual void DeallocateSharedData(ISurfaceAllocator*) MOZ_OVERRIDE
   {
-    mBufferLocked->Unlock();
     mBufferLocked = nullptr;
   }
 
@@ -61,7 +63,8 @@ public:
     // We just need to wrap the actor in a SurfaceDescriptor because that's what
     // ISurfaceAllocator uses as input, we don't care about the other parameters.
     SurfaceDescriptor sd = SurfaceDescriptorGralloc(nullptr, mGrallocActor,
-                                                    nsIntSize(0,0), false, false);
+                                                    IntSize(0, 0),
+                                                    false, false);
     allocator->DestroySharedSurface(&sd);
     mGrallocActor = nullptr;
   }
@@ -90,19 +93,17 @@ GrallocTextureClientOGL::DropTextureData()
 GrallocTextureClientOGL::GrallocTextureClientOGL(GrallocBufferActor* aActor,
                                                  gfx::IntSize aSize,
                                                  TextureFlags aFlags)
-: BufferTextureClient(nullptr, gfx::FORMAT_UNKNOWN, aFlags)
-, mGrallocFlags(android::GraphicBuffer::USAGE_SW_READ_OFTEN)
+: BufferTextureClient(nullptr, gfx::SurfaceFormat::UNKNOWN, aFlags)
 , mMappedBuffer(nullptr)
 {
   InitWith(aActor, aSize);
   MOZ_COUNT_CTOR(GrallocTextureClientOGL);
 }
 
-GrallocTextureClientOGL::GrallocTextureClientOGL(CompositableClient* aCompositable,
+GrallocTextureClientOGL::GrallocTextureClientOGL(ISurfaceAllocator* aAllocator,
                                                  gfx::SurfaceFormat aFormat,
                                                  TextureFlags aFlags)
-: BufferTextureClient(aCompositable, aFormat, aFlags)
-, mGrallocFlags(android::GraphicBuffer::USAGE_SW_READ_OFTEN)
+: BufferTextureClient(aAllocator, aFormat, aFlags)
 , mMappedBuffer(nullptr)
 {
   MOZ_COUNT_CTOR(GrallocTextureClientOGL);
@@ -114,15 +115,15 @@ GrallocTextureClientOGL::~GrallocTextureClientOGL()
     if (ShouldDeallocateInDestructor()) {
     // If the buffer has never been shared we must deallocate it or it would
     // leak.
-    if (mBufferLocked) {
-      mBufferLocked->Unlock();
-    } else {
-      MOZ_ASSERT(mCompositable);
+    if (!mBufferLocked) {
       // We just need to wrap the actor in a SurfaceDescriptor because that's what
       // ISurfaceAllocator uses as input, we don't care about the other parameters.
       SurfaceDescriptor sd = SurfaceDescriptorGralloc(nullptr, mGrallocActor,
-                                                      nsIntSize(0,0), false, false);
-      mCompositable->GetForwarder()->DestroySharedSurface(&sd);
+                                                      IntSize(0, 0),
+                                                      false, false);
+
+      ISurfaceAllocator* allocator = GetAllocator();
+      allocator->DestroySharedSurface(&sd);
     }
   }
 }
@@ -156,25 +157,92 @@ GrallocTextureClientOGL::ToSurfaceDescriptor(SurfaceDescriptor& aOutDescriptor)
   return true;
 }
 
+ bool
+GrallocTextureClientOGL::UpdateSurface(gfxASurface* aSurface)
+{
+  MOZ_ASSERT(aSurface);
+  MOZ_ASSERT(!IsImmutable());
+  MOZ_ASSERT(IsValid());
+  if (!IsValid() || !IsAllocated()) {
+    return false;
+  }
+
+  if (gfxPlatform::GetPlatform()->SupportsAzureContent()) {
+    RefPtr<DrawTarget> dt = GetAsDrawTarget();
+    RefPtr<SourceSurface> source = gfxPlatform::GetPlatform()->GetSourceSurfaceForSurface(dt, aSurface);
+
+    dt->CopySurface(source, IntRect(IntPoint(), GetSize()), IntPoint());
+  } else {
+    nsRefPtr<gfxASurface> surf = GetAsSurface();
+    nsRefPtr<gfxContext> tmpCtx = new gfxContext(surf.get());
+    tmpCtx->SetOperator(gfxContext::OPERATOR_SOURCE);
+    tmpCtx->DrawSurface(aSurface, gfxSize(GetSize().width,
+                                          GetSize().height));
+  }
+
+  return true;
+}
+
+void
+GrallocTextureClientOGL::SetReleaseFenceHandle(FenceHandle aReleaseFenceHandle)
+{
+  if (mBufferLocked) {
+    mBufferLocked->SetReleaseFenceHandle(aReleaseFenceHandle);
+  } else {
+    mReleaseFenceHandle = aReleaseFenceHandle;
+  }
+}
+
 bool
 GrallocTextureClientOGL::Lock(OpenMode aMode)
 {
   MOZ_ASSERT(IsValid());
-  // XXX- it would be cleaner to take the openMode into account or to check
-  // that aMode is coherent with mGrallocFlags (which carries more information
-  // than OpenMode).
-  int32_t rv = mGraphicBuffer->lock(mGrallocFlags, reinterpret_cast<void**>(&mMappedBuffer));
+  if (!IsValid() || !IsAllocated()) {
+    return false;
+  }
+
+  if (mMappedBuffer) {
+    return true;
+  }
+
+#if MOZ_WIDGET_GONK && ANDROID_VERSION >= 17
+  if (mReleaseFenceHandle.IsValid()) {
+    android::sp<Fence> fence = mReleaseFenceHandle.mFence;
+#if ANDROID_VERSION == 17
+    fence->waitForever(1000, "GrallocTextureClientOGL::Lock");
+    // 1000 is what Android uses. It is warning timeout ms.
+#else
+    fence->waitForever("GrallocTextureClientOGL::Lock");
+#endif
+    mReleaseFenceHandle = FenceHandle();
+  }
+#endif
+
+  uint32_t usage = 0;
+  if (aMode & OPEN_READ) {
+    usage |= GRALLOC_USAGE_SW_READ_OFTEN;
+  }
+  if (aMode & OPEN_WRITE) {
+    usage |= GRALLOC_USAGE_SW_WRITE_OFTEN;
+  }
+  int32_t rv = mGraphicBuffer->lock(usage, reinterpret_cast<void**>(&mMappedBuffer));
   if (rv) {
+    mMappedBuffer = nullptr;
     NS_WARNING("Couldn't lock graphic buffer");
     return false;
   }
-  return true;
+  return BufferTextureClient::Lock(aMode);
 }
+
 void
 GrallocTextureClientOGL::Unlock()
 {
-  mMappedBuffer = nullptr;
-  mGraphicBuffer->unlock();
+  BufferTextureClient::Unlock();
+  mDrawTarget = nullptr;
+  if (mMappedBuffer) {
+    mMappedBuffer = nullptr;
+    mGraphicBuffer->unlock();
+  }
 }
 
 uint8_t*
@@ -185,36 +253,93 @@ GrallocTextureClientOGL::GetBuffer() const
   return mMappedBuffer;
 }
 
+static gfx::SurfaceFormat
+SurfaceFormatForPixelFormat(android::PixelFormat aFormat)
+{
+  switch (aFormat) {
+  case PIXEL_FORMAT_RGBA_8888:
+    return gfx::SurfaceFormat::R8G8B8A8;
+  case PIXEL_FORMAT_BGRA_8888:
+    return gfx::SurfaceFormat::B8G8R8A8;
+  case PIXEL_FORMAT_RGBX_8888:
+    return gfx::SurfaceFormat::R8G8B8X8;
+  case PIXEL_FORMAT_RGB_565:
+    return gfx::SurfaceFormat::R5G6B5;
+  default:
+    MOZ_CRASH("Unknown gralloc pixel format");
+  }
+  return gfx::SurfaceFormat::R8G8B8A8;
+}
+
+TemporaryRef<gfx::DrawTarget>
+GrallocTextureClientOGL::GetAsDrawTarget()
+{
+  MOZ_ASSERT(IsValid());
+  MOZ_ASSERT(mMappedBuffer, "Calling TextureClient::GetAsDrawTarget without locking :(");
+
+  if (mDrawTarget) {
+    return mDrawTarget;
+  }
+
+  gfx::SurfaceFormat format = SurfaceFormatForPixelFormat(mGraphicBuffer->getPixelFormat());
+  long pixelStride = mGraphicBuffer->getStride();
+  long byteStride = pixelStride * BytesPerPixel(format);
+  mDrawTarget = gfxPlatform::GetPlatform()->CreateDrawTargetForData(GetBuffer(),
+                                                                    mSize,
+                                                                    byteStride,
+                                                                    mFormat);
+  return mDrawTarget;
+}
+
+already_AddRefed<gfxASurface>
+GrallocTextureClientOGL::GetAsSurface()
+{
+  MOZ_ASSERT(IsValid());
+  MOZ_ASSERT(mMappedBuffer, "Calling TextureClient::GetAsSurface without locking :(");
+
+  gfx::SurfaceFormat format = SurfaceFormatForPixelFormat(mGraphicBuffer->getPixelFormat());
+  long pixelStride = mGraphicBuffer->getStride();
+  long byteStride = pixelStride * BytesPerPixel(format);
+  nsRefPtr<gfxImageSurface> surface =
+                     new gfxImageSurface(GetBuffer(),
+                                         gfxIntSize(mSize.width, mSize.height),
+                                         byteStride,
+                                         SurfaceFormatToImageFormat(mFormat));
+  return surface.forget();
+}
+
 bool
 GrallocTextureClientOGL::AllocateForSurface(gfx::IntSize aSize,
                                             TextureAllocationFlags)
 {
   MOZ_ASSERT(IsValid());
-  MOZ_ASSERT(mCompositable);
-  ISurfaceAllocator* allocator = mCompositable->GetForwarder();
 
   uint32_t format;
-  uint32_t usage = android::GraphicBuffer::USAGE_SW_READ_OFTEN;
-  bool swapRB = GetFlags() & TEXTURE_RB_SWAPPED;
+  uint32_t usage = android::GraphicBuffer::USAGE_SW_READ_OFTEN |
+                   android::GraphicBuffer::USAGE_SW_WRITE_OFTEN |
+                   android::GraphicBuffer::USAGE_HW_TEXTURE;
 
   switch (mFormat) {
-  case gfx::FORMAT_R8G8B8A8:
-    format = swapRB ? android::PIXEL_FORMAT_BGRA_8888 : android::PIXEL_FORMAT_RGBA_8888;
+  case gfx::SurfaceFormat::R8G8B8A8:
+    format = android::PIXEL_FORMAT_RGBA_8888;
     break;
-  case gfx::FORMAT_B8G8R8A8:
-    format = swapRB ? android::PIXEL_FORMAT_RGBA_8888 : android::PIXEL_FORMAT_BGRA_8888;
+  case gfx::SurfaceFormat::B8G8R8A8:
+     format = android::PIXEL_FORMAT_RGBA_8888;
+     mFlags |= TEXTURE_RB_SWAPPED;
     break;
-  case gfx::FORMAT_R8G8B8X8:
-  case gfx::FORMAT_B8G8R8X8:
-    // there is no android BGRX format?
+  case gfx::SurfaceFormat::R8G8B8X8:
     format = android::PIXEL_FORMAT_RGBX_8888;
     break;
-  case gfx::FORMAT_R5G6B5:
+  case gfx::SurfaceFormat::B8G8R8X8:
+     format = android::PIXEL_FORMAT_RGBX_8888;
+     mFlags |= TEXTURE_RB_SWAPPED;
+    break;
+  case gfx::SurfaceFormat::R5G6B5:
     format = android::PIXEL_FORMAT_RGB_565;
     break;
-  case gfx::FORMAT_A8:
-    format = android::PIXEL_FORMAT_A_8;
-    break;
+  case gfx::SurfaceFormat::A8:
+    NS_WARNING("gralloc does not support gfx::SurfaceFormat::A8");
+    return false;
   default:
     NS_WARNING("Unsupported surface format");
     return false;
@@ -233,17 +358,46 @@ GrallocTextureClientOGL::AllocateForYCbCr(gfx::IntSize aYSize, gfx::IntSize aCbC
 }
 
 bool
+GrallocTextureClientOGL::AllocateForGLRendering(gfx::IntSize aSize)
+{
+  MOZ_ASSERT(IsValid());
+
+  uint32_t format;
+  uint32_t usage = android::GraphicBuffer::USAGE_HW_RENDER |
+                   android::GraphicBuffer::USAGE_HW_TEXTURE;
+
+  switch (mFormat) {
+  case gfx::SurfaceFormat::R8G8B8A8:
+  case gfx::SurfaceFormat::B8G8R8A8:
+    format = android::PIXEL_FORMAT_RGBA_8888;
+    break;
+  case gfx::SurfaceFormat::R8G8B8X8:
+  case gfx::SurfaceFormat::B8G8R8X8:
+    // there is no android BGRX format?
+    format = android::PIXEL_FORMAT_RGBX_8888;
+    break;
+  case gfx::SurfaceFormat::R5G6B5:
+    format = android::PIXEL_FORMAT_RGB_565;
+    break;
+  default:
+    NS_WARNING("Unsupported surface format");
+    return false;
+  }
+
+  return AllocateGralloc(aSize, format, usage);
+}
+
+bool
 GrallocTextureClientOGL::AllocateGralloc(gfx::IntSize aSize,
                                          uint32_t aAndroidFormat,
                                          uint32_t aUsage)
 {
   MOZ_ASSERT(IsValid());
-  MOZ_ASSERT(mCompositable);
-  ISurfaceAllocator* allocator = mCompositable->GetForwarder();
+  ISurfaceAllocator* allocator = GetAllocator();
 
   MaybeMagicGrallocBufferHandle handle;
   PGrallocBufferChild* actor =
-    allocator->AllocGrallocBuffer(gfx::ThebesIntSize(aSize),
+    allocator->AllocGrallocBuffer(aSize,
                                   aAndroidFormat,
                                   aUsage,
                                   &handle);

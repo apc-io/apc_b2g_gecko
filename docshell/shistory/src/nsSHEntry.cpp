@@ -53,6 +53,7 @@ nsSHEntry::nsSHEntry(const nsSHEntry &other)
   , mStateData(other.mStateData)
   , mIsSrcdocEntry(other.mIsSrcdocEntry)
   , mSrcdocData(other.mSrcdocData)
+  , mBaseURI(other.mBaseURI)
 {
 }
 
@@ -193,7 +194,7 @@ nsSHEntry::GetSticky(bool *aSticky)
   return NS_OK;
 }
 
-NS_IMETHODIMP nsSHEntry::GetTitle(PRUnichar** aTitle)
+NS_IMETHODIMP nsSHEntry::GetTitle(char16_t** aTitle)
 {
   // Check for empty title...
   if (mTitle.IsEmpty() && mURI) {
@@ -516,7 +517,20 @@ nsSHEntry::SetSrcdocData(const nsAString &aSrcdocData)
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsSHEntry::GetBaseURI(nsIURI **aBaseURI)
+{
+  *aBaseURI = mBaseURI;
+  NS_IF_ADDREF(*aBaseURI);
+  return NS_OK;
+}
 
+NS_IMETHODIMP
+nsSHEntry::SetBaseURI(nsIURI *aBaseURI)
+{
+  mBaseURI = aBaseURI;
+  return NS_OK;
+}
 
 //*****************************************************************************
 //    nsSHEntry: nsISHContainer

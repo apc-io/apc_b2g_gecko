@@ -28,7 +28,7 @@ CompileScript(ExclusiveContext *cx, LifoAlloc *alloc,
               SourceCompressionTask *extraSct = nullptr);
 
 bool
-CompileLazyFunction(JSContext *cx, LazyScript *lazy, const jschar *chars, size_t length);
+CompileLazyFunction(JSContext *cx, Handle<LazyScript*> lazy, const jschar *chars, size_t length);
 
 bool
 CompileFunctionBody(JSContext *cx, MutableHandleFunction fun,
@@ -38,6 +38,9 @@ bool
 CompileStarGeneratorBody(JSContext *cx, MutableHandleFunction fun,
                          const ReadOnlyCompileOptions &options,
                          const AutoNameVector &formals, const jschar *chars, size_t length);
+
+ScriptSourceObject *
+CreateScriptSourceObject(ExclusiveContext *cx, const ReadOnlyCompileOptions &options);
 
 /*
  * This should be called while still on the main thread if compilation will

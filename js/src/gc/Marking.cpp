@@ -118,6 +118,13 @@ AsGCMarker(JSTracer *trc)
     return static_cast<GCMarker *>(trc);
 }
 
+template <typename T> bool ThingIsPermanentAtom(T *thing) { return false; }
+template <> bool ThingIsPermanentAtom<JSString>(JSString *str) { return str->isPermanentAtom(); }
+template <> bool ThingIsPermanentAtom<JSFlatString>(JSFlatString *str) { return str->isPermanentAtom(); }
+template <> bool ThingIsPermanentAtom<JSLinearString>(JSLinearString *str) { return str->isPermanentAtom(); }
+template <> bool ThingIsPermanentAtom<JSAtom>(JSAtom *atom) { return atom->isPermanent(); }
+template <> bool ThingIsPermanentAtom<PropertyName>(PropertyName *name) { return name->isPermanent(); }
+
 template<typename T>
 static inline void
 CheckMarkedThing(JSTracer *trc, T *thing)
@@ -128,6 +135,13 @@ CheckMarkedThing(JSTracer *trc, T *thing)
 
     /* This function uses data that's not available in the nursery. */
     if (IsInsideNursery(trc->runtime, thing))
+        return;
+
+    /*
+     * Permanent atoms are not associated with this runtime, but will be ignored
+     * during marking.
+     */
+    if (ThingIsPermanentAtom(thing))
         return;
 
     JS_ASSERT(thing->zone());
@@ -153,6 +167,9 @@ CheckMarkedThing(JSTracer *trc, T *thing)
 
     JS_ASSERT_IF(IS_GC_MARKING_TRACER(trc) && AsGCMarker(trc)->getMarkColor() == GRAY,
                  !thing->zone()->isGCMarkingBlack() || rt->isAtomsZone(thing->zone()));
+
+    JS_ASSERT_IF(IS_GC_MARKING_TRACER(trc),
+                 !(thing->zone()->isGCSweeping() || thing->zone()->isGCFinished()));
 
     /*
      * Try to assert that the thing is allocated.  This is complicated by the
@@ -182,6 +199,14 @@ MarkInternal(JSTracer *trc, T **thingp)
          * each incremental slice.
          */
         if (IsInsideNursery(trc->runtime, thing))
+            return;
+
+        /*
+         * Don't mark permanent atoms, as they may be associated with another
+         * runtime. Note that PushMarkStack() also checks this, but the tests
+         * and maybeAlive write below should only be done on the main thread.
+         */
+        if (ThingIsPermanentAtom(thing))
             return;
 
         /*
@@ -224,6 +249,30 @@ Mark(JSTracer *trc, BarrieredPtr<T> *thing, const char *name)
 {
     JS_SET_TRACING_NAME(trc, name);
     MarkInternal(trc, thing->unsafeGet());
+}
+
+void
+MarkPermanentAtom(JSTracer *trc, JSAtom *atom, const char *name)
+{
+    JS_SET_TRACING_NAME(trc, name);
+
+    JS_ASSERT(atom->isPermanent());
+
+    CheckMarkedThing(trc, atom);
+
+    if (!trc->callback) {
+        // Atoms do not refer to other GC things so don't need to go on the mark stack.
+        // Additionally, PushMarkStack will ignore permanent atoms.
+        atom->markIfUnmarked();
+    } else {
+        void *thing = atom;
+        trc->callback(trc, &thing, JSTRACE_STRING);
+        JS_ASSERT(thing == atom);
+        JS_UNSET_TRACING_LOCATION(trc);
+    }
+
+    trc->debugPrinter = nullptr;
+    trc->debugPrintArg = nullptr;
 }
 
 } /* namespace gc */
@@ -290,6 +339,13 @@ IsAboutToBeFinalized(T **thingp)
     JS_ASSERT(thingp);
     JS_ASSERT(*thingp);
 
+    /* Permanent atoms are never finalized by non-owning runtimes. */
+    if (ThingIsPermanentAtom(*thingp) &&
+        !TlsPerThreadData.get()->associatedWith((*thingp)->runtimeFromAnyThread()))
+    {
+        return false;
+    }
+
 #ifdef JSGC_GENERATIONAL
     Nursery &nursery = (*thingp)->runtimeFromMainThread()->gcNursery;
     if (nursery.isInside(*thingp))
@@ -310,9 +366,19 @@ IsAboutToBeFinalized(T **thingp)
     return !(*thingp)->isMarked();
 }
 
+template <typename T>
+T *
+UpdateIfRelocated(JSRuntime *rt, T **thingp)
+{
+    JS_ASSERT(thingp);
+    if (*thingp && rt->isHeapMinorCollecting())
+        IsAboutToBeFinalized<T>(thingp);
+    return *thingp;
+}
+
 #define DeclMarkerImpl(base, type)                                                                \
 void                                                                                              \
-Mark##base(JSTracer *trc, BarrieredPtr<type> *thing, const char *name)                         \
+Mark##base(JSTracer *trc, BarrieredPtr<type> *thing, const char *name)                            \
 {                                                                                                 \
     Mark<type>(trc, thing, name);                                                                 \
 }                                                                                                 \
@@ -353,7 +419,7 @@ Is##base##Marked(type **thingp)                                                 
 }                                                                                                 \
                                                                                                   \
 bool                                                                                              \
-Is##base##Marked(BarrieredPtr<type> *thingp)                                                   \
+Is##base##Marked(BarrieredPtr<type> *thingp)                                                      \
 {                                                                                                 \
     return IsMarked<type>(thingp->unsafeGet());                                                   \
 }                                                                                                 \
@@ -365,10 +431,23 @@ Is##base##AboutToBeFinalized(type **thingp)                                     
 }                                                                                                 \
                                                                                                   \
 bool                                                                                              \
-Is##base##AboutToBeFinalized(BarrieredPtr<type> *thingp)                                       \
+Is##base##AboutToBeFinalized(BarrieredPtr<type> *thingp)                                          \
 {                                                                                                 \
     return IsAboutToBeFinalized<type>(thingp->unsafeGet());                                       \
+}                                                                                                 \
+                                                                                                  \
+type *                                                                                            \
+Update##base##IfRelocated(JSRuntime *rt, BarrieredPtr<type> *thingp)                              \
+{                                                                                                 \
+    return UpdateIfRelocated<type>(rt, thingp->unsafeGet());                                      \
+}                                                                                                 \
+                                                                                                  \
+type *                                                                                            \
+Update##base##IfRelocated(JSRuntime *rt, type **thingp)                                           \
+{                                                                                                 \
+    return UpdateIfRelocated<type>(rt, thingp);                                                   \
 }
+
 
 DeclMarkerImpl(BaseShape, BaseShape)
 DeclMarkerImpl(BaseShape, UnownedBaseShape)
@@ -376,6 +455,7 @@ DeclMarkerImpl(JitCode, jit::JitCode)
 DeclMarkerImpl(Object, ArgumentsObject)
 DeclMarkerImpl(Object, ArrayBufferObject)
 DeclMarkerImpl(Object, ArrayBufferViewObject)
+DeclMarkerImpl(Object, SharedArrayBufferObject)
 DeclMarkerImpl(Object, DebugScopeObject)
 DeclMarkerImpl(Object, GlobalObject)
 DeclMarkerImpl(Object, JSObject)
@@ -465,7 +545,7 @@ MarkIdInternal(JSTracer *trc, jsid *id)
         JS_SET_TRACING_LOCATION(trc, (void *)id);
         MarkInternal(trc, &str);
         *id = NON_INTEGER_ATOM_TO_JSID(reinterpret_cast<JSAtom *>(str));
-    } else if (JS_UNLIKELY(JSID_IS_OBJECT(*id))) {
+    } else if (MOZ_UNLIKELY(JSID_IS_OBJECT(*id))) {
         JSObject *obj = JSID_TO_OBJECT(*id);
         JS_SET_TRACING_LOCATION(trc, (void *)id);
         MarkInternal(trc, &obj);
@@ -881,7 +961,7 @@ ScanShape(GCMarker *gcmarker, Shape *shape)
     const BarrieredId &id = shape->propidRef();
     if (JSID_IS_STRING(id))
         PushMarkStack(gcmarker, JSID_TO_STRING(id));
-    else if (JS_UNLIKELY(JSID_IS_OBJECT(id)))
+    else if (MOZ_UNLIKELY(JSID_IS_OBJECT(id)))
         PushMarkStack(gcmarker, JSID_TO_OBJECT(id));
 
     shape = shape->previous();
@@ -937,6 +1017,8 @@ ScanLinearString(GCMarker *gcmarker, JSLinearString *str)
     while (str->hasBase()) {
         str = str->base();
         JS_ASSERT(str->JSString::isLinear());
+        if (str->isPermanentAtom())
+            break;
         JS_COMPARTMENT_ASSERT_STR(gcmarker->runtime, str);
         if (!str->markIfUnmarked())
             break;
@@ -965,7 +1047,7 @@ ScanRope(GCMarker *gcmarker, JSRope *rope)
         JSRope *next = nullptr;
 
         JSString *right = rope->rightChild();
-        if (right->markIfUnmarked()) {
+        if (!right->isPermanentAtom() && right->markIfUnmarked()) {
             if (right->isLinear())
                 ScanLinearString(gcmarker, &right->asLinear());
             else
@@ -973,7 +1055,7 @@ ScanRope(GCMarker *gcmarker, JSRope *rope)
         }
 
         JSString *left = rope->leftChild();
-        if (left->markIfUnmarked()) {
+        if (!left->isPermanentAtom() && left->markIfUnmarked()) {
             if (left->isLinear()) {
                 ScanLinearString(gcmarker, &left->asLinear());
             } else {
@@ -1010,6 +1092,10 @@ ScanString(GCMarker *gcmarker, JSString *str)
 static inline void
 PushMarkStack(GCMarker *gcmarker, JSString *str)
 {
+    // Permanent atoms might not be associated with this runtime.
+    if (str->isPermanentAtom())
+        return;
+
     JS_COMPARTMENT_ASSERT_STR(gcmarker->runtime, str);
 
     /*
@@ -1139,7 +1225,7 @@ ScanTypeObject(GCMarker *gcmarker, types::TypeObject *type)
         PushMarkStack(gcmarker, type->newScript()->fun);
         PushMarkStack(gcmarker, type->newScript()->templateObject);
     } else if (type->hasTypedObject()) {
-        PushMarkStack(gcmarker, type->typedObject()->typeRepr->ownerObject());
+        PushMarkStack(gcmarker, type->typedObject()->descrHeapPtr());
     }
 
     if (type->interpretedFunction)
@@ -1166,7 +1252,7 @@ gc::MarkChildren(JSTracer *trc, types::TypeObject *type)
         MarkObject(trc, &type->newScript()->fun, "type_new_function");
         MarkObject(trc, &type->newScript()->templateObject, "type_new_template");
     } else if (type->hasTypedObject()) {
-        type->typedObject()->typeRepr->mark(trc);
+        MarkObject(trc, &type->typedObject()->descrHeapPtr(), "type_heap_ptr");
     }
 
     if (type->interpretedFunction)
@@ -1395,10 +1481,12 @@ GCMarker::processMarkStackTop(SliceBudget &budget)
         const Value &v = *vp++;
         if (v.isString()) {
             JSString *str = v.toString();
-            JS_COMPARTMENT_ASSERT_STR(runtime, str);
-            JS_ASSERT(runtime->isAtomsZone(str->zone()) || str->zone() == obj->zone());
-            if (str->markIfUnmarked())
-                ScanString(this, str);
+            if (!str->isPermanentAtom()) {
+                JS_COMPARTMENT_ASSERT_STR(runtime, str);
+                JS_ASSERT(runtime->isAtomsZone(str->zone()) || str->zone() == obj->zone());
+                if (str->markIfUnmarked())
+                    ScanString(this, str);
+            }
         } else if (v.isObject()) {
             JSObject *obj2 = &v.toObject();
             JS_COMPARTMENT_ASSERT(runtime, obj2);

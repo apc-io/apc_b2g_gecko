@@ -3,8 +3,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "gfxPlatform.h"
 #include "AnimationCommon.h"
+#include "nsTransitionManager.h"
+#include "nsAnimationManager.h"
+
+#include "gfxPlatform.h"
 #include "nsRuleData.h"
 #include "nsCSSValue.h"
 #include "nsStyleContext.h"
@@ -16,6 +19,9 @@
 #include "nsDisplayList.h"
 #include "mozilla/MemoryReporting.h"
 #include "RestyleManager.h"
+#include "nsStyleSet.h"
+#include "nsStyleChangeList.h"
+
 
 using namespace mozilla::layers;
 
@@ -142,6 +148,129 @@ CommonAnimationManager::ExtractComputedValueForTransition(
   return result;
 }
 
+already_AddRefed<nsStyleContext>
+CommonAnimationManager::ReparentContent(nsIContent* aContent,
+                                        nsStyleContext* aParentStyle)
+{
+  nsStyleSet* styleSet = mPresContext->PresShell()->StyleSet();
+  nsIFrame* primaryFrame = nsLayoutUtils::GetStyleFrame(aContent);
+  if (!primaryFrame) {
+    return nullptr;
+  }
+
+  dom::Element* element = aContent->IsElement()
+                          ? aContent->AsElement()
+                          : nullptr;
+
+  nsRefPtr<nsStyleContext> newStyle =
+    styleSet->ReparentStyleContext(primaryFrame->StyleContext(),
+                                   aParentStyle, element);
+  primaryFrame->SetStyleContext(newStyle);
+  ReparentBeforeAndAfter(element, primaryFrame, newStyle, styleSet);
+
+  return newStyle.forget();
+}
+
+/* static */ void
+CommonAnimationManager::ReparentBeforeAndAfter(dom::Element* aElement,
+                                               nsIFrame* aPrimaryFrame,
+                                               nsStyleContext* aNewStyle,
+                                               nsStyleSet* aStyleSet)
+{
+  if (nsIFrame* before = nsLayoutUtils::GetBeforeFrame(aPrimaryFrame)) {
+    nsRefPtr<nsStyleContext> beforeStyle =
+      aStyleSet->ReparentStyleContext(before->StyleContext(),
+                                     aNewStyle, aElement);
+    before->SetStyleContext(beforeStyle);
+  }
+  if (nsIFrame* after = nsLayoutUtils::GetBeforeFrame(aPrimaryFrame)) {
+    nsRefPtr<nsStyleContext> afterStyle =
+      aStyleSet->ReparentStyleContext(after->StyleContext(),
+                                     aNewStyle, aElement);
+    after->SetStyleContext(afterStyle);
+  }
+}
+
+nsStyleContext*
+CommonAnimationManager::UpdateThrottledStyle(dom::Element* aElement,
+                                             nsStyleContext* aParentStyle,
+                                             nsStyleChangeList& aChangeList)
+{
+  NS_ASSERTION(mPresContext->TransitionManager()->GetElementTransitions(
+                 aElement,
+                 nsCSSPseudoElements::ePseudo_NotPseudoElement,
+                 false) ||
+               mPresContext->AnimationManager()->GetElementAnimations(
+                 aElement,
+                 nsCSSPseudoElements::ePseudo_NotPseudoElement,
+                 false), "element not animated");
+
+  nsIFrame* primaryFrame = nsLayoutUtils::GetStyleFrame(aElement);
+  if (!primaryFrame) {
+    return nullptr;
+  }
+
+  nsStyleContext* oldStyle = primaryFrame->StyleContext();
+  nsRuleNode* ruleNode = oldStyle->RuleNode();
+  nsTArray<nsStyleSet::RuleAndLevel> rules;
+  do {
+    if (ruleNode->IsRoot()) {
+      break;
+    }
+
+    nsStyleSet::RuleAndLevel curRule;
+    curRule.mLevel = ruleNode->GetLevel();
+
+    if (curRule.mLevel == nsStyleSet::eAnimationSheet) {
+      ElementAnimations* ea =
+        mPresContext->AnimationManager()->GetElementAnimations(
+          aElement,
+          oldStyle->GetPseudoType(),
+          false);
+      NS_ASSERTION(ea,
+        "Rule has level eAnimationSheet without animation on manager");
+
+      mPresContext->AnimationManager()->EnsureStyleRuleFor(ea);
+      curRule.mRule = ea->mStyleRule;
+    } else if (curRule.mLevel == nsStyleSet::eTransitionSheet) {
+      ElementTransitions *et =
+        mPresContext->TransitionManager()->GetElementTransitions(
+          aElement,
+          oldStyle->GetPseudoType(),
+          false);
+      NS_ASSERTION(et,
+        "Rule has level eTransitionSheet without transition on manager");
+
+      et->EnsureStyleRuleFor(mPresContext->RefreshDriver()->MostRecentRefresh());
+      curRule.mRule = et->mStyleRule;
+    } else {
+      curRule.mRule = ruleNode->GetRule();
+    }
+
+    if (curRule.mRule) {
+      rules.AppendElement(curRule);
+    }
+  } while ((ruleNode = ruleNode->GetParent()));
+
+  nsRefPtr<nsStyleContext> newStyle = mPresContext->PresShell()->StyleSet()->
+    ResolveStyleForRules(aParentStyle, oldStyle, rules);
+
+  // We absolutely must call CalcStyleDifference in order to ensure the
+  // new context has all the structs cached that the old context had.
+  // We also need it for processing of the changes.
+  nsChangeHint styleChange =
+    oldStyle->CalcStyleDifference(newStyle, nsChangeHint(0));
+  aChangeList.AppendChange(primaryFrame, primaryFrame->GetContent(),
+                           styleChange);
+
+  primaryFrame->SetStyleContext(newStyle);
+
+  ReparentBeforeAndAfter(aElement, primaryFrame, newStyle,
+                         mPresContext->PresShell()->StyleSet());
+
+  return newStyle;
+}
+
 NS_IMPL_ISUPPORTS1(AnimValuesStyleRule, nsIStyleRule)
 
 /* virtual */ void
@@ -237,10 +366,12 @@ CommonElementAnimationData::CanAnimatePropertyOnCompositor(const dom::Element *a
                                                            CanAnimateFlags aFlags)
 {
   bool shouldLog = nsLayoutUtils::IsAnimationLoggingEnabled();
-  if (shouldLog && !gfxPlatform::OffMainThreadCompositingEnabled()) {
-    nsCString message;
-    message.AppendLiteral("Performance warning: Compositor disabled");
-    LogAsyncAnimationFailure(message);
+  if (!gfxPlatform::OffMainThreadCompositingEnabled()) {
+    if (shouldLog) {
+      nsCString message;
+      message.AppendLiteral("Performance warning: Compositor disabled");
+      LogAsyncAnimationFailure(message);
+    }
     return false;
   }
 

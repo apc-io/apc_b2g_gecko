@@ -443,7 +443,7 @@ ParseManifest(NSLocationType type, FileLocation &file, char* buf, bool aChromeOn
       if (NS_SUCCEEDED(rv) && osTarget.Length()) {
         ToLowerCase(s);
         CopyUTF8toUTF16(s, abi);
-        abi.Insert(PRUnichar('_'), 0);
+        abi.Insert(char16_t('_'), 0);
         abi.Insert(osTarget, 0);
       }
     }
@@ -451,12 +451,15 @@ ParseManifest(NSLocationType type, FileLocation &file, char* buf, bool aChromeOn
 
   nsAutoString osVersion;
 #if defined(XP_WIN)
+#pragma warning(push)
+#pragma warning(disable:4996) // VC12+ deprecates GetVersionEx
   OSVERSIONINFO info = { sizeof(OSVERSIONINFO) };
   if (GetVersionEx(&info)) {
     nsTextFormatter::ssprintf(osVersion, MOZ_UTF16("%ld.%ld"),
                                          info.dwMajorVersion,
                                          info.dwMinorVersion);
   }
+#pragma warning(pop)
 #elif defined(MOZ_WIDGET_COCOA)
   SInt32 majorVersion = nsCocoaFeatures::OSXVersionMajor();
   SInt32 minorVersion = nsCocoaFeatures::OSXVersionMinor();

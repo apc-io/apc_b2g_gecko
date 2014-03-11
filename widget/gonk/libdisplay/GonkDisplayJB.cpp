@@ -114,12 +114,17 @@ GonkDisplayJB::GonkDisplayJB()
         mBootAnimBuffer = mAlloc->createGraphicBuffer(mWidth, mHeight, surfaceformat, usage, &error);
     }
 
-    mFBSurface = new FramebufferSurface(0, mWidth, mHeight, surfaceformat, mAlloc);
+#if ANDROID_VERSION >= 19
+    sp<BufferQueue> bq = new BufferQueue(mAlloc);
+#else
+    sp<BufferQueue> bq = new BufferQueue(true, mAlloc);
+#endif
+    mFBSurface = new FramebufferSurface(0, mWidth, mHeight, surfaceformat, bq);
 
 #if ANDROID_VERSION == 17
     sp<SurfaceTextureClient> stc = new SurfaceTextureClient(static_cast<sp<ISurfaceTexture> >(mFBSurface->getBufferQueue()));
 #else
-    sp<Surface> stc = new Surface(static_cast<sp<IGraphicBufferProducer> >(mFBSurface->getBufferQueue()));
+    sp<Surface> stc = new Surface(static_cast<sp<IGraphicBufferProducer> >(bq));
 #endif
     mSTClient = stc;
 
@@ -244,10 +249,21 @@ GonkDisplayJB::Post(buffer_handle_t buf, int fence)
     mList->hwLayers[1].handle = buf;
     mList->hwLayers[1].transform = 0;
     mList->hwLayers[1].blending = HWC_BLENDING_PREMULT;
+#if ANDROID_VERSION >= 19
+    if (mHwc->common.version >= HWC_DEVICE_API_VERSION_1_3) {
+        mList->hwLayers[1].sourceCropf.left = 0;
+        mList->hwLayers[1].sourceCropf.top = 0;
+        mList->hwLayers[1].sourceCropf.right = mWidth;
+        mList->hwLayers[1].sourceCropf.bottom = mHeight;
+    } else {
+        mList->hwLayers[1].sourceCrop = r;
+    }
+#else
     mList->hwLayers[1].sourceCrop = r;
+#endif
     mList->hwLayers[1].displayFrame = r;
     mList->hwLayers[1].visibleRegionScreen.numRects = 1;
-    mList->hwLayers[1].visibleRegionScreen.rects = &mList->hwLayers[1].sourceCrop;
+    mList->hwLayers[1].visibleRegionScreen.rects = &mList->hwLayers[1].displayFrame;
     mList->hwLayers[1].acquireFenceFd = fence;
     mList->hwLayers[1].releaseFenceFd = -1;
 #if ANDROID_VERSION == 18

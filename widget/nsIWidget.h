@@ -100,8 +100,8 @@ typedef void* nsNativeWidget;
 #endif
 
 #define NS_IWIDGET_IID \
-{ 0x67da44c4, 0xe21b, 0x4742, \
-  { 0x9c, 0x2b, 0x26, 0xc7, 0x70, 0x21, 0xde, 0x87 } }
+{ 0xb979c607, 0xf0aa, 0x4fee, \
+  { 0xb2, 0x7b, 0xd4, 0x46, 0xa2, 0xe, 0x8b, 0x27 } }
 
 /*
  * Window shadow styles
@@ -207,43 +207,86 @@ enum nsTopLevelWidgetZPlacement { // for PlaceBehind()
  * Preference for receiving IME updates
  *
  * If mWantUpdates is not NOTIFY_NOTHING, nsTextStateManager will observe text
- * change and/or selection change and call nsIWidget::NotifyIMEOfTextChange()
- * and/or nsIWidget::NotifyIME(NOTIFY_IME_OF_SELECTION_CHANGE).
+ * change and/or selection change and call nsIWidget::NotifyIME() with
+ * NOTIFY_IME_OF_SELECTION_CHANGE and/or NOTIFY_IME_OF_TEXT_CHANGE.
  * Please note that the text change observing cost is very expensive especially
  * on an HTML editor has focus.
  * If the IME implementation on a particular platform doesn't care about
- * NotifyIMEOfTextChange() and/or NotifyIME(NOTIFY_IME_OF_SELECTION_CHANGE),
+ * NOTIFY_IME_OF_SELECTION_CHANGE and/or NOTIFY_IME_OF_TEXT_CHANGE,
  * they should set mWantUpdates to NOTIFY_NOTHING to avoid the cost.
- *
- * If mWantHints is true, PuppetWidget will forward the content of text fields
- * to the chrome process to be cached. This way we return the cached content
- * during query events. (see comments in bug 583976). This only makes sense
- * for IME implementations that do use query events, otherwise there's a
- * significant overhead. Platforms that don't use query events should set
- * mWantHints to false.
+ * If the IME implementation needs notifications even while our process is
+ * deactive, it should also set NOTIFY_DURING_DEACTIVE.
  */
 struct nsIMEUpdatePreference {
 
-  typedef int8_t Notifications;
+  typedef uint8_t Notifications;
 
-  enum
+  enum MOZ_ENUM_TYPE(Notifications)
   {
-    NOTIFY_NOTHING           = 0x0000,
-    NOTIFY_SELECTION_CHANGE  = 0x0001,
-    NOTIFY_TEXT_CHANGE       = 0x0002
+    NOTIFY_NOTHING                       = 0,
+    NOTIFY_SELECTION_CHANGE              = 1 << 0,
+    NOTIFY_TEXT_CHANGE                   = 1 << 1,
+    NOTIFY_POSITION_CHANGE               = 1 << 2,
+    // Following values indicate when widget needs or doesn't need notification.
+    NOTIFY_CHANGES_CAUSED_BY_COMPOSITION = 1 << 6,
+    // NOTE: NOTIFY_DURING_DEACTIVE isn't supported in environments where two
+    //       or more compositions are possible.  E.g., Mac and Linux (GTK).
+    NOTIFY_DURING_DEACTIVE               = 1 << 7,
+    // Changes are notified in following conditions if the instance is
+    // just constructed.  If some platforms don't need change notifications
+    // in some of following conditions, the platform should remove following
+    // flags before returing the instance from nsIWidget::GetUpdatePreference().
+    DEFAULT_CONDITIONS_OF_NOTIFYING_CHANGES =
+      NOTIFY_CHANGES_CAUSED_BY_COMPOSITION
   };
 
   nsIMEUpdatePreference()
-    : mWantUpdates(NOTIFY_NOTHING), mWantHints(false)
-  {
-  }
-  nsIMEUpdatePreference(Notifications aWantUpdates, bool aWantHints)
-    : mWantUpdates(aWantUpdates), mWantHints(aWantHints)
+    : mWantUpdates(DEFAULT_CONDITIONS_OF_NOTIFYING_CHANGES)
   {
   }
 
+  nsIMEUpdatePreference(Notifications aWantUpdates)
+    : mWantUpdates(aWantUpdates | DEFAULT_CONDITIONS_OF_NOTIFYING_CHANGES)
+  {
+  }
+
+  void DontNotifyChangesCausedByComposition()
+  {
+    mWantUpdates &= ~DEFAULT_CONDITIONS_OF_NOTIFYING_CHANGES;
+  }
+
+  bool WantSelectionChange() const
+  {
+    return !!(mWantUpdates & NOTIFY_SELECTION_CHANGE);
+  }
+
+  bool WantTextChange() const
+  {
+    return !!(mWantUpdates & NOTIFY_TEXT_CHANGE);
+  }
+
+  bool WantPositionChanged() const
+  {
+    return !!(mWantUpdates & NOTIFY_POSITION_CHANGE);
+  }
+
+  bool WantChanges() const
+  {
+    return WantSelectionChange() || WantTextChange();
+  }
+
+  bool WantChangesCausedByComposition() const
+  {
+    return WantChanges() &&
+             !!(mWantUpdates & NOTIFY_CHANGES_CAUSED_BY_COMPOSITION);
+  }
+
+  bool WantDuringDeactive() const
+  {
+    return !!(mWantUpdates & NOTIFY_DURING_DEACTIVE);
+  }
+
   Notifications mWantUpdates;
-  bool mWantHints;
 };
 
 
@@ -438,8 +481,10 @@ struct SizeConstraints {
   nsIntSize mMaxSize;
 };
 
-// NotificationToIME is shared by nsIMEStateManager and TextComposition.
-enum NotificationToIME {
+// IMEMessage is shared by IMEStateManager and TextComposition.
+// XXX Negative values are used in Android...
+enum IMEMessage MOZ_ENUM_TYPE(int8_t)
+{
   // XXX We should replace NOTIFY_IME_OF_CURSOR_POS_CHANGED with
   //     NOTIFY_IME_OF_SELECTION_CHANGE later.
   NOTIFY_IME_OF_CURSOR_POS_CHANGED,
@@ -449,8 +494,88 @@ enum NotificationToIME {
   NOTIFY_IME_OF_BLUR,
   // Selection in the focused editable content is changed
   NOTIFY_IME_OF_SELECTION_CHANGE,
+  // Text in the focused editable content is changed
+  NOTIFY_IME_OF_TEXT_CHANGE,
+  // Composition string has been updated
+  NOTIFY_IME_OF_COMPOSITION_UPDATE,
+  // Position or size of focused element may be changed.
+  NOTIFY_IME_OF_POSITION_CHANGE,
+  // Request to commit current composition to IME
+  // (some platforms may not support)
   REQUEST_TO_COMMIT_COMPOSITION,
+  // Request to cancel current composition to IME
+  // (some platforms may not support)
   REQUEST_TO_CANCEL_COMPOSITION
+};
+
+struct IMENotification
+{
+  IMENotification(IMEMessage aMessage)
+    : mMessage(aMessage)
+  {
+    switch (aMessage) {
+      case NOTIFY_IME_OF_SELECTION_CHANGE:
+        mSelectionChangeData.mCausedByComposition = false;
+        break;
+      case NOTIFY_IME_OF_TEXT_CHANGE:
+        mTextChangeData.mStartOffset = 0;
+        mTextChangeData.mOldEndOffset = 0;
+        mTextChangeData.mNewEndOffset = 0;
+        mTextChangeData.mCausedByComposition = false;
+        break;
+      default:
+        break;
+    }
+  }
+
+  IMEMessage mMessage;
+
+  union
+  {
+    // NOTIFY_IME_OF_SELECTION_CHANGE specific data
+    struct
+    {
+      bool mCausedByComposition;
+    } mSelectionChangeData;
+
+    // NOTIFY_IME_OF_TEXT_CHANGE specific data
+    struct
+    {
+      uint32_t mStartOffset;
+      uint32_t mOldEndOffset;
+      uint32_t mNewEndOffset;
+
+      bool mCausedByComposition;
+
+      uint32_t OldLength() const { return mOldEndOffset - mStartOffset; }
+      uint32_t NewLength() const { return mNewEndOffset - mStartOffset; }
+      int32_t AdditionalLength() const
+      {
+        return static_cast<int32_t>(mNewEndOffset - mOldEndOffset);
+      }
+      bool IsInInt32Range() const
+      {
+        return mStartOffset <= INT32_MAX &&
+               mOldEndOffset <= INT32_MAX &&
+               mNewEndOffset <= INT32_MAX;
+      }
+    } mTextChangeData;
+  };
+
+  bool IsCausedByComposition() const
+  {
+    switch (mMessage) {
+      case NOTIFY_IME_OF_SELECTION_CHANGE:
+        return mSelectionChangeData.mCausedByComposition;
+      case NOTIFY_IME_OF_TEXT_CHANGE:
+        return mTextChangeData.mCausedByComposition;
+      default:
+        return false;
+    }
+  }
+
+private:
+  IMENotification();
 };
 
 } // namespace widget
@@ -471,7 +596,8 @@ class nsIWidget : public nsISupports {
     typedef mozilla::layers::LayerManagerComposite LayerManagerComposite;
     typedef mozilla::layers::LayersBackend LayersBackend;
     typedef mozilla::layers::PLayerTransactionChild PLayerTransactionChild;
-    typedef mozilla::widget::NotificationToIME NotificationToIME;
+    typedef mozilla::widget::IMEMessage IMEMessage;
+    typedef mozilla::widget::IMENotification IMENotification;
     typedef mozilla::widget::IMEState IMEState;
     typedef mozilla::widget::InputContext InputContext;
     typedef mozilla::widget::InputContextAction InputContextAction;
@@ -504,7 +630,7 @@ class nsIWidget : public nsISupports {
     /**
      * Create and initialize a widget. 
      *
-     * All the arguments can be NULL in which case a top level window
+     * All the arguments can be null in which case a top level window
      * with size 0 is created. The event callback function has to be
      * provided only if the caller wants to deal with the events this
      * widget receives.  The event callback is basically a preprocess
@@ -730,6 +856,14 @@ class nsIWidget : public nsISupports {
      *
      */
     NS_IMETHOD SetModal(bool aModal) = 0;
+
+    /**
+     * The maximum number of simultaneous touch contacts supported by the device.
+     * In the case of devices with multiple digitizers (e.g. multiple touch screens),
+     * the value will be the maximum of the set of maximum supported contacts by
+     * each individual digitizer.
+     */
+    virtual uint32_t GetMaxTouchPoints() const = 0;
 
     /**
      * Returns whether the window is visible
@@ -1192,21 +1326,21 @@ class nsIWidget : public nsISupports {
      */
     inline LayerManager* GetLayerManager(bool* aAllowRetaining = nullptr)
     {
-        return GetLayerManager(nullptr, mozilla::layers::LAYERS_NONE,
+        return GetLayerManager(nullptr, mozilla::layers::LayersBackend::LAYERS_NONE,
                                LAYER_MANAGER_CURRENT, aAllowRetaining);
     }
 
     inline LayerManager* GetLayerManager(LayerManagerPersistence aPersistence,
                                          bool* aAllowRetaining = nullptr)
     {
-        return GetLayerManager(nullptr, mozilla::layers::LAYERS_NONE,
+        return GetLayerManager(nullptr, mozilla::layers::LayersBackend::LAYERS_NONE,
                                aPersistence, aAllowRetaining);
     }
 
     /**
      * Like GetLayerManager(), but prefers creating a layer manager of
      * type |aBackendHint| instead of what would normally be created.
-     * LAYERS_NONE means "no hint".
+     * LayersBackend::LAYERS_NONE means "no hint".
      */
     virtual LayerManager* GetLayerManager(PLayerTransactionChild* aShadowManager,
                                           LayersBackend aBackendHint,
@@ -1685,7 +1819,7 @@ public:
     /**
      * Notify IME of the specified notification.
      */
-    NS_IMETHOD NotifyIME(NotificationToIME aNotification) = 0;
+    NS_IMETHOD NotifyIME(const IMENotification& aIMENotification) = 0;
 
     /*
      * Notifies the input context changes.
@@ -1713,16 +1847,6 @@ public:
      * state), this method returns NS_ERROR_NOT_IMPLEMENTED.
      */
     NS_IMETHOD GetToggledKeyState(uint32_t aKeyCode, bool* aLEDState) = 0;
-
-    /*
-     * Text content of the focused node has changed
-     * aStart is the starting offset of the change
-     * aOldEnd is the ending offset of the change
-     * aNewEnd is the caret offset after the change
-     */
-    NS_IMETHOD NotifyIMEOfTextChange(uint32_t aStart,
-                                     uint32_t aOldEnd,
-                                     uint32_t aNewEnd) = 0;
 
     /*
      * Retrieves preference for IME updates

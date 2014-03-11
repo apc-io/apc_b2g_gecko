@@ -38,12 +38,6 @@ class gfxXlibSurface;
 #endif
 #endif
 
-#ifdef XP_OS2
-#define INCL_PM
-#define INCL_GPI
-#include <os2.h>
-#endif
-
 class nsPluginInstanceOwner : public nsIPluginInstanceOwner,
                               public nsIDOMEventListener,
                               public nsIPrivacyTransitionObserver,
@@ -61,7 +55,7 @@ public:
                     nsIInputStream *aPostStream, 
                     void *aHeadersData, uint32_t aHeadersDataLen) MOZ_OVERRIDE;
   
-  NS_IMETHOD ShowStatus(const PRUnichar *aStatusMsg) MOZ_OVERRIDE;
+  NS_IMETHOD ShowStatus(const char16_t *aStatusMsg) MOZ_OVERRIDE;
   
   NPError    ShowNativeContextMenu(NPMenu* menu, void* event) MOZ_OVERRIDE;
   
@@ -150,8 +144,6 @@ public:
   void Paint(gfxContext* aContext,
              const gfxRect& aFrameRect,
              const gfxRect& aDirtyRect);
-#elif defined(XP_OS2)
-  void Paint(const nsRect& aDirtyRect, HPS aHPS);
 #endif
 
   //locals

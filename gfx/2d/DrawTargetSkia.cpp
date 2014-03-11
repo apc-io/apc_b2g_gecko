@@ -7,7 +7,8 @@
 #include "SourceSurfaceSkia.h"
 #include "ScaledFontBase.h"
 #include "ScaledFontCairo.h"
-#include "skia/SkDevice.h"
+#include "skia/SkGpuDevice.h"
+#include "skia/SkBitmapDevice.h"
 #include "FilterNodeSoftware.h"
 
 #ifdef USE_SKIA_GPU
@@ -35,6 +36,7 @@ namespace gfx {
 class GradientStopsSkia : public GradientStops
 {
 public:
+  MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(GradientStopsSkia)
   GradientStopsSkia(const std::vector<GradientStop>& aStops, uint32_t aNumStops, ExtendMode aExtendMode)
     : mCount(aNumStops)
     , mExtendMode(aExtendMode)
@@ -69,7 +71,7 @@ public:
     }
   }
 
-  BackendType GetBackendType() const { return BACKEND_SKIA; }
+  BackendType GetBackendType() const { return BackendType::SKIA; }
 
   std::vector<SkColor> mColors;
   std::vector<SkScalar> mPositions;
@@ -77,110 +79,48 @@ public:
   ExtendMode mExtendMode;
 };
 
-#ifdef USE_SKIA_GPU
-int DrawTargetSkia::sTextureCacheCount = 256;
-int DrawTargetSkia::sTextureCacheSizeInBytes = 96*1024*1024;
-
-static std::vector<DrawTargetSkia*>&
-GLDrawTargets()
+/**
+ * When constructing a temporary SkBitmap via GetBitmapForSurface, we may also
+ * have to construct a temporary DataSourceSurface, which must live as long as
+ * the SkBitmap. So we return a pair of the SkBitmap and the (optional)
+ * temporary surface.
+ */
+struct TempBitmap
 {
-  static std::vector<DrawTargetSkia*> targets;
-  return targets;
-}
+  SkBitmap mBitmap;
+  RefPtr<SourceSurface> mTmpSurface;
+};
 
-void
-DrawTargetSkia::RebalanceCacheLimits()
+static TempBitmap
+GetBitmapForSurface(SourceSurface* aSurface)
 {
-  // Divide the global cache limits equally between all currently active GL-backed
-  // Skia DrawTargets.
-  std::vector<DrawTargetSkia*>& targets = GLDrawTargets();
-  uint32_t targetCount = targets.size();
-  if (targetCount == 0)
-    return;
+  TempBitmap result;
 
-  int individualCacheSize = sTextureCacheSizeInBytes / targetCount;
-  for (uint32_t i = 0; i < targetCount; i++) {
-    targets[i]->SetCacheLimits(sTextureCacheCount, individualCacheSize);
+  if (aSurface->GetType() == SurfaceType::SKIA) {
+    result.mBitmap = static_cast<SourceSurfaceSkia*>(aSurface)->GetBitmap();
+    return result;
   }
-}
 
-static void
-AddGLDrawTarget(DrawTargetSkia* target)
-{
-  GLDrawTargets().push_back(target);
-  DrawTargetSkia::RebalanceCacheLimits();
-}
-
-static void
-RemoveGLDrawTarget(DrawTargetSkia* target)
-{
-  std::vector<DrawTargetSkia*>& targets = GLDrawTargets();
-  std::vector<DrawTargetSkia*>::iterator it = std::find(targets.begin(), targets.end(), target);
-  if (it != targets.end()) {
-    targets.erase(it);
-    DrawTargetSkia::RebalanceCacheLimits();
-  }
-}
-
-void
-DrawTargetSkia::SetGlobalCacheLimits(int aCount, int aSizeInBytes)
-{
-  sTextureCacheCount = aCount;
-  sTextureCacheSizeInBytes = aSizeInBytes;
-
-  DrawTargetSkia::RebalanceCacheLimits();
-}
-
-void
-DrawTargetSkia::PurgeCaches()
-{
-  if (mGrContext) {
-    mGrContext->freeGpuResources();
-  }
-}
-
-/* static */ void
-DrawTargetSkia::PurgeAllCaches()
-{
-  std::vector<DrawTargetSkia*>& targets = GLDrawTargets();
-  uint32_t targetCount = targets.size();
-  for (uint32_t i = 0; i < targetCount; i++) {
-    targets[i]->PurgeCaches();
-  }
-}
-
-#endif
-
-static SkBitmap
-GetBitmapForSurface(SourceSurface *aSurface)
-{
-  switch (aSurface->GetType()) {
-  case SURFACE_SKIA:
-    return static_cast<SourceSurfaceSkia*>(aSurface)->GetBitmap();
-  case SURFACE_DATA:
-    {
-      DataSourceSurface* surf = static_cast<DataSourceSurface*>(aSurface);
-      SkBitmap tmp;
-      tmp.setConfig(GfxFormatToSkiaConfig(surf->GetFormat()),
-                    surf->GetSize().width, surf->GetSize().height, surf->Stride());
-      tmp.setPixels(surf->GetData());
-      return tmp;
-    }
-  default:
+  RefPtr<DataSourceSurface> surf = aSurface->GetDataSurface();
+  if (!surf) {
     MOZ_CRASH("Non-skia SourceSurfaces need to be DataSourceSurfaces");
   }
+
+  result.mBitmap.setConfig(GfxFormatToSkiaConfig(surf->GetFormat()),
+                                 surf->GetSize().width, surf->GetSize().height,
+                                 surf->Stride());
+  result.mBitmap.setPixels(surf->GetData());
+  result.mTmpSurface = surf.forget();
+  return result;
 }
 
 DrawTargetSkia::DrawTargetSkia()
-  : mSnapshot(nullptr)
+  : mTexture(0), mSnapshot(nullptr)
 {
 }
 
 DrawTargetSkia::~DrawTargetSkia()
 {
-#ifdef USE_SKIA_GPU
-  RemoveGLDrawTarget(this);
-#endif
 }
 
 TemporaryRef<SourceSurface>
@@ -197,15 +137,17 @@ DrawTargetSkia::Snapshot()
   return snapshot;
 }
 
-void SetPaintPattern(SkPaint& aPaint, const Pattern& aPattern, Float aAlpha = 1.0)
+static void
+SetPaintPattern(SkPaint& aPaint, const Pattern& aPattern, TempBitmap& aTmpBitmap,
+                Float aAlpha = 1.0)
 {
   switch (aPattern.GetType()) {
-    case PATTERN_COLOR: {
+    case PatternType::COLOR: {
       Color color = static_cast<const ColorPattern&>(aPattern).mColor;
       aPaint.setColor(ColorToSkColor(color, aAlpha));
       break;
     }
-    case PATTERN_LINEAR_GRADIENT: {
+    case PatternType::LINEAR_GRADIENT: {
       const LinearGradientPattern& pat = static_cast<const LinearGradientPattern&>(aPattern);
       GradientStopsSkia *stops = static_cast<GradientStopsSkia*>(pat.mStops.get());
       SkShader::TileMode mode = ExtendModeToTileMode(stops->mExtendMode);
@@ -233,7 +175,7 @@ void SetPaintPattern(SkPaint& aPaint, const Pattern& aPattern, Float aAlpha = 1.
       }
       break;
     }
-    case PATTERN_RADIAL_GRADIENT: {
+    case PatternType::RADIAL_GRADIENT: {
       const RadialGradientPattern& pat = static_cast<const RadialGradientPattern&>(aPattern);
       GradientStopsSkia *stops = static_cast<GradientStopsSkia*>(pat.mStops.get());
       SkShader::TileMode mode = ExtendModeToTileMode(stops->mExtendMode);
@@ -263,9 +205,10 @@ void SetPaintPattern(SkPaint& aPaint, const Pattern& aPattern, Float aAlpha = 1.
       }
       break;
     }
-    case PATTERN_SURFACE: {
+    case PatternType::SURFACE: {
       const SurfacePattern& pat = static_cast<const SurfacePattern&>(aPattern);
-      const SkBitmap& bitmap = GetBitmapForSurface(pat.mSurface);
+      aTmpBitmap = GetBitmapForSurface(pat.mSurface);
+      const SkBitmap& bitmap = aTmpBitmap.mBitmap;
 
       SkShader::TileMode mode = ExtendModeToTileMode(pat.mExtendMode);
       SkShader* shader = SkShader::CreateBitmapShader(bitmap, mode, mode);
@@ -273,7 +216,7 @@ void SetPaintPattern(SkPaint& aPaint, const Pattern& aPattern, Float aAlpha = 1.
       GfxMatrixToSkiaMatrix(pat.mMatrix, mat);
       shader->setLocalMatrix(mat);
       SkSafeUnref(aPaint.setShader(shader));
-      if (pat.mFilter == FILTER_POINT) {
+      if (pat.mFilter == Filter::POINT) {
         aPaint.setFilterBitmap(false);
       }
       break;
@@ -286,7 +229,7 @@ struct AutoPaintSetup {
     : mNeedsRestore(false), mAlpha(1.0)
   {
     Init(aCanvas, aOptions);
-    SetPaintPattern(mPaint, aPattern, mAlpha);
+    SetPaintPattern(mPaint, aPattern, mTmpBitmap, mAlpha);
   }
 
   AutoPaintSetup(SkCanvas *aCanvas, const DrawOptions& aOptions)
@@ -308,7 +251,7 @@ struct AutoPaintSetup {
     mCanvas = aCanvas;
 
     //TODO: Can we set greyscale somehow?
-    if (aOptions.mAntialiasMode != AA_NONE) {
+    if (aOptions.mAntialiasMode != AntialiasMode::NONE) {
       mPaint.setAntiAlias(true);
     } else {
       mPaint.setAntiAlias(false);
@@ -334,6 +277,7 @@ struct AutoPaintSetup {
 
   // TODO: Maybe add an operator overload to access this easier?
   SkPaint mPaint;
+  TempBitmap mTmpBitmap;
   bool mNeedsRestore;
   SkCanvas* mCanvas;
   Float mAlpha;
@@ -352,7 +296,7 @@ DrawTargetSkia::DrawSurface(SourceSurface *aSurface,
                             const DrawSurfaceOptions &aSurfOptions,
                             const DrawOptions &aOptions)
 {
-  if (!(aSurface->GetType() == SURFACE_SKIA || aSurface->GetType() == SURFACE_DATA)) {
+  if (!(aSurface->GetType() == SurfaceType::SKIA || aSurface->GetType() == SurfaceType::DATA)) {
     return;
   }
 
@@ -362,43 +306,17 @@ DrawTargetSkia::DrawSurface(SourceSurface *aSurface,
 
   MarkChanged();
 
-  IntRect sourceIntRect;
-  bool integerAligned = aSource.ToIntRect(&sourceIntRect);
-
   SkRect destRect = RectToSkRect(aDest);
   SkRect sourceRect = RectToSkRect(aSource);
 
-  Rect boundingSource = aSource;
-  boundingSource.RoundOut();
-
-  SkRect sourceBoundingRect = RectToSkRect(boundingSource);
-  SkIRect sourceBoundingIRect = RectToSkIRect(boundingSource);
-
-  const SkBitmap& bitmap = GetBitmapForSurface(aSurface);
+  TempBitmap bitmap = GetBitmapForSurface(aSurface);
  
   AutoPaintSetup paint(mCanvas.get(), aOptions);
-  if (aSurfOptions.mFilter == FILTER_POINT) {
+  if (aSurfOptions.mFilter == Filter::POINT) {
     paint.mPaint.setFilterBitmap(false);
   }
 
-  if (!integerAligned) {
-    // We need to inflate our destRect by the same amount we inflated sourceRect
-    // by when we rounded up to the nearest integer size to ensure we interpolate
-    // the edge pixels properly, but clip to the true destination rect first so
-    // we don't draw outside our designated area.
-    mCanvas->save();
-    mCanvas->clipRect(destRect);
-
-    SkMatrix rectTransform;
-    rectTransform.setRectToRect(sourceRect, sourceBoundingRect, SkMatrix::kFill_ScaleToFit);
-    rectTransform.mapRect(&destRect);
-  }
-
-  mCanvas->drawBitmapRect(bitmap, &sourceBoundingIRect, destRect, &paint.mPaint);
-
-  if (!integerAligned) {
-    mCanvas->restore();
-  }
+  mCanvas->drawBitmapRectToRect(bitmap.mBitmap, &sourceRect, destRect, &paint.mPaint);
 }
 
 void
@@ -425,8 +343,9 @@ DrawTargetSkia::DrawSurfaceWithShadow(SourceSurface *aSurface,
 
   uint32_t blurFlags = SkBlurMaskFilter::kHighQuality_BlurFlag |
                        SkBlurMaskFilter::kIgnoreTransform_BlurFlag;
-  const SkBitmap& bitmap = GetBitmapForSurface(aSurface);
-  SkShader* shader = SkShader::CreateBitmapShader(bitmap, SkShader::kClamp_TileMode, SkShader::kClamp_TileMode);
+  TempBitmap bitmap = GetBitmapForSurface(aSurface);
+  SkShader* shader = SkShader::CreateBitmapShader(bitmap.mBitmap,
+    SkShader::kClamp_TileMode, SkShader::kClamp_TileMode);
   SkMatrix matrix;
   matrix.reset();
   matrix.setTranslateX(SkFloatToScalar(aDest.x));
@@ -470,7 +389,7 @@ DrawTargetSkia::DrawSurfaceWithShadow(SourceSurface *aSurface,
   SkSafeUnref(paint.setLooper(dl));
 
   SkRect rect = RectToSkRect(Rect(Float(aDest.x), Float(aDest.y),
-                                  Float(bitmap.width()), Float(bitmap.height())));
+                                  Float(bitmap.mBitmap.width()), Float(bitmap.mBitmap.height())));
   mCanvas->drawRect(rect, paint);
   mCanvas->restore();
 }
@@ -495,7 +414,7 @@ DrawTargetSkia::Stroke(const Path *aPath,
 {
   MarkChanged();
   MOZ_ASSERT(aPath, "Null path");
-  if (aPath->GetBackendType() != BACKEND_SKIA) {
+  if (aPath->GetBackendType() != BackendType::SKIA) {
     return;
   }
 
@@ -549,7 +468,7 @@ DrawTargetSkia::Fill(const Path *aPath,
                     const DrawOptions &aOptions)
 {
   MarkChanged();
-  if (aPath->GetBackendType() != BACKEND_SKIA) {
+  if (aPath->GetBackendType() != BackendType::SKIA) {
     return;
   }
 
@@ -567,9 +486,9 @@ DrawTargetSkia::FillGlyphs(ScaledFont *aFont,
                            const DrawOptions &aOptions,
                            const GlyphRenderingOptions *aRenderingOptions)
 {
-  if (aFont->GetType() != FONT_MAC &&
-      aFont->GetType() != FONT_SKIA &&
-      aFont->GetType() != FONT_GDI) {
+  if (aFont->GetType() != FontType::MAC &&
+      aFont->GetType() != FontType::SKIA &&
+      aFont->GetType() != FontType::GDI) {
     return;
   }
 
@@ -582,18 +501,18 @@ DrawTargetSkia::FillGlyphs(ScaledFont *aFont,
   paint.mPaint.setTextSize(SkFloatToScalar(skiaFont->mSize));
   paint.mPaint.setTextEncoding(SkPaint::kGlyphID_TextEncoding);
 
-  if (aRenderingOptions && aRenderingOptions->GetType() == FONT_CAIRO) {
+  if (aRenderingOptions && aRenderingOptions->GetType() == FontType::CAIRO) {
     switch (static_cast<const GlyphRenderingOptionsCairo*>(aRenderingOptions)->GetHinting()) {
-      case FONT_HINTING_NONE:
+      case FontHinting::NONE:
         paint.mPaint.setHinting(SkPaint::kNo_Hinting);
         break;
-      case FONT_HINTING_LIGHT:
+      case FontHinting::LIGHT:
         paint.mPaint.setHinting(SkPaint::kSlight_Hinting);
         break;
-      case FONT_HINTING_NORMAL:
+      case FontHinting::NORMAL:
         paint.mPaint.setHinting(SkPaint::kNormal_Hinting);
         break;
-      case FONT_HINTING_FULL:
+      case FontHinting::FULL:
         paint.mPaint.setHinting(SkPaint::kFull_Hinting);
         break;
     }
@@ -628,7 +547,8 @@ DrawTargetSkia::Mask(const Pattern &aSource,
   AutoPaintSetup paint(mCanvas.get(), aOptions, aSource);
 
   SkPaint maskPaint;
-  SetPaintPattern(maskPaint, aMask);
+  TempBitmap tmpBitmap;
+  SetPaintPattern(maskPaint, aMask, tmpBitmap);
   
   SkLayerRasterizer *raster = new SkLayerRasterizer();
   raster->addLayer(maskPaint);
@@ -647,7 +567,8 @@ DrawTargetSkia::MaskSurface(const Pattern &aSource,
   AutoPaintSetup paint(mCanvas.get(), aOptions, aSource);
 
   SkPaint maskPaint;
-  SetPaintPattern(maskPaint, SurfacePattern(aMask, EXTEND_CLAMP));
+  TempBitmap tmpBitmap;
+  SetPaintPattern(maskPaint, SurfacePattern(aMask, ExtendMode::CLAMP), tmpBitmap);
 
   SkMatrix transform = maskPaint.getShader()->getLocalMatrix();
   transform.postTranslate(SkFloatToScalar(aOffset.x), SkFloatToScalar(aOffset.y));
@@ -691,11 +612,11 @@ DrawTargetSkia::CreateSimilarDrawTarget(const IntSize &aSize, SurfaceFormat aFor
 TemporaryRef<SourceSurface>
 DrawTargetSkia::OptimizeSourceSurface(SourceSurface *aSurface) const
 {
-  if (aSurface->GetType() == SURFACE_SKIA) {
+  if (aSurface->GetType() == SurfaceType::SKIA) {
     return aSurface;
   }
 
-  if (aSurface->GetType() != SURFACE_DATA) {
+  if (aSurface->GetType() != SurfaceType::DATA) {
     return nullptr;
   }
 
@@ -720,13 +641,13 @@ DrawTargetSkia::CopySurface(SourceSurface *aSurface,
 {
   //TODO: We could just use writePixels() here if the sourceRect is the entire source
 
-  if (aSurface->GetType() != SURFACE_SKIA) {
+  if (aSurface->GetType() != SurfaceType::SKIA) {
     return;
   }
 
   MarkChanged();
 
-  const SkBitmap& bitmap = GetBitmapForSurface(aSurface);
+  TempBitmap bitmap = GetBitmapForSurface(aSurface);
 
   mCanvas->save();
   mCanvas->resetMatrix();
@@ -744,14 +665,16 @@ DrawTargetSkia::CopySurface(SourceSurface *aSurface,
     paint.setXfermodeMode(SkXfermode::kSrc_Mode);
   }
 
-  mCanvas->drawBitmapRect(bitmap, &source, dest, &paint);
+  mCanvas->drawBitmapRect(bitmap.mBitmap, &source, dest, &paint);
   mCanvas->restore();
 }
 
 bool
 DrawTargetSkia::Init(const IntSize &aSize, SurfaceFormat aFormat)
 {
-  SkAutoTUnref<SkDevice> device(new SkDevice(GfxFormatToSkiaConfig(aFormat), aSize.width, aSize.height));
+  SkAutoTUnref<SkBaseDevice> device(new SkBitmapDevice(GfxFormatToSkiaConfig(aFormat),
+                                                       aSize.width, aSize.height,
+                                                       aFormat == SurfaceFormat::B8G8R8X8));
 
   SkBitmap bitmap = device->accessBitmap(true);
   if (!bitmap.allocPixels()) {
@@ -770,62 +693,49 @@ DrawTargetSkia::Init(const IntSize &aSize, SurfaceFormat aFormat)
 
 #ifdef USE_SKIA_GPU
 void
-DrawTargetSkia::InitWithGLContextAndGrGLInterface(GenericRefCountedBase* aGLContext,
-                                                  GrGLInterface* aGrGLInterface,
-                                                  const IntSize &aSize,
-                                                  SurfaceFormat aFormat)
+DrawTargetSkia::InitWithGrContext(GrContext* aGrContext,
+                                  const IntSize &aSize,
+                                  SurfaceFormat aFormat)
 {
-  mGLContext = aGLContext;
+  mGrContext = aGrContext;
+
   mSize = aSize;
   mFormat = aFormat;
 
-  mGrGLInterface = aGrGLInterface;
-  mGrGLInterface->fCallbackData = reinterpret_cast<GrGLInterfaceCallbackData>(this);
+  GrTextureDesc targetDescriptor;
 
-  GrBackendContext backendContext = reinterpret_cast<GrBackendContext>(aGrGLInterface);
-  SkAutoTUnref<GrContext> gr(GrContext::Create(kOpenGL_GrBackend, backendContext));
-  mGrContext = gr.get();
-
-  GrBackendRenderTargetDesc targetDescriptor;
-
+  targetDescriptor.fFlags = kRenderTarget_GrTextureFlagBit;
   targetDescriptor.fWidth = mSize.width;
   targetDescriptor.fHeight = mSize.height;
   targetDescriptor.fConfig = GfxFormatToGrConfig(mFormat);
   targetDescriptor.fOrigin = kBottomLeft_GrSurfaceOrigin;
   targetDescriptor.fSampleCnt = 0;
-  targetDescriptor.fRenderTargetHandle = 0; // GLContext always exposes the right framebuffer as id 0
 
-  SkAutoTUnref<GrRenderTarget> target(mGrContext->wrapBackendRenderTarget(targetDescriptor));
-  SkAutoTUnref<SkDevice> device(new SkGpuDevice(mGrContext.get(), target.get()));
+  SkAutoTUnref<GrTexture> skiaTexture(mGrContext->createUncachedTexture(targetDescriptor, NULL, 0));
+
+  mTexture = (uint32_t)skiaTexture->getTextureHandle();
+
+  SkAutoTUnref<SkBaseDevice> device(new SkGpuDevice(mGrContext.get(), skiaTexture->asRenderTarget()));
   SkAutoTUnref<SkCanvas> canvas(new SkCanvas(device.get()));
   mCanvas = canvas.get();
-
-  AddGLDrawTarget(this);
 }
 
-void
-DrawTargetSkia::SetCacheLimits(int aCount, int aSizeInBytes)
-{
-  MOZ_ASSERT(mGrContext, "No GrContext!");
-  mGrContext->setTextureCacheLimits(aCount, aSizeInBytes);
-}
 #endif
 
 void
 DrawTargetSkia::Init(unsigned char* aData, const IntSize &aSize, int32_t aStride, SurfaceFormat aFormat)
 {
-  bool isOpaque = false;
-  if (aFormat == FORMAT_B8G8R8X8) {
+  SkAlphaType alphaType = kPremul_SkAlphaType;
+  if (aFormat == SurfaceFormat::B8G8R8X8) {
     // We have to manually set the A channel to be 255 as Skia doesn't understand BGRX
     ConvertBGRXToBGRA(aData, aSize, aStride);
-    isOpaque = true;
+    alphaType = kOpaque_SkAlphaType;
   }
 
   SkBitmap bitmap;
-  bitmap.setConfig(GfxFormatToSkiaConfig(aFormat), aSize.width, aSize.height, aStride);
+  bitmap.setConfig(GfxFormatToSkiaConfig(aFormat), aSize.width, aSize.height, aStride, alphaType);
   bitmap.setPixels(aData);
-  bitmap.setIsOpaque(isOpaque);
-  SkAutoTUnref<SkCanvas> canvas(new SkCanvas(new SkDevice(bitmap)));
+  SkAutoTUnref<SkCanvas> canvas(new SkCanvas(new SkBitmapDevice(bitmap)));
 
   mSize = aSize;
   mCanvas = canvas.get();
@@ -840,6 +750,17 @@ DrawTargetSkia::SetTransform(const Matrix& aTransform)
   mCanvas->setMatrix(mat);
   mTransform = aTransform;
 }
+
+void*
+DrawTargetSkia::GetNativeSurface(NativeSurfaceType aType)
+{
+  if (aType == NativeSurfaceType::OPENGL_TEXTURE) {
+    return (void*)((uintptr_t)mTexture);
+  }
+
+  return nullptr;  
+}
+
 
 TemporaryRef<PathBuilder> 
 DrawTargetSkia::CreatePathBuilder(FillRule aFillRule) const
@@ -864,7 +785,7 @@ DrawTargetSkia::ClearRect(const Rect &aRect)
 void
 DrawTargetSkia::PushClip(const Path *aPath)
 {
-  if (aPath->GetBackendType() != BACKEND_SKIA) {
+  if (aPath->GetBackendType() != BackendType::SKIA) {
     return;
   }
 

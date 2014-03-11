@@ -37,7 +37,7 @@
 #include "prenv.h"
 #include "mozilla/Attributes.h"
 #include "nsContentUtils.h"
-#include "gfxPlatform.h"
+#include "gfxPrefs.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/MouseEvents.h"
 #include "GLConsts.h"
@@ -142,7 +142,7 @@ NS_IMPL_ISUPPORTS1(WidgetShutdownObserver, nsIObserver)
 NS_IMETHODIMP
 WidgetShutdownObserver::Observe(nsISupports *aSubject,
                                 const char *aTopic,
-                                const PRUnichar *aData)
+                                const char16_t *aData)
 {
   if (strcmp(aTopic, NS_XPCOM_SHUTDOWN_OBSERVER_ID) == 0 &&
       mWidget) {
@@ -202,7 +202,7 @@ void nsBaseWidget::DestroyCompositor()
 nsBaseWidget::~nsBaseWidget()
 {
   if (mLayerManager &&
-      mLayerManager->GetBackendType() == LAYERS_BASIC) {
+      mLayerManager->GetBackendType() == LayersBackend::LAYERS_BASIC) {
     static_cast<BasicLayerManager*>(mLayerManager.get())->ClearRetainerWidget();
   }
 
@@ -266,6 +266,7 @@ void nsBaseWidget::BaseCreate(nsIWidget *aParent,
     mBorderStyle = aInitData->mBorderStyle;
     mPopupLevel = aInitData->mPopupLevel;
     mPopupType = aInitData->mPopupHint;
+    mRequireOffMainThreadCompositing = aInitData->mRequireOffMainThreadCompositing;
   }
 
   if (aParent) {
@@ -802,7 +803,7 @@ nsBaseWidget::AutoLayerManagerSetup::AutoLayerManagerSetup(
 {
   mLayerManager = static_cast<BasicLayerManager*>(mWidget->GetLayerManager());
   if (mLayerManager) {
-    NS_ASSERTION(mLayerManager->GetBackendType() == LAYERS_BASIC,
+    NS_ASSERTION(mLayerManager->GetBackendType() == LayersBackend::LAYERS_BASIC,
       "AutoLayerManagerSetup instantiated for non-basic layer backend!");
     mLayerManager->SetDefaultTarget(aTarget);
     mLayerManager->SetDefaultTargetConfiguration(aDoubleBuffering, aRotation);
@@ -812,10 +813,10 @@ nsBaseWidget::AutoLayerManagerSetup::AutoLayerManagerSetup(
 nsBaseWidget::AutoLayerManagerSetup::~AutoLayerManagerSetup()
 {
   if (mLayerManager) {
-    NS_ASSERTION(mLayerManager->GetBackendType() == LAYERS_BASIC,
+    NS_ASSERTION(mLayerManager->GetBackendType() == LayersBackend::LAYERS_BASIC,
       "AutoLayerManagerSetup instantiated for non-basic layer backend!");
     mLayerManager->SetDefaultTarget(nullptr);
-    mLayerManager->SetDefaultTargetConfiguration(mozilla::layers::BUFFER_NONE, ROTATION_0);
+    mLayerManager->SetDefaultTargetConfiguration(mozilla::layers::BufferMode::BUFFER_NONE, ROTATION_0);
   }
 }
 
@@ -837,7 +838,7 @@ bool
 nsBaseWidget::ComputeShouldAccelerate(bool aDefault)
 {
 #if defined(XP_WIN) || defined(ANDROID) || \
-    defined(MOZ_GL_PROVIDER) || defined(XP_MACOSX)
+    defined(MOZ_GL_PROVIDER) || defined(XP_MACOSX) || defined(MOZ_WIDGET_QT)
   bool accelerateByDefault = true;
 #else
   bool accelerateByDefault = false;
@@ -858,8 +859,8 @@ nsBaseWidget::ComputeShouldAccelerate(bool aDefault)
 #endif
 
   // we should use AddBoolPrefVarCache
-  bool disableAcceleration = gfxPlatform::GetPrefLayersAccelerationDisabled();
-  mForceLayersAcceleration = gfxPlatform::GetPrefLayersAccelerationForceEnabled();
+  bool disableAcceleration = gfxPrefs::LayersAccelerationDisabled();
+  mForceLayersAcceleration = gfxPrefs::LayersAccelerationForceEnabled();
 
   const char *acceleratedEnv = PR_GetEnv("MOZ_ACCELERATED");
   accelerateByDefault = accelerateByDefault ||
@@ -895,7 +896,11 @@ nsBaseWidget::ComputeShouldAccelerate(bool aDefault)
     return true;
 
   if (!whitelisted) {
-    NS_WARNING("OpenGL-accelerated layers are not supported on this system");
+    static int tell_me_once = 0;
+    if (!tell_me_once) {
+      NS_WARNING("OpenGL-accelerated layers are not supported on this system");
+      tell_me_once = 1;
+    }
 #ifdef MOZ_ANDROID_OMTC
     NS_RUNTIMEABORT("OpenGL-accelerated layers are a hard requirement on this platform. "
                     "Cannot continue without support for them");
@@ -927,21 +932,20 @@ void
 nsBaseWidget::GetPreferredCompositorBackends(nsTArray<LayersBackend>& aHints)
 {
   if (mUseLayersAcceleration) {
-    aHints.AppendElement(LAYERS_OPENGL);
+    aHints.AppendElement(LayersBackend::LAYERS_OPENGL);
   }
 
-  aHints.AppendElement(LAYERS_BASIC);
+  aHints.AppendElement(LayersBackend::LAYERS_BASIC);
 }
 
 static void
 CheckForBasicBackends(nsTArray<LayersBackend>& aHints)
 {
   for (size_t i = 0; i < aHints.Length(); ++i) {
-    if (aHints[i] == LAYERS_BASIC &&
-        !Preferences::GetBool("layers.offmainthreadcomposition.force-basic", false) &&
-        !BrowserTabsRemote()) {
+    if (aHints[i] == LayersBackend::LAYERS_BASIC &&
+        !Preferences::GetBool("layers.offmainthreadcomposition.force-basic", false)) {
       // basic compositor is not stable enough for regular use
-      aHints[i] = LAYERS_NONE;
+      aHints[i] = LayersBackend::LAYERS_NONE;
     }
   }
 }
@@ -968,11 +972,13 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
   mCompositorChild->Open(parentChannel, childMessageLoop, ipc::ChildSide);
 
   TextureFactoryIdentifier textureFactoryIdentifier;
-  PLayerTransactionChild* shadowManager;
+  PLayerTransactionChild* shadowManager = nullptr;
   nsTArray<LayersBackend> backendHints;
   GetPreferredCompositorBackends(backendHints);
 
-  CheckForBasicBackends(backendHints);
+  if (!mRequireOffMainThreadCompositing) {
+    CheckForBasicBackends(backendHints);
+  }
 
   bool success = false;
   if (!backendHints.IsEmpty()) {
@@ -1212,6 +1218,11 @@ nsBaseWidget::SetNonClientMargins(nsIntMargin &margins)
 NS_METHOD nsBaseWidget::EnableDragDrop(bool aEnable)
 {
   return NS_OK;
+}
+
+uint32_t nsBaseWidget::GetMaxTouchPoints() const
+{
+  return 0;
 }
 
 NS_METHOD nsBaseWidget::SetModal(bool aModal)
@@ -1457,6 +1468,18 @@ nsBaseWidget::NotifySizeMoveDone()
   nsIPresShell* presShell = mWidgetListener->GetPresShell();
   if (presShell) {
     presShell->WindowSizeMoveDone();
+  }
+}
+
+void
+nsBaseWidget::NotifyWindowMoved(int32_t aX, int32_t aY)
+{
+  if (mWidgetListener) {
+    mWidgetListener->WindowMoved(this, aX, aY);
+  }
+
+  if (GetIMEUpdatePreference().WantPositionChanged()) {
+    NotifyIME(IMENotification(IMEMessage::NOTIFY_IME_OF_POSITION_CHANGE));
   }
 }
 
@@ -1766,7 +1789,7 @@ NS_IMPL_ISUPPORTS1(Debug_PrefObserver, nsIObserver)
 
 NS_IMETHODIMP
 Debug_PrefObserver::Observe(nsISupports* subject, const char* topic,
-                            const PRUnichar* data)
+                            const char16_t* data)
 {
   NS_ConvertUTF16toUTF8 prefName(data);
 

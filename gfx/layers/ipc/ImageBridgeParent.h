@@ -9,7 +9,6 @@
 #include <stddef.h>                     // for size_t
 #include <stdint.h>                     // for uint32_t, uint64_t
 #include "CompositableTransactionParent.h"
-#include "gfxPoint.h"                   // for gfxIntSize
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT_HELPER2
 #include "mozilla/Attributes.h"         // for MOZ_OVERRIDE
 #include "mozilla/ipc/ProtocolUtils.h"
@@ -43,21 +42,23 @@ public:
   ImageBridgeParent(MessageLoop* aLoop, Transport* aTransport);
   ~ImageBridgeParent();
 
+  virtual LayersBackend GetCompositorBackendType() const MOZ_OVERRIDE;
+
   virtual void ActorDestroy(ActorDestroyReason aWhy) MOZ_OVERRIDE;
 
   static PImageBridgeParent*
   Create(Transport* aTransport, ProcessId aOtherProcess);
 
   virtual PGrallocBufferParent*
-  AllocPGrallocBufferParent(const gfxIntSize&, const uint32_t&, const uint32_t&,
+  AllocPGrallocBufferParent(const IntSize&, const uint32_t&, const uint32_t&,
                             MaybeMagicGrallocBufferHandle*) MOZ_OVERRIDE;
 
   virtual bool
   DeallocPGrallocBufferParent(PGrallocBufferParent* actor) MOZ_OVERRIDE;
 
   // PImageBridge
-  virtual bool RecvUpdate(const EditArray& aEdits, EditReplyArray* aReply);
-  virtual bool RecvUpdateNoSwap(const EditArray& aEdits);
+  virtual bool RecvUpdate(const EditArray& aEdits, EditReplyArray* aReply) MOZ_OVERRIDE;
+  virtual bool RecvUpdateNoSwap(const EditArray& aEdits) MOZ_OVERRIDE;
 
   virtual bool IsAsync() const MOZ_OVERRIDE { return true; }
 
@@ -65,7 +66,8 @@ public:
                                                 uint64_t*) MOZ_OVERRIDE;
   bool DeallocPCompositableParent(PCompositableParent* aActor) MOZ_OVERRIDE;
 
-  virtual PTextureParent* AllocPTextureParent() MOZ_OVERRIDE;
+  virtual PTextureParent* AllocPTextureParent(const SurfaceDescriptor& aSharedData,
+                                              const TextureFlags& aFlags) MOZ_OVERRIDE;
   virtual bool DeallocPTextureParent(PTextureParent* actor) MOZ_OVERRIDE;
 
   bool RecvStop() MOZ_OVERRIDE;
@@ -93,6 +95,8 @@ public:
   {
     PImageBridgeParent::DeallocShmem(aShmem);
   }
+
+  virtual bool IsSameProcess() const MOZ_OVERRIDE;
 
   // Overriden from IToplevelProtocol
   IToplevelProtocol*

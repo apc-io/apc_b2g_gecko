@@ -122,6 +122,23 @@ const kSaveDelayMs = 1500;
  */
 const kPrefImportedFromSqlite = "browser.download.importedFromSqlite";
 
+/**
+ * List of observers to listen against
+ */
+const kObserverTopics = [
+  "quit-application-requested",
+  "offline-requested",
+  "last-pb-context-exiting",
+  "last-pb-context-exited",
+  "sleep_notification",
+  "suspend_process_notification",
+  "wake_notification",
+  "resume_process_notification",
+  "network:offline-about-to-go-offline",
+  "network:offline-status-changed",
+  "xpcom-will-shutdown",
+];
+
 ////////////////////////////////////////////////////////////////////////////////
 //// DownloadIntegration
 
@@ -493,25 +510,54 @@ this.DownloadIntegration = {
       return Promise.resolve(this.shouldBlockInTestForApplicationReputation);
     }
     let hash;
+    let sigInfo;
     try {
       hash = aDownload.saver.getSha256Hash();
+       sigInfo = aDownload.saver.getSignatureInfo();
     } catch (ex) {
       // Bail if DownloadSaver doesn't have a hash.
       return Promise.resolve(false);
     }
-    if (!hash) {
+    if (!hash || !sigInfo) {
       return Promise.resolve(false);
     }
     let deferred = Promise.defer();
     gApplicationReputationService.queryReputation({
       sourceURI: NetUtil.newURI(aDownload.source.url),
       fileSize: aDownload.currentBytes,
-      sha256Hash: hash },
+      sha256Hash: hash,
+      signatureInfo: sigInfo },
       function onComplete(aShouldBlock, aRv) {
         deferred.resolve(aShouldBlock);
       });
     return deferred.promise;
   },
+
+#ifdef XP_WIN
+  /**
+   * Checks whether downloaded files should be marked as coming from
+   * Internet Zone.
+   *
+   * @return true if files should be marked
+   */
+  _shouldSaveZoneInformation: function() {
+    let key = Cc["@mozilla.org/windows-registry-key;1"]
+                .createInstance(Ci.nsIWindowsRegKey);
+    try {
+      key.open(Ci.nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
+               "Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Attachments",
+               Ci.nsIWindowsRegKey.ACCESS_QUERY_VALUE);
+      try {
+        return key.readIntValue("SaveZoneInformation") != 1;
+      } finally {
+        key.close();
+      }
+    } catch (ex) {
+      // If the key is not present, files should be marked by default.
+      return true;
+    }
+  },
+#endif
 
   /**
    * Performs platform-specific operations when a download is done.
@@ -526,33 +572,31 @@ this.DownloadIntegration = {
   downloadDone: function(aDownload) {
     return Task.spawn(function () {
 #ifdef XP_WIN
-      // On Windows, we mark any executable file saved to the NTFS file system
-      // as coming from the Internet security zone.  We do this by writing to
-      // the "Zone.Identifier" Alternate Data Stream directly, because the Save
-      // method of the IAttachmentExecute interface would trigger operations
-      // that may cause the application to hang, or other performance issues.
+      // On Windows, we mark any file saved to the NTFS file system as coming
+      // from the Internet security zone unless Group Policy disables the
+      // feature.  We do this by writing to the "Zone.Identifier" Alternate
+      // Data Stream directly, because the Save method of the
+      // IAttachmentExecute interface would trigger operations that may cause
+      // the application to hang, or other performance issues.
       // The stream created in this way is forward-compatible with all the
       // current and future versions of Windows.
-      if (Services.prefs.getBoolPref("browser.download.saveZoneInformation")) {
-        let file = new FileUtils.File(aDownload.target.path);
-        if (file.isExecutable()) {
+      if (this._shouldSaveZoneInformation()) {
+        try {
+          let streamPath = aDownload.target.path + ":Zone.Identifier";
+          let stream = yield OS.File.open(streamPath, { create: true });
           try {
-            let streamPath = aDownload.target.path + ":Zone.Identifier";
-            let stream = yield OS.File.open(streamPath, { create: true });
-            try {
-              yield stream.write(gInternetZoneIdentifier);
-            } finally {
-              yield stream.close();
-            }
-          } catch (ex) {
-            // If writing to the stream fails, we ignore the error and continue.
-            // The Windows API error 123 (ERROR_INVALID_NAME) is expected to
-            // occur when working on a file system that does not support
-            // Alternate Data Streams, like FAT32, thus we don't report this
-            // specific error.
-            if (!(ex instanceof OS.File.Error) || ex.winLastError != 123) {
-              Cu.reportError(ex);
-            }
+            yield stream.write(gInternetZoneIdentifier);
+          } finally {
+            yield stream.close();
+          }
+        } catch (ex) {
+          // If writing to the stream fails, we ignore the error and continue.
+          // The Windows API error 123 (ERROR_INVALID_NAME) is expected to
+          // occur when working on a file system that does not support
+          // Alternate Data Streams, like FAT32, thus we don't report this
+          // specific error.
+          if (!(ex instanceof OS.File.Error) || ex.winLastError != 123) {
+            Cu.reportError(ex);
           }
         }
       }
@@ -798,17 +842,9 @@ this.DownloadIntegration = {
     DownloadObserver.registerView(aList, aIsPrivate);
     if (!DownloadObserver.observersAdded) {
       DownloadObserver.observersAdded = true;
-      Services.obs.addObserver(DownloadObserver, "quit-application-requested", true);
-      Services.obs.addObserver(DownloadObserver, "offline-requested", true);
-      Services.obs.addObserver(DownloadObserver, "last-pb-context-exiting", true);
-      Services.obs.addObserver(DownloadObserver, "last-pb-context-exited", true);
-
-      Services.obs.addObserver(DownloadObserver, "sleep_notification", true);
-      Services.obs.addObserver(DownloadObserver, "suspend_process_notification", true);
-      Services.obs.addObserver(DownloadObserver, "wake_notification", true);
-      Services.obs.addObserver(DownloadObserver, "resume_process_notification", true);
-      Services.obs.addObserver(DownloadObserver, "network:offline-about-to-go-offline", true);
-      Services.obs.addObserver(DownloadObserver, "network:offline-status-changed", true);
+      for (let topic of kObserverTopics) {
+        Services.obs.addObserver(DownloadObserver, topic, false);
+      }
     }
     return Promise.resolve();
   },
@@ -1011,14 +1047,24 @@ this.DownloadObserver = {
           this._resumeOfflineDownloads();
         }
         break;
+      // We need to unregister observers explicitly before we reach the
+      // "xpcom-shutdown" phase, otherwise observers may be notified when some
+      // required services are not available anymore. We can't unregister
+      // observers on "quit-application", because this module is also loaded
+      // during "make package" automation, and the quit notification is not sent
+      // in that execution environment (bug 973637).
+      case "xpcom-will-shutdown":
+        for (let topic of kObserverTopics) {
+          Services.obs.removeObserver(this, topic);
+        }
+        break;
     }
   },
 
   ////////////////////////////////////////////////////////////////////////////
   //// nsISupports
 
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver,
-                                         Ci.nsISupportsWeakReference])
+  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver])
 };
 
 ////////////////////////////////////////////////////////////////////////////////

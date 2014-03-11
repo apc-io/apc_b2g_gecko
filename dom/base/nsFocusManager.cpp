@@ -24,7 +24,6 @@
 #include "nsFrameTraversal.h"
 #include "nsEventDispatcher.h"
 #include "nsEventStateManager.h"
-#include "nsIMEStateManager.h"
 #include "nsIWebNavigation.h"
 #include "nsCaret.h"
 #include "nsIBaseWindow.h"
@@ -41,6 +40,7 @@
 
 #include "mozilla/ContentEvents.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/IMEStateManager.h"
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
@@ -204,7 +204,7 @@ nsFocusManager::Shutdown()
 NS_IMETHODIMP
 nsFocusManager::Observe(nsISupports *aSubject,
                         const char *aTopic,
-                        const PRUnichar *aData)
+                        const char16_t *aData)
 {
   if (!nsCRT::strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID)) {
     nsDependentString data(aData);
@@ -594,13 +594,10 @@ nsFocusManager::GetFocusedElementForWindow(nsIDOMWindow* aWindow,
 NS_IMETHODIMP
 nsFocusManager::MoveCaretToFocus(nsIDOMWindow* aWindow)
 {
-  int32_t itemType = nsIDocShellTreeItem::typeChrome;
-
   nsCOMPtr<nsIWebNavigation> webnav = do_GetInterface(aWindow);
   nsCOMPtr<nsIDocShellTreeItem> dsti = do_QueryInterface(webnav);
   if (dsti) {
-    dsti->GetItemType(&itemType);
-    if (itemType != nsIDocShellTreeItem::typeChrome) {
+    if (dsti->ItemType() != nsIDocShellTreeItem::typeChrome) {
       nsCOMPtr<nsIDocShell> docShell = do_QueryInterface(dsti);
       NS_ENSURE_TRUE(docShell, NS_ERROR_FAILURE);
 
@@ -936,8 +933,8 @@ nsFocusManager::WindowHidden(nsIDOMWindow* aWindow)
 
   nsPresContext* focusedPresContext =
     presShell ? presShell->GetPresContext() : nullptr;
-  nsIMEStateManager::OnChangeFocus(focusedPresContext, nullptr,
-                                   GetFocusMoveActionCause(0));
+  IMEStateManager::OnChangeFocus(focusedPresContext, nullptr,
+                                 GetFocusMoveActionCause(0));
   if (presShell) {
     SetCaretVisible(presShell, false, nullptr);
   }
@@ -1379,7 +1376,13 @@ nsFocusManager::AdjustWindowFocus(nsPIDOMWindow* aWindow,
 bool
 nsFocusManager::IsWindowVisible(nsPIDOMWindow* aWindow)
 {
-  if (!aWindow)
+  if (!aWindow || aWindow->IsFrozen())
+    return false;
+
+  // Check if the inner window is frozen as well. This can happen when a focus change
+  // occurs while restoring a previous page.
+  nsPIDOMWindow* innerWindow = aWindow->GetCurrentInnerWindow();
+  if (!innerWindow || innerWindow->IsFrozen())
     return false;
 
   nsCOMPtr<nsIDocShell> docShell = aWindow->GetDocShell();
@@ -1526,8 +1529,8 @@ nsFocusManager::Blur(nsPIDOMWindow* aWindowToClear,
 
   nsPresContext* focusedPresContext =
     mActiveWindow ? presShell->GetPresContext() : nullptr;
-  nsIMEStateManager::OnChangeFocus(focusedPresContext, nullptr,
-                                   GetFocusMoveActionCause(0));
+  IMEStateManager::OnChangeFocus(focusedPresContext, nullptr,
+                                 GetFocusMoveActionCause(0));
 
   // now adjust the actual focus, by clearing the fields in the focus manager
   // and in the window.
@@ -1743,12 +1746,12 @@ nsFocusManager::Focus(nsPIDOMWindow* aWindow,
   // document and then the window.
   if (aIsNewDocument) {
     nsIDocument* doc = aWindow->GetExtantDoc();
-    // The focus change should be notified to nsIMEStateManager from here if
+    // The focus change should be notified to IMEStateManager from here if
     // the focused content is a designMode editor since any content won't
     // receive focus event.
     if (doc && doc->HasFlag(NODE_IS_EDITABLE)) {
-      nsIMEStateManager::OnChangeFocus(presShell->GetPresContext(), nullptr,
-                                       GetFocusMoveActionCause(aFlags));
+      IMEStateManager::OnChangeFocus(presShell->GetPresContext(), nullptr,
+                                     GetFocusMoveActionCause(aFlags));
     }
     if (doc)
       SendFocusOrBlurEvent(NS_FOCUS_CONTENT, presShell, doc,
@@ -1793,8 +1796,8 @@ nsFocusManager::Focus(nsPIDOMWindow* aWindow,
         }
       }
 
-      nsIMEStateManager::OnChangeFocus(presContext, aContent,
-                                       GetFocusMoveActionCause(aFlags));
+      IMEStateManager::OnChangeFocus(presContext, aContent,
+                                     GetFocusMoveActionCause(aFlags));
 
       // as long as this focus wasn't because a window was raised, update the
       // commands
@@ -1807,8 +1810,8 @@ nsFocusManager::Focus(nsPIDOMWindow* aWindow,
                            aContent, aFlags & FOCUSMETHOD_MASK,
                            aWindowRaised, isRefocus);
     } else {
-      nsIMEStateManager::OnChangeFocus(presContext, nullptr,
-                                       GetFocusMoveActionCause(aFlags));
+      IMEStateManager::OnChangeFocus(presContext, nullptr,
+                                     GetFocusMoveActionCause(aFlags));
       if (!aWindowRaised) {
         aWindow->UpdateCommands(NS_LITERAL_STRING("focus"));
       }
@@ -1831,8 +1834,8 @@ nsFocusManager::Focus(nsPIDOMWindow* aWindow,
     }
 
     nsPresContext* presContext = presShell->GetPresContext();
-    nsIMEStateManager::OnChangeFocus(presContext, nullptr,
-                                     GetFocusMoveActionCause(aFlags));
+    IMEStateManager::OnChangeFocus(presContext, nullptr,
+                                   GetFocusMoveActionCause(aFlags));
 
     if (!aWindowRaised)
       aWindow->UpdateCommands(NS_LITERAL_STRING("focus"));
@@ -1974,7 +1977,7 @@ nsFocusManager::RaiseWindow(nsPIDOMWindow* aWindow)
     return;
   }
 
-#if defined(XP_WIN) || defined(XP_OS2)
+#if defined(XP_WIN)
   // Windows would rather we focus the child widget, otherwise, the toplevel
   // widget will always end up being focused. Fortunately, focusing the child
   // widget will also have the effect of raising the window this widget is in.
@@ -2035,10 +2038,9 @@ nsFocusManager::UpdateCaret(bool aMoveCaretToFocus,
   if (!dsti)
     return;
 
-  int32_t itemType;
-  dsti->GetItemType(&itemType);
-  if (itemType == nsIDocShellTreeItem::typeChrome)
+  if (dsti->ItemType() == nsIDocShellTreeItem::typeChrome) {
     return;  // Never browse with caret in chrome
+  }
 
   bool browseWithCaret =
     Preferences::GetBool("accessibility.browsewithcaret");
@@ -2467,9 +2469,7 @@ nsFocusManager::DetermineElementToMoveFocus(nsPIDOMWindow* aWindow,
     }
     else {
       // Otherwise, for content shells, start from the location of the caret.
-      int32_t itemType;
-      docShell->GetItemType(&itemType);
-      if (itemType != nsIDocShellTreeItem::typeChrome) {
+      if (docShell->ItemType() != nsIDocShellTreeItem::typeChrome) {
         nsCOMPtr<nsIContent> endSelectionContent;
         GetSelectionLocation(doc, presShell,
                              getter_AddRefs(startContent),
@@ -2985,14 +2985,11 @@ nsFocusManager::GetRootForFocus(nsPIDOMWindow* aWindow,
       if (!frame || !frame->IsFocusable(nullptr, 0))
         return nullptr;
     }
-  }
-  else  {
-    int32_t itemType;
+  } else {
     nsCOMPtr<nsIDocShell> docShell = aWindow->GetDocShell();
-    docShell->GetItemType(&itemType);
-
-    if (itemType == nsIDocShellTreeItem::typeChrome)
+    if (docShell->ItemType() == nsIDocShellTreeItem::typeChrome) {
       return nullptr;
+    }
   }
 
   if (aCheckVisibility && !IsWindowVisible(aWindow))

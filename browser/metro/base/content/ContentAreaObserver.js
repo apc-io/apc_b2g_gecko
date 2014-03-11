@@ -61,10 +61,6 @@ var ContentAreaObserver = {
     return this._getContentHeightForWindow(this.height);
   },
 
-  get contentTop () {
-    return Elements.toolbar.getBoundingClientRect().bottom;
-  },
-
   get viewableHeight() {
     return this._getViewableHeightForContent(this.contentHeight);
   },
@@ -121,8 +117,9 @@ var ContentAreaObserver = {
     let newWidth = width || this.width;
     let newHeight = height || this.height;
 
-    if (newHeight == oldHeight && newWidth == oldWidth)
+    if (newHeight == oldHeight && newWidth == oldWidth) {
       return;
+    }
 
     this.styles["window-width"].width = newWidth + "px";
     this.styles["window-width"].maxWidth = newWidth + "px";
@@ -142,19 +139,9 @@ var ContentAreaObserver = {
     let newWidth = width || this.width;
     let newHeight = height || this.contentHeight;
 
-    if (Browser.selectedBrowser) {
-      let notificationBox = Browser.getNotificationBox();
-
-      // If a notification and navbar are visible together,
-      // make the notification appear above the navbar.
-      if (ContextUI.navbarVisible && !notificationBox.notificationsHidden &&
-          notificationBox.allNotifications.length != 0) {
-        newHeight -= Elements.navbar.getBoundingClientRect().height;
-      }
-    }
-
-    if (newHeight == oldHeight && newWidth == oldWidth)
+    if (newHeight == oldHeight && newWidth == oldWidth) {
       return;
+    }
 
     this.styles["content-height"].height = newHeight + "px";
     this.styles["content-height"].maxHeight = newHeight + "px";
@@ -172,8 +159,9 @@ var ContentAreaObserver = {
     let newWidth = width || this.width;
     let newHeight = height || this.viewableHeight;
 
-    if (newHeight == oldHeight && newWidth == oldWidth)
+    if (newHeight == oldHeight && newWidth == oldWidth) {
       return;
+    }
 
     this.styles["viewable-height"].height = newHeight + "px";
     this.styles["viewable-height"].maxHeight = newHeight + "px";

@@ -389,7 +389,7 @@ public:
   /**
    * Return child accessible at the given index.
    */
-  virtual Accessible* GetChildAt(uint32_t aIndex);
+  virtual Accessible* GetChildAt(uint32_t aIndex) const;
 
   /**
    * Return child accessible count.
@@ -399,7 +399,8 @@ public:
   /**
    * Return index of the given child accessible.
    */
-  virtual int32_t GetIndexOf(Accessible* aChild);
+  int32_t GetIndexOf(const Accessible* aChild) const
+    { return (aChild->mParent != this) ? -1 : aChild->IndexInParent(); }
 
   /**
    * Return index in parent accessible.
@@ -886,16 +887,6 @@ protected:
 
   // helper method to verify frames
   static nsresult GetFullKeyName(const nsAString& aModifierName, const nsAString& aKeyName, nsAString& aStringOut);
-
-  /**
-   * Return an accessible for the given DOM node, or if that node isn't
-   * accessible, return the accessible for the next DOM node which has one
-   * (based on forward depth first search).
-   *
-   * @param  aStartNode  [in] the DOM node to start from
-   * @return              the resulting accessible
-   */
-  Accessible* GetFirstAvailableAccessible(nsINode* aStartNode) const;
 
   //////////////////////////////////////////////////////////////////////////////
   // Action helpers

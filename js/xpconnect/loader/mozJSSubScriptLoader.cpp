@@ -93,25 +93,22 @@ ReportError(JSContext *cx, const char *msg)
 
 nsresult
 mozJSSubScriptLoader::ReadScript(nsIURI *uri, JSContext *cx, JSObject *targetObjArg,
-                                 const nsAString& charset, const char *uriStr,
+                                 const nsAString &charset, const char *uriStr,
                                  nsIIOService *serv, nsIPrincipal *principal,
                                  bool reuseGlobal, JSScript **scriptp,
                                  JSFunction **functionp)
 {
     RootedObject target_obj(cx, targetObjArg);
 
-    nsCOMPtr<nsIChannel>     chan;
-    nsCOMPtr<nsIInputStream> instream;
-    JSErrorReporter  er;
-
     *scriptp = nullptr;
     *functionp = nullptr;
 
-    nsresult rv;
     // Instead of calling NS_OpenURI, we create the channel ourselves and call
     // SetContentType, to avoid expensive MIME type lookups (bug 632490).
-    rv = NS_NewChannel(getter_AddRefs(chan), uri, serv,
-                       nullptr, nullptr, nsIRequest::LOAD_NORMAL);
+    nsCOMPtr<nsIChannel> chan;
+    nsCOMPtr<nsIInputStream> instream;
+    nsresult rv = NS_NewChannel(getter_AddRefs(chan), uri, serv,
+                                nullptr, nullptr, nsIRequest::LOAD_NORMAL);
     if (NS_SUCCEEDED(rv)) {
         chan->SetContentType(NS_LITERAL_CSTRING("application/javascript"));
         rv = chan->Open(getter_AddRefs(instream));
@@ -139,11 +136,10 @@ mozJSSubScriptLoader::ReadScript(nsIURI *uri, JSContext *cx, JSObject *targetObj
 
     /* set our own error reporter so we can report any bad things as catchable
      * exceptions, including the source/line number */
-    er = JS_SetErrorReporter(cx, xpc::SystemErrorReporter);
+    JSErrorReporter er = JS_SetErrorReporter(cx, xpc::SystemErrorReporter);
 
     JS::CompileOptions options(cx);
-    options.setPrincipals(nsJSPrincipals::get(principal))
-           .setFileAndLine(uriStr, 1);
+    options.setFileAndLine(uriStr, 1);
     if (!charset.IsVoid()) {
         nsString script;
         rv = nsScriptLoader::ConvertToUTF16(nullptr, reinterpret_cast<const uint8_t*>(buf.get()), len,
@@ -183,11 +179,11 @@ mozJSSubScriptLoader::ReadScript(nsIURI *uri, JSContext *cx, JSObject *targetObj
 }
 
 NS_IMETHODIMP
-mozJSSubScriptLoader::LoadSubScript(const nsAString& url,
-                                    const Value& targetArg,
-                                    const nsAString& charset,
-                                    JSContext* cx,
-                                    Value* retval)
+mozJSSubScriptLoader::LoadSubScript(const nsAString &url,
+                                    HandleValue target,
+                                    const nsAString &charset,
+                                    JSContext *cx,
+                                    MutableHandleValue retval)
 {
     /*
      * Loads a local url and evals it into the current cx
@@ -202,14 +198,16 @@ mozJSSubScriptLoader::LoadSubScript(const nsAString& url,
      */
     LoadSubScriptOptions options(cx);
     options.charset = charset;
-    options.target = targetArg.isObject() ? &targetArg.toObject() : nullptr;
+    options.target = target.isObject() ? &target.toObject() : nullptr;
     return DoLoadSubScriptWithOptions(url, options, cx, retval);
 }
 
 
 NS_IMETHODIMP
-mozJSSubScriptLoader::LoadSubScriptWithOptions(const nsAString& url, const Value& optionsVal,
-                                               JSContext* cx, Value* retval)
+mozJSSubScriptLoader::LoadSubScriptWithOptions(const nsAString &url,
+                                               HandleValue optionsVal,
+                                               JSContext *cx,
+                                               MutableHandleValue retval)
 {
     if (!optionsVal.isObject())
         return NS_ERROR_INVALID_ARG;
@@ -220,9 +218,10 @@ mozJSSubScriptLoader::LoadSubScriptWithOptions(const nsAString& url, const Value
 }
 
 nsresult
-mozJSSubScriptLoader::DoLoadSubScriptWithOptions(const nsAString& url,
-                                                 LoadSubScriptOptions& options,
-                                                 JSContext* cx, Value* retval)
+mozJSSubScriptLoader::DoLoadSubScriptWithOptions(const nsAString &url,
+                                                 LoadSubScriptOptions &options,
+                                                 JSContext *cx,
+                                                 MutableHandleValue retval)
 {
     nsresult rv = NS_OK;
 
@@ -239,7 +238,7 @@ mozJSSubScriptLoader::DoLoadSubScriptWithOptions(const nsAString& url,
     }
 
     RootedObject targetObj(cx);
-    mozJSComponentLoader* loader = mozJSComponentLoader::Get();
+    mozJSComponentLoader *loader = mozJSComponentLoader::Get();
     rv = loader->FindTargetObject(cx, &targetObj);
     NS_ENSURE_SUCCESS(rv, rv);
 
@@ -258,15 +257,8 @@ mozJSSubScriptLoader::DoLoadSubScriptWithOptions(const nsAString& url,
     if (!targetObj)
         return NS_ERROR_FAILURE;
 
-    if (targetObj != result_obj) {
-        nsCOMPtr<nsIScriptSecurityManager> secman =
-            do_GetService(NS_SCRIPTSECURITYMANAGER_CONTRACTID);
-        if (!secman)
-            return NS_ERROR_FAILURE;
-
-        rv = secman->GetObjectPrincipal(cx, targetObj, getter_AddRefs(principal));
-        NS_ENSURE_SUCCESS(rv, rv);
-    }
+    if (targetObj != result_obj)
+        principal = GetObjectPrincipal(targetObj);
 
     JSAutoCompartment ac(cx, targetObj);
 
@@ -276,10 +268,9 @@ mozJSSubScriptLoader::DoLoadSubScriptWithOptions(const nsAString& url,
     nsAutoCString uriStr;
     nsAutoCString scheme;
 
-    RootedScript script(cx);
-
     // Figure out who's calling us
-    if (!JS_DescribeScriptedCaller(cx, &script, nullptr)) {
+    JS::AutoFilename filename;
+    if (!JS::DescribeScriptedCaller(cx, &filename)) {
         // No scripted frame means we don't know who's calling, bail.
         return NS_ERROR_FAILURE;
     }
@@ -320,7 +311,7 @@ mozJSSubScriptLoader::DoLoadSubScriptWithOptions(const nsAString& url,
 
         // For file URIs prepend the filename with the filename of the
         // calling script, and " -> ". See bug 418356.
-        nsAutoCString tmp(JS_GetScriptFilename(cx, script));
+        nsAutoCString tmp(filename.get());
         tmp.AppendLiteral(" -> ");
         tmp.Append(uriStr);
 
@@ -334,7 +325,7 @@ mozJSSubScriptLoader::DoLoadSubScriptWithOptions(const nsAString& url,
     PathifyURI(uri, cachePath);
 
     RootedFunction function(cx);
-    script = nullptr;
+    RootedScript script(cx);
     if (cache && !options.ignoreCache)
         rv = ReadCachedScript(cache, cachePath, cx, mSystemPrincipal, &script);
     if (!script) {
@@ -353,19 +344,19 @@ mozJSSubScriptLoader::DoLoadSubScriptWithOptions(const nsAString& url,
 
     loader->NoteSubScript(script, targetObj);
 
-    RootedValue rval(cx);
+
     bool ok = false;
     if (function) {
-        ok = JS_CallFunction(cx, targetObj, function, 0, nullptr, rval.address());
+        ok = JS_CallFunction(cx, targetObj, function, JS::HandleValueArray::empty(),
+                             retval);
     } else {
-        ok = JS_ExecuteScriptVersion(cx, targetObj, script, rval.address(), version);
+        ok = JS_ExecuteScriptVersion(cx, targetObj, script, retval.address(), version);
     }
 
     if (ok) {
         JSAutoCompartment rac(cx, result_obj);
-        if (!JS_WrapValue(cx, &rval))
+        if (!JS_WrapValue(cx, retval))
             return NS_ERROR_UNEXPECTED;
-        *retval = rval;
     }
 
     if (cache && ok && writeScript) {

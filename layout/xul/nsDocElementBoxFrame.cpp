@@ -30,7 +30,7 @@ class nsDocElementBoxFrame : public nsBoxFrame,
                              public nsIAnonymousContentCreator
 {
 public:
-  virtual void DestroyFrom(nsIFrame* aDestructRoot);
+  virtual void DestroyFrom(nsIFrame* aDestructRoot) MOZ_OVERRIDE;
 
   friend nsIFrame* NS_NewBoxFrame(nsIPresShell* aPresShell,
                                   nsStyleContext* aContext);
@@ -42,11 +42,11 @@ public:
   NS_DECL_FRAMEARENA_HELPERS
 
   // nsIAnonymousContentCreator
-  virtual nsresult CreateAnonymousContent(nsTArray<ContentInfo>& aElements);
+  virtual nsresult CreateAnonymousContent(nsTArray<ContentInfo>& aElements) MOZ_OVERRIDE;
   virtual void AppendAnonymousContentTo(nsBaseContentList& aElements,
-                                        uint32_t aFilter);
+                                        uint32_t aFilter) MOZ_OVERRIDE;
 
-  virtual bool IsFrameOfType(uint32_t aFlags) const
+  virtual bool IsFrameOfType(uint32_t aFlags) const MOZ_OVERRIDE
   {
     // Override nsBoxFrame.
     if (aFlags & (nsIFrame::eReplacedContainsBlock | nsIFrame::eReplaced))
@@ -54,8 +54,8 @@ public:
     return nsBoxFrame::IsFrameOfType(aFlags);
   }
 
-#ifdef DEBUG
-  NS_IMETHOD GetFrameName(nsAString& aResult) const;
+#ifdef DEBUG_FRAME_DUMP
+  virtual nsresult GetFrameName(nsAString& aResult) const MOZ_OVERRIDE;
 #endif
 private:
   nsCOMPtr<Element> mPopupgroupContent;
@@ -134,8 +134,8 @@ NS_QUERYFRAME_HEAD(nsDocElementBoxFrame)
   NS_QUERYFRAME_ENTRY(nsIAnonymousContentCreator)
 NS_QUERYFRAME_TAIL_INHERITING(nsBoxFrame)
 
-#ifdef DEBUG
-NS_IMETHODIMP
+#ifdef DEBUG_FRAME_DUMP
+nsresult
 nsDocElementBoxFrame::GetFrameName(nsAString& aResult) const
 {
   return MakeFrameName(NS_LITERAL_STRING("DocElementBox"), aResult);

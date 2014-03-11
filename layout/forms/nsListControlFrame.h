@@ -58,28 +58,28 @@ public:
   NS_DECL_FRAMEARENA_HELPERS
 
     // nsIFrame
-  NS_IMETHOD HandleEvent(nsPresContext* aPresContext,
-                         mozilla::WidgetGUIEvent* aEvent,
-                         nsEventStatus* aEventStatus) MOZ_OVERRIDE;
+  virtual nsresult HandleEvent(nsPresContext* aPresContext,
+                               mozilla::WidgetGUIEvent* aEvent,
+                               nsEventStatus* aEventStatus) MOZ_OVERRIDE;
   
-  NS_IMETHOD SetInitialChildList(ChildListID     aListID,
-                                 nsFrameList&    aChildList) MOZ_OVERRIDE;
+  virtual nsresult SetInitialChildList(ChildListID     aListID,
+                                       nsFrameList&    aChildList) MOZ_OVERRIDE;
 
   virtual nscoord GetPrefWidth(nsRenderingContext *aRenderingContext) MOZ_OVERRIDE;
   virtual nscoord GetMinWidth(nsRenderingContext *aRenderingContext) MOZ_OVERRIDE;
 
-  NS_IMETHOD Reflow(nsPresContext*          aCX,
-                    nsHTMLReflowMetrics&     aDesiredSize,
-                    const nsHTMLReflowState& aReflowState,
-                    nsReflowStatus&          aStatus) MOZ_OVERRIDE;
+  virtual nsresult Reflow(nsPresContext*           aCX,
+                          nsHTMLReflowMetrics&     aDesiredSize,
+                          const nsHTMLReflowState& aReflowState,
+                          nsReflowStatus&          aStatus) MOZ_OVERRIDE;
 
   virtual void Init(nsIContent*      aContent,
                     nsIFrame*        aParent,
                     nsIFrame*        aPrevInFlow) MOZ_OVERRIDE;
 
-  NS_IMETHOD DidReflow(nsPresContext*           aPresContext, 
-                       const nsHTMLReflowState*  aReflowState, 
-                       nsDidReflowStatus         aStatus) MOZ_OVERRIDE;
+  virtual nsresult DidReflow(nsPresContext*            aPresContext, 
+                             const nsHTMLReflowState*  aReflowState, 
+                             nsDidReflowStatus         aStatus) MOZ_OVERRIDE;
   virtual void DestroyFrom(nsIFrame* aDestructRoot) MOZ_OVERRIDE;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
@@ -101,8 +101,8 @@ public:
       ~(nsIFrame::eReplaced | nsIFrame::eReplacedContainsBlock));
   }
 
-#ifdef DEBUG
-  NS_IMETHOD GetFrameName(nsAString& aResult) const MOZ_OVERRIDE;
+#ifdef DEBUG_FRAME_DUMP
+  virtual nsresult GetFrameName(nsAString& aResult) const MOZ_OVERRIDE;
 #endif
 
     // nsIFormControlFrame
@@ -445,6 +445,27 @@ private:
   // for incremental typing navigation
   static nsAString& GetIncrementalString ();
   static DOMTimeStamp gLastKeyTime;
+
+  class MOZ_STACK_CLASS AutoIncrementalSearchResetter
+  {
+  public:
+    AutoIncrementalSearchResetter() :
+      mCancelled(false)
+    {
+    }
+    ~AutoIncrementalSearchResetter()
+    {
+      if (!mCancelled) {
+        nsListControlFrame::GetIncrementalString().Truncate();
+      }
+    }
+    void Cancel()
+    {
+      mCancelled = true;
+    }
+  private:
+    bool mCancelled;
+  };
 };
 
 #endif /* nsListControlFrame_h___ */

@@ -263,7 +263,7 @@ public:
     bool               DispatchKeyDownEvent(GdkEventKey *aEvent,
                                             bool *aIsCancelled);
 
-    NS_IMETHOD NotifyIME(NotificationToIME aNotification) MOZ_OVERRIDE;
+    NS_IMETHOD NotifyIME(const IMENotification& aIMENotification) MOZ_OVERRIDE;
     NS_IMETHOD_(void) SetInputContext(const InputContext& aContext,
                                       const InputContextAction& aAction);
     NS_IMETHOD_(InputContext) GetInputContext();
@@ -440,7 +440,7 @@ private:
 
     // nsBaseWidget
     virtual LayerManager* GetLayerManager(PLayerTransactionChild* aShadowManager = nullptr,
-                                          LayersBackend aBackendHint = mozilla::layers::LAYERS_NONE,
+                                          LayersBackend aBackendHint = mozilla::layers::LayersBackend::LAYERS_NONE,
                                           LayerManagerPersistence aPersistence = LAYER_MANAGER_CURRENT,
                                           bool* aAllowRetaining = nullptr) MOZ_OVERRIDE;
 

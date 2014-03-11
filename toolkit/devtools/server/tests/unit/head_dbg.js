@@ -15,7 +15,8 @@ Services.prefs.setBoolPref("devtools.debugger.log", true);
 // Enable remote debugging for the relevant tests.
 Services.prefs.setBoolPref("devtools.debugger.remote-enabled", true);
 
-Cu.import("resource://gre/modules/devtools/DevToolsUtils.jsm");
+const { devtools } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
+const DevToolsUtils = devtools.require("devtools/toolkit/DevToolsUtils.js");
 
 function tryImport(url) {
   try {
@@ -154,9 +155,10 @@ function attachTestTab(aClient, aTitle, aCallback) {
 // thread.
 function attachTestThread(aClient, aTitle, aCallback) {
   attachTestTab(aClient, aTitle, function (aResponse, aTabClient) {
-    aClient.attachThread(aResponse.threadActor, function (aResponse, aThreadClient) {
+    function onAttach(aResponse, aThreadClient) {
       aCallback(aResponse, aTabClient, aThreadClient);
-    }, { useSourceMaps: true });
+    }
+    aTabClient.attachThread({ useSourceMaps: true }, onAttach);
   });
 }
 

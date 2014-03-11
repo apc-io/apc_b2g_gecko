@@ -37,6 +37,7 @@
 #include "StyleRule.h"
 #include "nsFont.h"
 #include "nsIURI.h"
+#include "mozAutoDocUpdate.h"
 
 using namespace mozilla;
 
@@ -1512,15 +1513,18 @@ nsCSSFontFaceStyleDecl::GetPropertyValue(nsCSSFontDesc aFontDescID,
     }
 
   case eCSSFontDesc_Style:
-    val.AppendToString(eCSSProperty_font_style, aResult);
+    val.AppendToString(eCSSProperty_font_style, aResult,
+                        nsCSSValue::eNormalized);
     return NS_OK;
 
   case eCSSFontDesc_Weight:
-    val.AppendToString(eCSSProperty_font_weight, aResult);
+    val.AppendToString(eCSSProperty_font_weight, aResult,
+                       nsCSSValue::eNormalized);
     return NS_OK;
 
   case eCSSFontDesc_Stretch:
-    val.AppendToString(eCSSProperty_font_stretch, aResult);
+    val.AppendToString(eCSSProperty_font_stretch, aResult,
+                       nsCSSValue::eNormalized);
     return NS_OK;
 
   case eCSSFontDesc_FontFeatureSettings:
@@ -1528,7 +1532,8 @@ nsCSSFontFaceStyleDecl::GetPropertyValue(nsCSSFontDesc aFontDescID,
     return NS_OK;
 
   case eCSSFontDesc_FontLanguageOverride:
-    val.AppendToString(eCSSProperty_font_language_override, aResult);
+    val.AppendToString(eCSSProperty_font_language_override, aResult,
+                       nsCSSValue::eNormalized);
     return NS_OK;
 
   case eCSSFontDesc_Src:
@@ -1585,6 +1590,15 @@ NS_IMETHODIMP
 nsCSSFontFaceStyleDecl::GetPropertyValue(const nsAString & propertyName,
                                          nsAString & aResult)
 {
+  return GetPropertyValue(nsCSSProps::LookupFontDesc(propertyName), aResult);
+}
+
+NS_IMETHODIMP
+nsCSSFontFaceStyleDecl::GetAuthoredPropertyValue(const nsAString& propertyName,
+                                                 nsAString& aResult)
+{
+  // We don't return any authored property values different from
+  // GetPropertyValue, currently.
   return GetPropertyValue(nsCSSProps::LookupFontDesc(propertyName), aResult);
 }
 
@@ -2346,7 +2360,7 @@ nsCSSKeyframeRule::DoGetKeyText(nsAString& aKeyText) const
   NS_ABORT_IF_FALSE(i_end != 0, "must have some keys");
   for (;;) {
     aKeyText.AppendFloat(mKeys[i] * 100.0f);
-    aKeyText.Append(PRUnichar('%'));
+    aKeyText.Append(char16_t('%'));
     if (++i == i_end) {
       break;
     }
@@ -2361,15 +2375,23 @@ nsCSSKeyframeRule::SetKeyText(const nsAString& aKeyText)
 
   InfallibleTArray<float> newSelectors;
   // FIXME: pass filename and line number
-  if (parser.ParseKeyframeSelectorString(aKeyText, nullptr, 0, newSelectors)) {
-    newSelectors.SwapElements(mKeys);
-  } else {
+  if (!parser.ParseKeyframeSelectorString(aKeyText, nullptr, 0, newSelectors)) {
     // for now, we don't do anything if the parse fails
+    return NS_OK;
   }
+
+  nsIDocument* doc = GetDocument();
+  MOZ_AUTO_DOC_UPDATE(doc, UPDATE_STYLE, true);
+
+  newSelectors.SwapElements(mKeys);
 
   nsCSSStyleSheet* sheet = GetStyleSheet();
   if (sheet) {
     sheet->SetModifiedByChildRule();
+
+    if (doc) {
+      doc->StyleRuleChanged(sheet, this, this);
+    }
   }
 
   return NS_OK;
@@ -2388,6 +2410,12 @@ nsCSSKeyframeRule::GetStyle(nsIDOMCSSStyleDeclaration** aStyle)
 void
 nsCSSKeyframeRule::ChangeDeclaration(css::Declaration* aDeclaration)
 {
+  // Our caller already did a BeginUpdate/EndUpdate, but with
+  // UPDATE_CONTENT, and we need UPDATE_STYLE to trigger work in
+  // PresShell::EndUpdate.
+  nsIDocument* doc = GetDocument();
+  MOZ_AUTO_DOC_UPDATE(doc, UPDATE_STYLE, true);
+
   // Be careful to not assign to an nsAutoPtr if we would be assigning
   // the thing it already holds.
   if (aDeclaration != mDeclaration) {
@@ -2397,6 +2425,10 @@ nsCSSKeyframeRule::ChangeDeclaration(css::Declaration* aDeclaration)
   nsCSSStyleSheet* sheet = GetStyleSheet();
   if (sheet) {
     sheet->SetModifiedByChildRule();
+
+    if (doc) {
+      doc->StyleRuleChanged(sheet, this, this);
+    }
   }
 }
 
@@ -2520,11 +2552,22 @@ nsCSSKeyframesRule::GetName(nsAString& aName)
 NS_IMETHODIMP
 nsCSSKeyframesRule::SetName(const nsAString& aName)
 {
+  if (mName == aName) {
+    return NS_OK;
+  }
+
+  nsIDocument* doc = GetDocument();
+  MOZ_AUTO_DOC_UPDATE(doc, UPDATE_STYLE, true);
+
   mName = aName;
 
   nsCSSStyleSheet* sheet = GetStyleSheet();
   if (sheet) {
     sheet->SetModifiedByChildRule();
+
+    if (doc) {
+      doc->StyleRuleChanged(sheet, this, this);
+    }
   }
 
   return NS_OK;
@@ -2548,7 +2591,19 @@ nsCSSKeyframesRule::AppendRule(const nsAString& aRule)
   nsRefPtr<nsCSSKeyframeRule> rule =
     parser.ParseKeyframeRule(aRule, nullptr, 0);
   if (rule) {
+    nsIDocument* doc = GetDocument();
+    MOZ_AUTO_DOC_UPDATE(doc, UPDATE_STYLE, true);
+
     AppendStyleRule(rule);
+
+    nsCSSStyleSheet* sheet = GetStyleSheet();
+    if (sheet) {
+      sheet->SetModifiedByChildRule();
+
+      if (doc) {
+        doc->StyleRuleChanged(sheet, this, this);
+      }
+    }
   }
 
   return NS_OK;
@@ -2584,10 +2639,18 @@ nsCSSKeyframesRule::DeleteRule(const nsAString& aKey)
 {
   uint32_t index = FindRuleIndexForKey(aKey);
   if (index != RULE_NOT_FOUND) {
+    nsIDocument* doc = GetDocument();
+    MOZ_AUTO_DOC_UPDATE(doc, UPDATE_STYLE, true);
+
     mRules.RemoveObjectAt(index);
+
     nsCSSStyleSheet* sheet = GetStyleSheet();
     if (sheet) {
       sheet->SetModifiedByChildRule();
+
+      if (doc) {
+        doc->StyleRuleChanged(sheet, this, this);
+      }
     }
   }
   return NS_OK;

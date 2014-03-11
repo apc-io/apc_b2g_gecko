@@ -233,22 +233,41 @@ APZController::RequestContentRepaint(const FrameMetrics& aFrameMetrics)
 }
 
 void
-APZController::HandleDoubleTap(const CSSIntPoint& aPoint, int32_t aModifiers)
+APZController::AcknowledgeScrollUpdate(const FrameMetrics::ViewID& aScrollId,
+                                       const uint32_t& aScrollGeneration)
+{
+#ifdef DEBUG_CONTROLLER
+  WinUtils::Log("APZController::AcknowledgeScrollUpdate scrollid=%I64d gen=%lu",
+    aScrollId, aScrollGeneration);
+#endif
+  APZCCallbackHelper::AcknowledgeScrollUpdate(aScrollId, aScrollGeneration);
+}
+
+void
+APZController::HandleDoubleTap(const CSSIntPoint& aPoint,
+                               int32_t aModifiers,
+                               const ScrollableLayerGuid& aGuid)
 {
 }
 
 void
-APZController::HandleSingleTap(const CSSIntPoint& aPoint, int32_t aModifiers)
+APZController::HandleSingleTap(const CSSIntPoint& aPoint,
+                               int32_t aModifiers,
+                               const ScrollableLayerGuid& aGuid)
 {
 }
 
 void
-APZController::HandleLongTap(const CSSIntPoint& aPoint, int32_t aModifiers)
+APZController::HandleLongTap(const CSSIntPoint& aPoint,
+                             int32_t aModifiers,
+                             const ScrollableLayerGuid& aGuid)
 {
 }
 
 void
-APZController::HandleLongTapUp(const CSSIntPoint& aPoint, int32_t aModifiers)
+APZController::HandleLongTapUp(const CSSIntPoint& aPoint,
+                               int32_t aModifiers,
+                               const ScrollableLayerGuid& aGuid)
 {
 }
 
@@ -264,6 +283,21 @@ void
 APZController::PostDelayedTask(Task* aTask, int aDelayMs)
 {
   MessageLoop::current()->PostDelayedTask(FROM_HERE, aTask, aDelayMs);
+}
+
+bool
+APZController::GetRootZoomConstraints(ZoomConstraints* aOutConstraints)
+{
+  if (aOutConstraints) {
+    // Until we support the meta-viewport tag properly allow zooming
+    // from 1/4 to 4x by default.
+    aOutConstraints->mAllowZoom = true;
+    aOutConstraints->mAllowDoubleTapZoom = false;
+    aOutConstraints->mMinZoom = CSSToScreenScale(0.25f);
+    aOutConstraints->mMaxZoom = CSSToScreenScale(4.0f);
+    return true;
+  }
+  return false;
 }
 
 // apzc notifications

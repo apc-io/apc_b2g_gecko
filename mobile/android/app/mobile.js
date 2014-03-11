@@ -31,7 +31,7 @@ pref("browser.tabs.remote", false);
 // If a tab has not been active for this long (seconds), then it may be
 // turned into a zombie tab to preemptively free up memory. -1 disables time-based
 // expiration (but low-memory conditions may still require the tab to be zombified).
-pref("browser.tabs.expireTime", 3600);
+pref("browser.tabs.expireTime", 900);
 
 // From libpref/src/init/all.js, extended to allow a slightly wider zoom range.
 pref("zoom.minPercent", 20);
@@ -102,6 +102,10 @@ pref("network.http.spdy.push-allowance", 32768);
 pref("network.buffer.cache.count", 24);
 pref("network.buffer.cache.size",  16384);
 
+// predictive actions
+pref("network.seer.max-db-size", 2097152); // bytes
+pref("network.seer.preserve", 50); // percentage of seer data to keep when cleaning up
+
 /* history max results display */
 pref("browser.display.history.maxresults", 100);
 
@@ -164,9 +168,6 @@ pref("layout.spellcheckDefault", 0);
 /* new html5 forms */
 pref("dom.experimental_forms", true);
 pref("dom.forms.number", true);
-// Don't enable <input type=color> yet as we don't have a color picker
-// implemented for Android (bug 875750)
-pref("dom.forms.color", true);
 
 /* extension manager and xpinstall */
 pref("xpinstall.whitelist.add", "addons.mozilla.org");
@@ -269,6 +270,9 @@ pref("browser.search.noCurrentEngine", true);
 // {moz:official} expands to "official"
 pref("browser.search.official", true);
 #endif
+
+// Control media casting feature
+pref("browser.casting.enabled", false);
 
 // Enable sparse localization by setting a few package locale overrides
 pref("chrome.override_package.global", "browser");
@@ -438,7 +442,7 @@ pref("browser.ui.touch.bottom", 16);
 pref("browser.ui.touch.weight.visited", 120); // percentage
 
 // The percentage of the screen that needs to be scrolled before margins are exposed.
-pref("browser.ui.show-margins-threshold", 20);
+pref("browser.ui.show-margins-threshold", 10);
 
 // Maximum distance from the point where the user pressed where we still
 // look for text to select
@@ -465,6 +469,8 @@ pref("app.creditsURL", "http://www.mozilla.org/credits/");
 pref("app.channelURL", "http://www.mozilla.org/%LOCALE%/firefox/channel/");
 #if MOZ_UPDATE_CHANNEL == aurora
 pref("app.releaseNotesURL", "http://www.mozilla.com/%LOCALE%/mobile/%VERSION%/auroranotes/");
+#elif MOZ_UPDATE_CHANNEL == beta
+pref("app.releaseNotesURL", "http://www.mozilla.com/%LOCALE%/mobile/%VERSION%beta/releasenotes/");
 #else
 pref("app.releaseNotesURL", "http://www.mozilla.com/%LOCALE%/mobile/%VERSION%/releasenotes/");
 #endif
@@ -585,17 +591,16 @@ pref("browser.safebrowsing.enabled", true);
 pref("browser.safebrowsing.malware.enabled", true);
 pref("browser.safebrowsing.debug", false);
 
-pref("browser.safebrowsing.updateURL", "http://safebrowsing.clients.google.com/safebrowsing/downloads?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2");
-pref("browser.safebrowsing.keyURL", "https://sb-ssl.google.com/safebrowsing/newkey?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2");
-pref("browser.safebrowsing.gethashURL", "http://safebrowsing.clients.google.com/safebrowsing/gethash?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2");
-pref("browser.safebrowsing.reportURL", "http://safebrowsing.clients.google.com/safebrowsing/report?");
+pref("browser.safebrowsing.updateURL", "https://safebrowsing.google.com/safebrowsing/downloads?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2&key=%GOOGLE_API_KEY%");
+pref("browser.safebrowsing.gethashURL", "https://safebrowsing.google.com/safebrowsing/gethash?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2");
+pref("browser.safebrowsing.reportURL", "https://safebrowsing.google.com/safebrowsing/report?");
 pref("browser.safebrowsing.reportGenericURL", "http://%LOCALE%.phish-generic.mozilla.com/?hl=%LOCALE%");
 pref("browser.safebrowsing.reportErrorURL", "http://%LOCALE%.phish-error.mozilla.com/?hl=%LOCALE%");
 pref("browser.safebrowsing.reportPhishURL", "http://%LOCALE%.phish-report.mozilla.com/?hl=%LOCALE%");
 pref("browser.safebrowsing.reportMalwareURL", "http://%LOCALE%.malware-report.mozilla.com/?hl=%LOCALE%");
 pref("browser.safebrowsing.reportMalwareErrorURL", "http://%LOCALE%.malware-error.mozilla.com/?hl=%LOCALE%");
 
-pref("browser.safebrowsing.malware.reportURL", "http://safebrowsing.clients.google.com/safebrowsing/diagnostic?client=%NAME%&hl=%LOCALE%&site=");
+pref("browser.safebrowsing.malware.reportURL", "https://safebrowsing.google.com/safebrowsing/diagnostic?client=%NAME%&hl=%LOCALE%&site=");
 
 pref("browser.safebrowsing.id", @MOZ_APP_UA_NAME@);
 
@@ -808,5 +813,30 @@ pref("browser.snippets.geoUrl", "https://geo.mozilla.org/country.json");
 // URL used to ping metrics with stats about which snippets have been shown
 pref("browser.snippets.statsUrl", "https://snippets-stats.mozilla.org/mobile");
 
-// This pref requires a restart to take effect.
-pref("browser.snippets.enabled", false);
+// These prefs require a restart to take effect.
+pref("browser.snippets.enabled", true);
+pref("browser.snippets.syncPromo.enabled", true);
+
+#ifdef MOZ_ANDROID_SYNTHAPKS
+// The URL of the APK factory from which we obtain APKs for webapps.
+// This currently points to the development server.
+pref("browser.webapps.apkFactoryUrl", "http://dapk.net/application.apk");
+
+// How frequently to check for webapp updates, in seconds (86400 is daily).
+pref("browser.webapps.updateInterval", 86400);
+
+// The URL of the service that checks for updates.
+// This currently points to the development server.
+// To test updates, set this to http://apk-update-checker.paas.allizom.org,
+// which is a test server that always reports all apps as having updates.
+pref("browser.webapps.updateCheckUrl", "http://dapk.net/app_updates");
+
+#endif
+
+// The mode of home provider syncing.
+// 0: Sync always
+// 1: Sync only when on wifi
+pref("home.sync.updateMode", 0);
+
+// How frequently to check if we should sync home provider data.
+pref("home.sync.checkIntervalSecs", 3600);

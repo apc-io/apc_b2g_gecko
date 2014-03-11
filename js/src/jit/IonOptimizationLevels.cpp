@@ -86,7 +86,7 @@ OptimizationInfo::usesBeforeCompile(JSScript *script, jsbytecode *pc) const
     // It's more efficient to enter outer loops, rather than inner loops, via OSR.
     // To accomplish this, we use a slightly higher threshold for inner loops.
     // Note that the loop depth is always > 0 so we will prefer non-OSR over OSR.
-    uint32_t loopDepth = GET_UINT8(pc);
+    uint32_t loopDepth = LoopEntryDepthHint(pc);
     JS_ASSERT(loopDepth > 0);
     return minUses + loopDepth * 100;
 }
@@ -95,6 +95,15 @@ OptimizationInfos::OptimizationInfos()
 {
     infos_[Optimization_Normal - 1].initNormalOptimizationInfo();
     infos_[Optimization_AsmJS - 1].initAsmjsOptimizationInfo();
+
+#ifdef DEBUG
+    OptimizationLevel level = firstLevel();
+    while (!isLastLevel(level)) {
+        OptimizationLevel next = nextLevel(level);
+        JS_ASSERT(level < next);
+        level = next;
+    }
+#endif
 }
 
 OptimizationLevel

@@ -6,6 +6,7 @@
 
 EXPORTS += [
     'CryptoTask.h',
+    'nsCrypto.h',
     'nsNSSShutDown.h',
     'nsRandomGenerator.h',
     'ScopedNSSTypes.h',
@@ -16,7 +17,6 @@ EXPORTS.mozilla += [
 ]
 
 UNIFIED_SOURCES += [
-    'CertVerifier.cpp',
     'CryptoTask.cpp',
     'nsCertificatePrincipal.cpp',
     'nsCertOverrideService.cpp',
@@ -27,7 +27,6 @@ UNIFIED_SOURCES += [
     'nsCMSSecureMessage.cpp',
     'nsCrypto.cpp',
     'nsDataSignatureVerifier.cpp',
-    'nsIdentityChecking.cpp',
     'nsKeygenHandler.cpp',
     'nsKeygenThread.cpp',
     'nsKeyModule.cpp',
@@ -69,7 +68,6 @@ UNIFIED_SOURCES += [
 # The rest cannot be built in unified mode because they want to force NSPR
 # logging.
 SOURCES += [
-    'JARSignatureVerification.cpp',
     'nsCryptoHash.cpp',
     'nsNSSCertificateDB.cpp',
     'nsNSSComponent.cpp',
@@ -91,8 +89,19 @@ UNIFIED_SOURCES += [
     'md4.c',
 ]
 
+FAIL_ON_WARNINGS = True
+
 FINAL_LIBRARY = 'xul'
 
+LOCAL_INCLUDES += [
+    '../../../certverifier',
+    '../../../insanity/include',
+]
+
+if CONFIG['NSS_DISABLE_DBM']:
+    DEFINES['NSS_DISABLE_DBM'] = '1'
+
+DEFINES['SSL_DISABLE_DEPRECATED_CIPHER_SUITE_NAMES'] = 'True'
 DEFINES['NSS_ENABLE_ECC'] = 'True'
 for var in ('DLL_PREFIX', 'DLL_SUFFIX'):
     DEFINES[var] = '"%s"' % CONFIG[var]

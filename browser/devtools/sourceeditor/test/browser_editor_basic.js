@@ -11,6 +11,11 @@ function test() {
     let src = win.document.querySelector("iframe").getAttribute("src");
     ok(~src.indexOf(".CodeMirror"), "correct iframe is there");
 
+    // getOption/setOption
+    ok(ed.getOption("styleActiveLine"), "getOption works");
+    ed.setOption("styleActiveLine", false);
+    ok(!ed.getOption("styleActiveLine"), "setOption works");
+
     // Language modes
     is(ed.getMode(), Editor.modes.text, "getMode");
     ed.setMode(Editor.modes.js);
@@ -45,6 +50,12 @@ function test() {
     ok(ed.hasLineClass(0, "test"), "test line class is there");
     ed.removeLineClass(0, "test");
     ok(!ed.hasLineClass(0, "test"), "test line class is gone");
+
+    // Font size
+    let size = ed.getFontSize();
+    is("number", typeof size, "we have the default font size");
+    ed.setFontSize(ed.getFontSize() + 1);
+    is(ed.getFontSize(), size + 1, "new font size was set");
 
     teardown(ed, win);
   });

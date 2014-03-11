@@ -217,9 +217,7 @@ void
 Link::SetSearch(const nsAString& aSearch)
 {
   SetSearchInternal(aSearch);
-  if (mSearchParams) {
-    mSearchParams->Invalidate();
-  }
+  UpdateURLSearchParams();
 }
 
 void
@@ -301,7 +299,7 @@ Link::GetProtocol(nsAString &_protocol)
     (void)uri->GetScheme(scheme);
     CopyASCIItoUTF16(scheme, _protocol);
   }
-  _protocol.Append(PRUnichar(':'));
+  _protocol.Append(char16_t(':'));
   return;
 }
 
@@ -451,7 +449,7 @@ Link::GetHash(nsAString &_hash)
   nsresult rv = uri->GetRef(ref);
   if (NS_SUCCEEDED(rv) && !ref.IsEmpty()) {
     NS_UnescapeURL(ref); // XXX may result in random non-ASCII bytes!
-    _hash.Assign(PRUnichar('#'));
+    _hash.Assign(char16_t('#'));
     AppendUTF8toUTF16(ref, _hash);
   }
 }
@@ -487,9 +485,7 @@ Link::ResetLinkState(bool aNotify, bool aHasHref)
 
   // If we've cached the URI, reset always invalidates it.
   mCachedURI = nullptr;
-  if (mSearchParams) {
-    mSearchParams->Invalidate();
-  }
+  UpdateURLSearchParams();
 
   // Update our state back to the default.
   mLinkState = defaultState;
@@ -589,15 +585,12 @@ Link::SetSearchParams(URLSearchParams* aSearchParams)
     return;
   }
 
-  if (!aSearchParams->HasURLAssociated()) {
-    MOZ_ASSERT(aSearchParams->IsValid());
-
-    mSearchParams = aSearchParams;
-    mSearchParams->SetObserver(this);
-  } else {
-    CreateSearchParamsIfNeeded();
-    mSearchParams->CopyFromURLSearchParams(*aSearchParams);
+  if (mSearchParams) {
+    mSearchParams->RemoveObserver(this);
   }
+
+  mSearchParams = aSearchParams;
+  mSearchParams->AddObserver(this);
 
   nsAutoString search;
   mSearchParams->Serialize(search);
@@ -607,7 +600,7 @@ Link::SetSearchParams(URLSearchParams* aSearchParams)
 void
 Link::URLSearchParamsUpdated()
 {
-  MOZ_ASSERT(mSearchParams && mSearchParams->IsValid());
+  MOZ_ASSERT(mSearchParams);
 
   nsString search;
   mSearchParams->Serialize(search);
@@ -615,9 +608,11 @@ Link::URLSearchParamsUpdated()
 }
 
 void
-Link::URLSearchParamsNeedsUpdates()
+Link::UpdateURLSearchParams()
 {
-  MOZ_ASSERT(mSearchParams);
+  if (!mSearchParams) {
+    return;
+  }
 
   nsAutoCString search;
   nsCOMPtr<nsIURI> uri(GetURI());
@@ -629,7 +624,7 @@ Link::URLSearchParamsNeedsUpdates()
     }
   }
 
-  mSearchParams->ParseInput(search);
+  mSearchParams->ParseInput(search, this);
 }
 
 void
@@ -637,15 +632,18 @@ Link::CreateSearchParamsIfNeeded()
 {
   if (!mSearchParams) {
     mSearchParams = new URLSearchParams();
-    mSearchParams->SetObserver(this);
-    mSearchParams->Invalidate();
+    mSearchParams->AddObserver(this);
+    UpdateURLSearchParams();
   }
 }
 
 void
 Link::Unlink()
 {
-  mSearchParams = nullptr;
+  if (mSearchParams) {
+    mSearchParams->RemoveObserver(this);
+    mSearchParams = nullptr;
+  }
 }
 
 void

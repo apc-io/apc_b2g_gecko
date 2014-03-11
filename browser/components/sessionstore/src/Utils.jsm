@@ -43,26 +43,13 @@ this.Utils = Object.freeze({
            (prevChar == "." || prevChar == "/");
   },
 
-  swapMapEntries: function (map, key, otherKey) {
-    // Make sure that one or the other of these has an entry in the map,
-    // and let it be |key|.
-    if (!map.has(key)) {
-      [key, otherKey] = [otherKey, key];
-      if (!map.has(key)) {
-        return;
-      }
+  shallowCopy: function (obj) {
+    let retval = {};
+
+    for (let key of Object.keys(obj)) {
+      retval[key] = obj[key];
     }
 
-    // At this point, |key| is guaranteed to have an entry,
-    // although |otherKey| may not. Perform the swap.
-    let value = map.get(key);
-    if (map.has(otherKey)) {
-      let otherValue = map.get(otherKey);
-      map.set(key, otherValue);
-      map.set(otherKey, value);
-    } else {
-      map.set(otherKey, value);
-      map.delete(key);
-    }
+    return retval;
   }
 });

@@ -19,6 +19,7 @@ class PathCairo;
 class PathBuilderCairo : public PathBuilder
 {
 public:
+  MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(PathBuilderCairo)
   PathBuilderCairo(FillRule aFillRule);
 
   virtual void MoveTo(const Point &aPoint);
@@ -48,15 +49,16 @@ private: // data
 class PathCairo : public Path
 {
 public:
+  MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(PathCairo)
   PathCairo(FillRule aFillRule, std::vector<cairo_path_data_t> &aPathData, const Point &aCurrentPoint);
   PathCairo(cairo_t *aContext);
   ~PathCairo();
 
-  virtual BackendType GetBackendType() const { return BACKEND_CAIRO; }
+  virtual BackendType GetBackendType() const { return BackendType::CAIRO; }
 
-  virtual TemporaryRef<PathBuilder> CopyToBuilder(FillRule aFillRule = FILL_WINDING) const;
+  virtual TemporaryRef<PathBuilder> CopyToBuilder(FillRule aFillRule = FillRule::FILL_WINDING) const;
   virtual TemporaryRef<PathBuilder> TransformedCopyToBuilder(const Matrix &aTransform,
-                                                             FillRule aFillRule = FILL_WINDING) const;
+                                                             FillRule aFillRule = FillRule::FILL_WINDING) const;
 
   virtual bool ContainsPoint(const Point &aPoint, const Matrix &aTransform) const;
 

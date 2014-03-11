@@ -12,7 +12,7 @@
 #include "nsRenderingContext.h"
 #include "nsStyleContext.h"
 #include "nsIContent.h"
-#include "nsINameSpaceManager.h"
+#include "nsNameSpaceManager.h"
 #include "nsBoxLayoutState.h"
 #include "nsMenuBarListener.h"
 #include "nsXPIDLString.h"
@@ -68,7 +68,7 @@ NS_QUERYFRAME_HEAD(nsTextBoxFrame)
   NS_QUERYFRAME_ENTRY(nsTextBoxFrame)
 NS_QUERYFRAME_TAIL_INHERITING(nsTextBoxFrameSuper)
 
-NS_IMETHODIMP
+nsresult
 nsTextBoxFrame::AttributeChanged(int32_t         aNameSpaceID,
                                  nsIAtom*        aAttribute,
                                  int32_t         aModType)
@@ -166,7 +166,7 @@ public:
     {
     }
 
-    virtual bool ReflowFinished()
+    virtual bool ReflowFinished() MOZ_OVERRIDE
     {
         bool shouldFlush = false;
         nsTextBoxFrame* frame =
@@ -178,7 +178,7 @@ public:
         return shouldFlush;
     }
 
-    virtual void ReflowCallbackCanceled()
+    virtual void ReflowCallbackCanceled() MOZ_OVERRIDE
     {
         delete this;
     }
@@ -293,13 +293,16 @@ public:
 #endif
 
   virtual void Paint(nsDisplayListBuilder* aBuilder,
-                     nsRenderingContext* aCtx);
-  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap);
+                     nsRenderingContext* aCtx) MOZ_OVERRIDE;
+  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
+                           bool* aSnap) MOZ_OVERRIDE;
   NS_DISPLAY_DECL_NAME("XULTextBox", TYPE_XUL_TEXT_BOX)
 
-  virtual nsRect GetComponentAlphaBounds(nsDisplayListBuilder* aBuilder);
+  virtual nsRect GetComponentAlphaBounds(nsDisplayListBuilder* aBuilder) MOZ_OVERRIDE;
 
-  virtual void DisableComponentAlpha() { mDisableSubpixelAA = true; }
+  virtual void DisableComponentAlpha() MOZ_OVERRIDE {
+    mDisableSubpixelAA = true;
+  }
 
   void PaintTextToContext(nsRenderingContext* aCtx,
                           nsPoint aOffset,
@@ -582,7 +585,7 @@ nsTextBoxFrame::CalculateUnderline(nsRenderingContext& aRenderingContext)
     if (mAccessKeyInfo && mAccessKeyInfo->mAccesskeyIndex != kNotFound) {
          // Calculate all fields of mAccessKeyInfo which
          // are the same for both BiDi and non-BiDi frames.
-         const PRUnichar *titleString = mCroppedTitle.get();
+         const char16_t *titleString = mCroppedTitle.get();
          aRenderingContext.SetTextRunRTL(false);
          mAccessKeyInfo->mAccessWidth =
              aRenderingContext.GetWidth(titleString[mAccessKeyInfo->
@@ -657,7 +660,7 @@ nsTextBoxFrame::CalculateTitleForWidth(nsPresContext*      aPresContext,
             int length = mTitle.Length();
             int i;
             for (i = 0; i < length; ++i) {
-                PRUnichar ch = mTitle.CharAt(i);
+                char16_t ch = mTitle.CharAt(i);
                 // still in LTR mode
                 cwidth = aRenderingContext.GetWidth(ch);
                 if (twidth + cwidth > aWidth)
@@ -688,7 +691,7 @@ nsTextBoxFrame::CalculateTitleForWidth(nsPresContext*      aPresContext,
             int length = mTitle.Length();
             int i;
             for (i=length-1; i >= 0; --i) {
-                PRUnichar ch = mTitle.CharAt(i);
+                char16_t ch = mTitle.CharAt(i);
                 cwidth = aRenderingContext.GetWidth(ch);
                 if (twidth + cwidth > aWidth)
                     break;
@@ -724,7 +727,7 @@ nsTextBoxFrame::CalculateTitleForWidth(nsPresContext*      aPresContext,
             // determine how much of the string will fit in the max width
             nscoord charWidth = 0;
             nscoord totalWidth = 0;
-            PRUnichar ch;
+            char16_t ch;
             int leftPos, rightPos;
             nsAutoString leftString, rightString;
 
@@ -819,8 +822,8 @@ nsTextBoxFrame::UpdateAccessTitle()
     } else {
         // Try to check with
         // our default ellipsis (for non-localized addons) or ':'
-        const PRUnichar kLastChar = mTitle.Last();
-        if (kLastChar == PRUnichar(0x2026) || kLastChar == PRUnichar(':'))
+        const char16_t kLastChar = mTitle.Last();
+        if (kLastChar == char16_t(0x2026) || kLastChar == char16_t(':'))
             offset--;
     }
 
@@ -1089,8 +1092,8 @@ nsTextBoxFrame::GetBoxAscent(nsBoxLayoutState& aBoxLayoutState)
     return ascent;
 }
 
-#ifdef DEBUG
-NS_IMETHODIMP
+#ifdef DEBUG_FRAME_DUMP
+nsresult
 nsTextBoxFrame::GetFrameName(nsAString& aResult) const
 {
     MakeFrameName(NS_LITERAL_STRING("TextBox"), aResult);

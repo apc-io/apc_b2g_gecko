@@ -15,6 +15,7 @@
 #include "nsSVGPathGeometryFrame.h"
 
 using namespace mozilla::dom;
+using namespace mozilla::gfx;
 
 nsIFrame*
 NS_NewSVGMarkerFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
@@ -27,7 +28,7 @@ NS_IMPL_FRAMEARENA_HELPERS(nsSVGMarkerFrame)
 //----------------------------------------------------------------------
 // nsIFrame methods:
 
-NS_IMETHODIMP
+nsresult
 nsSVGMarkerFrame::AttributeChanged(int32_t  aNameSpaceID,
                                    nsIAtom* aAttribute,
                                    int32_t  aModType)
@@ -85,11 +86,11 @@ nsSVGMarkerFrame::GetCanvasTM(uint32_t aFor, nsIFrame* aTransformRoot)
   gfxMatrix markedTM = mMarkedFrame->GetCanvasTM(aFor, aTransformRoot);
   mInUse2 = false;
 
-  gfxMatrix markerTM = content->GetMarkerTransform(mStrokeWidth, mX, mY,
-                                                   mAutoAngle, mIsStart);
-  gfxMatrix viewBoxTM = content->GetViewBoxTransform();
+  Matrix markerTM = content->GetMarkerTransform(mStrokeWidth, mX, mY,
+                                                mAutoAngle, mIsStart);
+  Matrix viewBoxTM = content->GetViewBoxTransform();
 
-  return viewBoxTM * markerTM * markedTM;
+  return ThebesMatrix(viewBoxTM * markerTM) * markedTM;
 }
 
 static nsIFrame*
@@ -115,6 +116,9 @@ nsSVGMarkerFrame::PaintMark(nsRenderingContext *aContext,
   AutoMarkerReferencer markerRef(this, aMarkedFrame);
 
   SVGMarkerElement *marker = static_cast<SVGMarkerElement*>(mContent);
+  if (!marker->HasValidDimensions()) {
+    return NS_OK;
+  }
 
   const nsSVGViewBoxRect viewBox = marker->GetViewBoxRect();
 
@@ -153,7 +157,7 @@ nsSVGMarkerFrame::PaintMark(nsRenderingContext *aContext,
 }
 
 SVGBBox
-nsSVGMarkerFrame::GetMarkBBoxContribution(const gfxMatrix &aToBBoxUserspace,
+nsSVGMarkerFrame::GetMarkBBoxContribution(const Matrix &aToBBoxUserspace,
                                           uint32_t aFlags,
                                           nsSVGPathGeometryFrame *aMarkedFrame,
                                           const nsSVGMark *aMark,
@@ -170,6 +174,9 @@ nsSVGMarkerFrame::GetMarkBBoxContribution(const gfxMatrix &aToBBoxUserspace,
   AutoMarkerReferencer markerRef(this, aMarkedFrame);
 
   SVGMarkerElement *content = static_cast<SVGMarkerElement*>(mContent);
+  if (!content->HasValidDimensions()) {
+    return bbox;
+  }
 
   const nsSVGViewBoxRect viewBox = content->GetViewBoxRect();
 
@@ -183,11 +190,11 @@ nsSVGMarkerFrame::GetMarkBBoxContribution(const gfxMatrix &aToBBoxUserspace,
   mAutoAngle = aMark->angle;
   mIsStart = aMark->type == nsSVGMark::eStart;
 
-  gfxMatrix markerTM =
+  Matrix markerTM =
     content->GetMarkerTransform(mStrokeWidth, mX, mY, mAutoAngle, mIsStart);
-  gfxMatrix viewBoxTM = content->GetViewBoxTransform();
+  Matrix viewBoxTM = content->GetViewBoxTransform();
 
-  gfxMatrix tm = viewBoxTM * markerTM * aToBBoxUserspace;
+  Matrix tm = viewBoxTM * markerTM * aToBBoxUserspace;
 
   nsISVGChildFrame* child = do_QueryFrame(GetAnonymousChildFrame(this));
   // When we're being called to obtain the invalidation area, we need to
@@ -213,9 +220,11 @@ nsSVGMarkerFrame::SetParentCoordCtxProvider(SVGSVGElement *aContext)
 
 nsSVGMarkerFrame::AutoMarkerReferencer::AutoMarkerReferencer(
     nsSVGMarkerFrame *aFrame,
-    nsSVGPathGeometryFrame *aMarkedFrame)
+    nsSVGPathGeometryFrame *aMarkedFrame
+    MOZ_GUARD_OBJECT_NOTIFIER_PARAM_IN_IMPL)
       : mFrame(aFrame)
 {
+  MOZ_GUARD_OBJECT_NOTIFIER_INIT;
   mFrame->mInUse = true;
   mFrame->mMarkedFrame = aMarkedFrame;
 

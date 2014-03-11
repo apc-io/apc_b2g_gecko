@@ -55,7 +55,7 @@ class nsXPCComponents_utils_Sandbox : public nsIXPCComponents_utils_Sandbox,
 {
 public:
     // Aren't macros nice?
-    NS_DECL_THREADSAFE_ISUPPORTS
+    NS_DECL_ISUPPORTS
     NS_DECL_NSIXPCCOMPONENTS_UTILS_SANDBOX
     NS_DECL_NSIXPCSCRIPTABLE
 
@@ -170,7 +170,7 @@ SandboxImport(JSContext *cx, unsigned argc, Value *vp)
     }
 
     RootedId id(cx);
-    if (!JS_ValueToId(cx, StringValue(funname), id.address()))
+    if (!JS_ValueToId(cx, StringValue(funname), &id))
         return false;
 
     // We need to resolve the this object, because this function is used
@@ -294,7 +294,7 @@ ExportFunction(JSContext *cx, HandleValue vfunction, HandleValue vscope, HandleV
 
             RootedValue vname(cx);
             vname.setString(funName);
-            if (!JS_ValueToId(cx, vname, id.address()))
+            if (!JS_ValueToId(cx, vname, &id))
                 return false;
         }
         MOZ_ASSERT(JSID_IS_STRING(id));
@@ -354,9 +354,9 @@ ExportFunction(JSContext *cx, unsigned argc, jsval *vp)
 static bool
 GetFilenameAndLineNumber(JSContext *cx, nsACString &filename, unsigned &lineno)
 {
-    JS::RootedScript script(cx);
-    if (JS_DescribeScriptedCaller(cx, &script, &lineno)) {
-        if (const char *cfilename = JS_GetScriptFilename(cx, script)) {
+    JS::AutoFilename scriptFilename;
+    if (JS::DescribeScriptedCaller(cx, &scriptFilename, &lineno)) {
+        if (const char *cfilename = scriptFilename.get()) {
             filename.Assign(nsDependentCString(cfilename));
             return true;
         }
@@ -392,8 +392,8 @@ CloneNonReflectorsRead(JSContext *cx, JSStructuredCloneReader *reader, uint32_t 
 
             if (!JS_WrapObject(cx, &reflector))
                 return nullptr;
-            JS_ASSERT(WrapperFactory::IsXrayWrapper(reflector) ||
-                      IsReflector(reflector));
+            MOZ_ASSERT(WrapperFactory::IsXrayWrapper(reflector) ||
+                       IsReflector(reflector));
 
             return reflector;
         }
@@ -510,6 +510,7 @@ EvalInWindow(JSContext *cx, const nsAString &source, HandleObject scope, Mutable
         lineNo = 0;
     }
 
+    RootedObject cxGlobal(cx, JS::CurrentGlobalOrNull(cx));
     {
         // CompileOptions must be created from the context
         // we will execute this script in.
@@ -548,8 +549,9 @@ EvalInWindow(JSContext *cx, const nsAString &source, HandleObject scope, Mutable
             rval.set(UndefinedValue());
 
             // Then clone the exception.
-            if (CloneNonReflectors(cx, &exn))
-                JS_SetPendingException(cx, exn);
+            JSAutoCompartment ac(wndCx, cxGlobal);
+            if (CloneNonReflectors(wndCx, &exn))
+                js::SetPendingExceptionCrossContext(cx, exn);
 
             return false;
         }
@@ -664,7 +666,7 @@ static const JSClass SandboxClass = {
     XPCONNECT_GLOBAL_FLAGS_WITH_EXTRA_SLOTS(1),
     JS_PropertyStub,   JS_DeletePropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
     sandbox_enumerate, sandbox_resolve, sandbox_convert,  sandbox_finalize,
-    nullptr, nullptr, nullptr, nullptr, TraceXPCGlobal
+    nullptr, nullptr, nullptr, TraceXPCGlobal
 };
 
 static const JSFunctionSpec SandboxFunctions[] = {
@@ -693,7 +695,7 @@ NS_INTERFACE_MAP_BEGIN(nsXPCComponents_utils_Sandbox)
   NS_INTERFACE_MAP_ENTRY(nsIXPCComponents_utils_Sandbox)
   NS_INTERFACE_MAP_ENTRY(nsIXPCScriptable)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIXPCComponents_utils_Sandbox)
-NS_INTERFACE_MAP_END_THREADSAFE
+NS_INTERFACE_MAP_END
 
 NS_IMPL_ADDREF(nsXPCComponents_utils_Sandbox)
 NS_IMPL_RELEASE(nsXPCComponents_utils_Sandbox)
@@ -760,14 +762,14 @@ xpc::SandboxCallableProxyHandler::call(JSContext *cx, JS::Handle<JSObject*> prox
     // methods are always non-strict, we can just assume non-strict semantics
     // if the sandboxPrototype is an Xray Wrapper, which lets us appropriately
     // remap |this|.
-    JS::Value thisVal =
-      WrapperFactory::IsXrayWrapper(sandboxProxy) ? args.computeThis(cx) : args.thisv();
+    bool isXray = WrapperFactory::IsXrayWrapper(sandboxProxy);
+    RootedValue thisVal(cx, isXray ? args.computeThis(cx) : args.thisv());
     if (thisVal == ObjectValue(*sandboxGlobal)) {
         thisVal = ObjectValue(*js::GetProxyTargetObject(sandboxProxy));
     }
 
-    return JS::Call(cx, thisVal, js::GetProxyPrivate(proxy), args.length(), args.array(),
-                    args.rval());
+    RootedValue func(cx, js::GetProxyPrivate(proxy));
+    return JS::Call(cx, thisVal, func, args, args.rval());
 }
 
 xpc::SandboxCallableProxyHandler xpc::sandboxCallableProxyHandler;
@@ -789,7 +791,7 @@ WrapCallable(JSContext *cx, JSObject *callable, JSObject *sandboxProtoProxy)
 
     RootedValue priv(cx, ObjectValue(*callable));
     js::ProxyOptions options;
-    options.setCallable(true);
+    options.selectDefaultClass(true);
     return js::NewProxyObject(cx, &xpc::sandboxCallableProxyHandler,
                               priv, nullptr,
                               sandboxProtoProxy, options);
@@ -1053,6 +1055,9 @@ xpc::CreateSandboxObject(JSContext *cx, MutableHandleValue vp, nsISupports *prin
         compartmentOptions.setSameZoneAs(js::UncheckedUnwrap(options.sameZoneAs));
     else
         compartmentOptions.setZone(JS::SystemZone);
+
+    compartmentOptions.setInvisibleToDebugger(options.invisibleToDebugger);
+
     RootedObject sandbox(cx, xpc::CreateGlobalObject(cx, &SandboxClass,
                                                      principal, compartmentOptions));
     if (!sandbox)
@@ -1113,7 +1118,7 @@ xpc::CreateSandboxObject(JSContext *cx, MutableHandleValue vp, nsISupports *prin
         bool allowComponents = nsContentUtils::IsSystemPrincipal(principal) ||
                                nsContentUtils::IsExpandedPrincipal(principal);
         if (options.wantComponents && allowComponents &&
-            !nsXPCComponents::AttachComponentsObject(cx, GetObjectScope(sandbox)))
+            !GetObjectScope(sandbox)->AttachComponentsObject(cx))
             return NS_ERROR_XPC_UNEXPECTED;
 
         if (!XPCNativeWrapper::AttachNewConstructorObject(cx, sandbox))
@@ -1444,7 +1449,7 @@ OptionsBase::ParseId(const char *name, MutableHandleId prop)
     if (!found)
         return true;
 
-    return JS_ValueToId(mCx, value, prop.address());
+    return JS_ValueToId(mCx, value, prop);
 }
 
 /*
@@ -1486,6 +1491,7 @@ SandboxOptions::Parse()
            ParseBoolean("wantExportHelpers", &wantExportHelpers) &&
            ParseString("sandboxName", sandboxName) &&
            ParseObject("sameZoneAs", &sameZoneAs) &&
+           ParseBoolean("invisibleToDebugger", &invisibleToDebugger) &&
            ParseGlobalProperties() &&
            ParseValue("metadata", &metadata);
 }
@@ -1511,7 +1517,7 @@ AssembleSandboxMemoryReporterName(JSContext *cx, nsCString &sandboxName)
     if (frame) {
         nsCString location;
         int32_t lineNumber = 0;
-        frame->GetFilename(getter_Copies(location));
+        frame->GetFilename(location);
         frame->GetLineNumber(&lineNumber);
 
         sandboxName.AppendLiteral(" (from: ");
@@ -1630,7 +1636,7 @@ ContextHolder::~ContextHolder()
 
 nsresult
 xpc::EvalInSandbox(JSContext *cx, HandleObject sandboxArg, const nsAString& source,
-                   const char *filename, int32_t lineNo,
+                   const nsACString& filename, int32_t lineNo,
                    JSVersion jsVersion, bool returnStringOnly, MutableHandleValue rval)
 {
     JS_AbortIfWrongThread(JS_GetRuntime(cx));
@@ -1649,10 +1655,11 @@ xpc::EvalInSandbox(JSContext *cx, HandleObject sandboxArg, const nsAString& sour
     NS_ENSURE_TRUE(prin, NS_ERROR_FAILURE);
 
     nsAutoCString filenameBuf;
-    if (!filename) {
+    if (!filename.IsVoid()) {
+        filenameBuf.Assign(filename);
+    } else {
         // Default to the spec of the principal.
         nsJSPrincipals::get(prin)->GetScriptLocation(filenameBuf);
-        filename = filenameBuf.get();
         lineNo = 1;
     }
 
@@ -1675,8 +1682,7 @@ xpc::EvalInSandbox(JSContext *cx, HandleObject sandboxArg, const nsAString& sour
         JSAutoCompartment ac(sandcx, sandbox);
 
         JS::CompileOptions options(sandcx);
-        options.setPrincipals(nsJSPrincipals::get(prin))
-               .setFileAndLine(filename, lineNo);
+        options.setFileAndLine(filenameBuf.get(), lineNo);
         if (jsVersion != JSVERSION_DEFAULT)
                options.setVersion(jsVersion);
         JS::RootedObject rootedSandbox(sandcx, sandbox);
@@ -1739,11 +1745,11 @@ NonCloningFunctionForwarder(JSContext *cx, unsigned argc, Value *vp)
     RootedValue v(cx, js::GetFunctionNativeReserved(&args.callee(), 0));
     MOZ_ASSERT(v.isObject(), "weird function");
 
-    JSObject *obj = JS_THIS_OBJECT(cx, vp);
+    RootedObject obj(cx, JS_THIS_OBJECT(cx, vp));
     if (!obj) {
         return false;
     }
-    return JS_CallFunctionValue(cx, obj, v, args.length(), args.array(), vp);
+    return JS_CallFunctionValue(cx, obj, v, args, args.rval());
 }
 
 /*
@@ -1770,11 +1776,9 @@ CloningFunctionForwarder(JSContext *cx, unsigned argc, Value *vp)
 
         // JS API does not support any JSObject to JSFunction conversion,
         // so let's use JS_CallFunctionValue instead.
-        RootedValue functionVal(cx);
-        functionVal.setObject(*origFunObj);
+        RootedValue functionVal(cx, ObjectValue(*origFunObj));
 
-        if (!JS_CallFunctionValue(cx, nullptr, functionVal, args.length(), args.array(),
-                                  args.rval().address()))
+        if (!JS_CallFunctionValue(cx, JS::NullPtr(), functionVal, args, args.rval()))
             return false;
     }
 
@@ -1797,6 +1801,17 @@ xpc::NewFunctionForwarder(JSContext *cx, HandleId id, HandleObject callable, boo
     js::SetFunctionNativeReserved(funobj, 0, ObjectValue(*callable));
     vp.setObject(*funobj);
     return true;
+}
+
+bool
+xpc::NewFunctionForwarder(JSContext *cx, HandleObject callable, bool doclone,
+                          MutableHandleValue vp)
+{
+    RootedId emptyId(cx);
+    if (!JS_ValueToId(cx, JS_GetEmptyStringValue(cx), &emptyId))
+        return false;
+
+    return NewFunctionForwarder(cx, emptyId, callable, doclone, vp);
 }
 
 

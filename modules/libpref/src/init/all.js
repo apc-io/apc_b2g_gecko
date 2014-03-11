@@ -113,6 +113,9 @@ pref("dom.gamepad.non_standard_events.enabled", false);
 pref("dom.gamepad.non_standard_events.enabled", true);
 #endif
 
+// Whether the UndoManager API is enabled
+pref("dom.undo_manager.enabled", false);
+
 // Fastback caching - if this pref is negative, then we calculate the number
 // of content viewers to cache based on the amount of available memory.
 pref("browser.sessionhistory.max_total_viewers", -1);
@@ -161,13 +164,6 @@ pref("browser.helperApps.neverAsk.saveToDisk", "");
 pref("browser.helperApps.neverAsk.openFile", "");
 pref("browser.helperApps.deleteTempFileOnExit", false);
 
-#ifdef XP_WIN
-// By default, security zone information is stored in the Alternate Data Stream
-// of downloaded executable files on Windows.  This preference allows disabling
-// this feature, and thus the associated system-level execution prompts.
-pref("browser.download.saveZoneInformation", true);
-#endif
-
 // xxxbsmedberg: where should prefs for the toolkit go?
 pref("browser.chrome.toolbar_tips",         true);
 // 0 = Pictures Only, 1 = Text Only, 2 = Pictures and Text
@@ -177,6 +173,9 @@ pref("browser.chrome.toolbar_style",        2);
 pref("browser.chrome.image_icons.max_size", 1024);
 
 pref("browser.triple_click_selects_paragraph", true);
+
+// Print/Preview Shrink-To-Fit won't shrink below 20% for text-ish documents.
+pref("print.shrink-to-fit.scale-limit-percent", 20);
 
 // Media cache size in kilobytes
 pref("media.cache_size", 512000);
@@ -209,9 +208,7 @@ pref("media.fragmented-mp4.use-blank-decoder", false);
 #ifdef MOZ_RAW
 pref("media.raw.enabled", true);
 #endif
-#ifdef MOZ_OGG
 pref("media.ogg.enabled", true);
-#endif
 #ifdef MOZ_OPUS
 pref("media.opus.enabled", true);
 #endif
@@ -231,16 +228,18 @@ pref("media.apple.mp3.enabled", true);
 pref("media.navigator.enabled", true);
 pref("media.navigator.video.enabled", true);
 pref("media.navigator.load_adapt", false);
-pref("media.navigator.video.default_width",640);
-pref("media.navigator.video.default_height",480);
 pref("media.navigator.video.default_fps",30);
 pref("media.navigator.video.default_minfps",10);
 #ifdef MOZ_WIDGET_GONK
-pref("media.peerconnection.enabled", false);
-pref("media.peerconnection.video.enabled", false);
+pref("media.navigator.video.default_width",320);
+pref("media.navigator.video.default_height",240);
+pref("media.peerconnection.enabled", true);
+pref("media.peerconnection.video.enabled", true);
 pref("media.navigator.video.max_fs", 1200); // 640x480 == 1200mb
 pref("media.navigator.video.max_fr", 30);
 #else
+pref("media.navigator.video.default_width",640);
+pref("media.navigator.video.default_height",480);
 pref("media.peerconnection.enabled", true);
 pref("media.peerconnection.video.enabled", true);
 pref("media.navigator.video.max_fs", 0); // unrestricted
@@ -250,6 +249,12 @@ pref("media.navigator.permission.disabled", false);
 pref("media.peerconnection.default_iceservers", "[{\"url\": \"stun:stun.services.mozilla.com\"}]");
 pref("media.peerconnection.trickle_ice", true);
 pref("media.peerconnection.use_document_iceservers", true);
+// Do not enable identity before ensuring that the UX cannot be spoofed
+// see Bug 884573 for details
+// Do not enable identity before fixing domain comparison: see Bug 958741
+// Do not enable identity before fixing origin spoofing: see Bug 968335
+pref("media.peerconnection.identity.enabled", false);
+pref("media.peerconnection.identity.timeout", 5000);
 // These values (aec, agc, and noice) are from media/webrtc/trunk/webrtc/common_types.h
 // kXxxUnchanged = 0, kXxxDefault = 1, and higher values are specific to each 
 // setting (for Xxx = Ec, Agc, or Ns).  Defaults are all set to kXxxDefault here.
@@ -260,6 +265,19 @@ pref("media.peerconnection.agc_enabled", false);
 pref("media.peerconnection.agc", 1);
 pref("media.peerconnection.noise_enabled", false);
 pref("media.peerconnection.noise", 1);
+// Adjustments for OS mediastream+output+OS+input delay (lower bound)
+#if defined(XP_MACOSX)
+pref("media.peerconnection.capture_delay", 50);
+#elif defined(XP_WIN)
+pref("media.peerconnection.capture_delay", 50);
+#elif defined(ANDROID)
+pref("media.peerconnection.capture_delay", 100);
+#elif defined(XP_LINUX)
+pref("media.peerconnection.capture_delay", 70);
+#else
+// *BSD, others - merely a guess for now
+pref("media.peerconnection.capture_delay", 50);
+#endif
 #else
 #ifdef ANDROID
 pref("media.navigator.enabled", true);
@@ -279,9 +297,12 @@ pref("media.mediasource.enabled", false);
 #ifdef MOZ_WEBSPEECH
 pref("media.webspeech.recognition.enable", false);
 #endif
-
-// Whether to enable Web Audio support
-pref("media.webaudio.enabled", true);
+#ifdef MOZ_WEBM_ENCODER
+pref("media.encoder.webm.enabled", true);
+#endif
+#ifdef MOZ_OMX_ENCODER
+pref("media.encoder.omx.enabled", true);
+#endif
 
 // Whether to autostart a media element with an |autoplay| attribute
 pref("media.autoplay.enabled", true);
@@ -301,6 +322,9 @@ pref("media.audio_data.enabled", false);
 // 1 = STANDARD (Once locked, remain locked until scrolling ends)
 // 2 = STICKY (Allow lock to be broken, with hysteresis)
 pref("apz.axis_lock_mode", 0);
+
+// Whether to print the APZC tree for debugging
+pref("apz.printtree", false);
 
 #ifdef XP_MACOSX
 // Whether to run in native HiDPI mode on machines with "Retina"/HiDPI display;
@@ -366,17 +390,9 @@ pref("gfx.font_rendering.graphite.enabled", true);
 // (see http://mxr.mozilla.org/mozilla-central/ident?i=ShapingType)
 // Scripts not listed are grouped in the default category.
 // Set the pref to 255 to have all text shaped via the harfbuzz backend.
-#ifdef XP_WIN
-// Use harfbuzz for everything except Hangul (0x08). Harfbuzz doesn't yet
-// have a Hangul shaper, which means that the marks U+302E/302F would not
-// reorder properly in Malgun Gothic or similar fonts.
-pref("gfx.font_rendering.harfbuzz.scripts", 247);
-#else
-// Use harfbuzz for all scripts (except when using AAT fonts on OS X).
-// AFAICT, Core Text doesn't support full OpenType Hangul shaping anyway,
-// so there's no benefit to excluding it here.
+// Default setting:
+// We use harfbuzz for all scripts (except when using AAT fonts on OS X).
 pref("gfx.font_rendering.harfbuzz.scripts", 255);
-#endif
 
 #ifdef XP_WIN
 pref("gfx.font_rendering.directwrite.enabled", false);
@@ -437,6 +453,8 @@ pref("accessibility.tabfocus_applies_to_xul", true);
 
 // provide ability to turn on support for canvas focus rings
 pref("canvas.focusring.enabled", false);
+pref("canvas.customfocusring.enabled", false);
+pref("canvas.hitregions.enabled", false);
 
 // We want the ability to forcibly disable platform a11y, because
 // some non-a11y-related components attempt to bring it up.  See bug
@@ -536,8 +554,6 @@ pref("devtools.debugger.remote-port", 6000);
 pref("devtools.debugger.force-local", true);
 // Display a prompt when a new connection starts to accept/reject it
 pref("devtools.debugger.prompt-connection", true);
-// Temporary setting to enable webapps actors
-pref("devtools.debugger.enable-content-actors", true);
 // Block tools from seeing / interacting with certified apps
 pref("devtools.debugger.forbid-certified-apps", true);
 
@@ -620,8 +636,6 @@ pref("print.use_global_printsettings", true);
 
 // Save the Printings after each print job
 pref("print.save_print_settings", true);
-
-pref("print.whileInPrintPreview", true);
 
 // Cache old Presentation when going into Print Preview
 pref("print.always_cache_old_pres", false);
@@ -713,6 +727,8 @@ pref("dom.sysmsg.enabled", false);
 // Enable pre-installed applications.
 pref("dom.webapps.useCurrentProfile", false);
 
+pref("dom.cycle_collector.incremental", false);
+
 // Parsing perf prefs. For now just mimic what the old code did.
 #ifndef XP_WIN
 pref("content.sink.pending_event_mode", 0);
@@ -740,16 +756,12 @@ pref("javascript.options.strict",           false);
 #ifdef DEBUG
 pref("javascript.options.strict.debug",     true);
 #endif
-pref("javascript.options.baselinejit.content", true);
-pref("javascript.options.baselinejit.chrome",  true);
-pref("javascript.options.ion.content",      true);
-pref("javascript.options.ion.chrome",       false);
+pref("javascript.options.baselinejit",      true);
+pref("javascript.options.ion",              true);
 pref("javascript.options.asmjs",            true);
 pref("javascript.options.parallel_parsing", true);
 pref("javascript.options.ion.parallel_compilation", true);
-pref("javascript.options.jit_hardening", true);
-pref("javascript.options.typeinference.content", true);
-pref("javascript.options.typeinference.chrome", false);
+pref("javascript.options.typeinference",    true);
 // This preference limits the memory usage of javascript.
 // If you want to change these values for your device,
 // please find Bug 417052 comment 17 and Bug 456721
@@ -795,11 +807,6 @@ pref("security.fileuri.strict_origin_policy", true);
 // telemetry is also enabled as otherwise there is no way to report
 // the results
 pref("network.allow-experiments", true);
-#if defined(EARLY_BETA_OR_EARLIER)
-pref("network.dns.allow-srv-experiment", true);
-#else
-pref("network.dns.allow-srv-experiment", false);
-#endif
 
 // Transmit UDP busy-work to the LAN when anticipating low latency
 // network reads and on wifi to mitigate 802.11 Power Save Polling delays
@@ -879,6 +886,9 @@ pref("network.http.default-socket-type", "");
 // We set the timeout a little shorter to keep a reserve for cases when
 // the packet is lost or delayed on the route.
 pref("network.http.keep-alive.timeout", 115);
+
+// Timeout connections if an initial response is not received after 10 mins.
+pref("network.http.response.timeout", 300);
 
 // Limit the absolute number of http connections.
 // Note: the socket transport service will clamp the number below 256 if the OS
@@ -998,7 +1008,9 @@ pref("network.http.bypass-cachelock-threshold", 250);
 pref("network.http.spdy.enabled", true);
 pref("network.http.spdy.enabled.v3", true);
 pref("network.http.spdy.enabled.v3-1", true);
-pref("network.http.spdy.chunk-size", 4096);
+pref("network.http.spdy.enabled.http2draft", false);
+pref("network.http.spdy.enforce-tls-profile", true);
+pref("network.http.spdy.chunk-size", 16000);
 pref("network.http.spdy.timeout", 180);
 pref("network.http.spdy.coalesce-hostnames", true);
 pref("network.http.spdy.persistent-settings", false);
@@ -1006,7 +1018,7 @@ pref("network.http.spdy.ping-threshold", 58);
 pref("network.http.spdy.ping-timeout", 8);
 pref("network.http.spdy.send-buffer-size", 131072);
 pref("network.http.spdy.allow-push", true);
-pref("network.http.spdy.push-allowance", 65536);
+pref("network.http.spdy.push-allowance", 131072);
 
 pref("network.http.diagnostics", false);
 
@@ -1014,6 +1026,16 @@ pref("network.http.pacing.requests.enabled", true);
 pref("network.http.pacing.requests.min-parallelism", 6);
 pref("network.http.pacing.requests.hz", 100);
 pref("network.http.pacing.requests.burst", 32);
+
+// TCP Keepalive config for HTTP connections.
+pref("network.http.tcp_keepalive.short_lived_connections", true);
+// Max time from initial request during which conns are considered short-lived.
+pref("network.http.tcp_keepalive.short_lived_time", 60);
+// Idle time of TCP connection until first keepalive probe sent.
+pref("network.http.tcp_keepalive.short_lived_idle_time", 10);
+
+pref("network.http.tcp_keepalive.long_lived_connections", true);
+pref("network.http.tcp_keepalive.long_lived_idle_time", 600);
 
 // default values for FTP
 // in a DSCP environment this should be 40 (0x28, or AF11), per RFC-4594,
@@ -1272,6 +1294,8 @@ pref("network.seer.preconnect-min-confidence", 90);
 pref("network.seer.preresolve-min-confidence", 60);
 pref("network.seer.redirect-likely-confidence", 75);
 pref("network.seer.max-queue-size", 50);
+pref("network.seer.max-db-size", 157286400); // bytes
+pref("network.seer.preserve", 80); // percentage of seer data to keep when cleaning up
 
 
 // The following prefs pertain to the negotiate-auth extension (see bug 17578),
@@ -1394,6 +1418,7 @@ pref("intl.charsetmenu.composer.cache",     "");
 pref("intl.charsetmenu.browser.cache.size", 5);
 pref("intl.charset.detector",               "chrome://global/locale/intl.properties");
 pref("intl.charset.fallback.override",      "");
+pref("intl.charset.fallback.tld",           true);
 pref("intl.ellipsis",                       "chrome://global-platform/locale/intl.properties");
 pref("intl.locale.matchOS",                 false);
 // fallback charset list for Unicode conversion (converting from Unicode)
@@ -1406,6 +1431,7 @@ pref("font.language.group",                 "chrome://global/locale/intl.propert
 pref("intl.uidirection.ar", "rtl");
 pref("intl.uidirection.he", "rtl");
 pref("intl.uidirection.fa", "rtl");
+pref("intl.uidirection.ug", "rtl");
 pref("intl.uidirection.ur", "rtl");
 
 // use en-US hyphenation by default for content tagged with plain lang="en"
@@ -1759,6 +1785,9 @@ pref("layout.css.sticky.enabled", false);
 pref("layout.css.sticky.enabled", true);
 #endif
 
+// Is support for CSS "will-change" enabled?
+pref("layout.css.will-change.enabled", false);
+
 // Is support for CSS "text-align: true X" enabled?
 pref("layout.css.text-align-true-value.enabled", false);
 
@@ -1783,6 +1812,7 @@ pref("layout.css.prefixes.border-image", true);
 pref("layout.css.prefixes.transforms", true);
 pref("layout.css.prefixes.transitions", true);
 pref("layout.css.prefixes.animations", true);
+pref("layout.css.prefixes.box-sizing", true);
 
 // Is support for the :scope selector enabled?
 #ifdef RELEASE_BUILD
@@ -1792,11 +1822,7 @@ pref("layout.css.scope-pseudo.enabled", true);
 #endif
 
 // Is support for background-blend-mode enabled?
-#ifdef RELEASE_BUILD
-pref("layout.css.background-blend-mode.enabled", false);
-#else
 pref("layout.css.background-blend-mode.enabled", true);
-#endif
 
 // Is support for CSS vertical text enabled?
 pref("layout.css.vertical-text.enabled", false);
@@ -1821,6 +1847,9 @@ pref("layout.css.variables.enabled", false);
 #else
 pref("layout.css.variables.enabled", true);
 #endif
+
+// Is support for CSS overflow-clip-box enabled for non-UA sheets?
+pref("layout.css.overflow-clip-box.enabled", false);
 
 // pref for which side vertical scrollbars should be on
 // 0 = end-side in UI direction
@@ -1873,13 +1902,6 @@ pref("dom.max_script_run_time", 10);
 // If true, ArchiveReader will be enabled
 pref("dom.archivereader.enabled", false);
 
-// If true, Promise will be enabled
-#ifdef RELEASE_BUILD
-pref("dom.promise.enabled", false);
-#else
-pref("dom.promise.enabled", true);
-#endif
-
 // Hang monitor timeout after which we kill the browser, in seconds
 // (0 is disabled)
 // Disabled on all platforms per bug 705748 until the found issues are
@@ -1900,6 +1922,11 @@ pref("plugins.enumerable_names", "Java,Nexus Personal,QuickTime,Shockwave");
 
 // The default value for nsIPluginTag.enabledState (STATE_ENABLED = 2)
 pref("plugin.default.state", 2);
+
+// The MIME type that should bind to legacy java-specific invocations like
+// <applet> and <object data="java:foo">. Setting this to a non-java MIME type
+// is undefined behavior.
+pref("plugin.java.mime", "application/x-java-vm");
 
 // How long in minutes we will allow a plugin to work after the user has chosen
 // to allow it "now"
@@ -2003,7 +2030,6 @@ pref("font.minimum-size.tr", 0);
 pref("font.minimum-size.x-cans", 0);
 pref("font.minimum-size.x-western", 0);
 pref("font.minimum-size.x-unicode", 0);
-pref("font.minimum-size.x-user-def", 0);
 
 /*
  * A value greater than zero enables font size inflation for
@@ -2557,11 +2583,15 @@ pref("intl.keyboard.per_window_layout", false);
 
 #ifdef NS_ENABLE_TSF
 // Enable/Disable TSF support
-pref("intl.enable_tsf_support", false);
+pref("intl.tsf.enable", false);
 
-// We need to notify the layout change to TSF, but we cannot check the actual
-// change now, therefore, we always notify it by this fequency.
-pref("intl.tsf.on_layout_change_interval", 100);
+// Support IMEs implemented with IMM in TSF mode.
+pref("intl.tsf.support_imm", true);
+
+// Enables/Disables hack for specific TIP.
+
+// Whether creates native caret for ATOK or not.
+pref("intl.tsf.hack.atok.create_native_caret", true);
 #endif
 
 // See bug 448927, on topmost panel, some IMEs are not usable on Windows.
@@ -3037,202 +3067,6 @@ pref("mousewheel.enable_pixel_scrolling", true);
 # XP_MACOSX
 #endif
 
-#ifdef XP_OS2
-
-pref("ui.key.menuAccessKeyFocuses", true);
-
-pref("font.alias-list", "sans,sans-serif,serif,monospace,Tms Rmn,Helv,Courier,Times New Roman");
-
-pref("font.mathfont-family", "MathJax_Main, STIXNonUnicode, STIXSizeOneSym, STIXSize1, STIXGeneral, Asana Math, DejaVu Sans");
-
-// Languages only need lists if we have a default that might not be available.
-// Tms Rmn and Helv cannot be used by Thebes but the OS/2 version of FontConfig
-// maps them to Times New Roman and Helvetica, respectively. Those fonts and
-// Courier are available on OS/2 by default.
-
-pref("font.name.serif.ar", "Tms Rmn");
-pref("font.name.sans-serif.ar", "Helv");
-pref("font.name.monospace.ar", "Courier");
-
-pref("font.name.serif.el", "Tms Rmn");
-pref("font.name.sans-serif.el", "Helv");
-pref("font.name.monospace.el", "Courier");
-
-pref("font.name.serif.he", "Tms Rmn");
-pref("font.name.sans-serif.he", "Helv");
-pref("font.name.monospace.he", "Courier");
-
-pref("font.name.serif.ja", "Times New Roman WT J");
-pref("font.name-list.serif.ja", "Times New Roman WT J, Times New Roman WT, Times New Roman MT 30, Tms Rmn");
-pref("font.name.sans-serif.ja", "Helv");
-pref("font.name.monospace.ja", "Kochi Gothic");
-pref("font.name-list.monospace.ja", "Kochi Gothic, Kochi Mincho, Courier New, Courier");
-
-pref("font.name.serif.ko", "Times New Roman WT K");
-pref("font.name-list.serif.ko", "Times New Roman WT K, Times New Roman WT, Times New Roman MT 30, Tms Rmn");
-pref("font.name.sans-serif.ko", "Helv");
-pref("font.name.monospace.ko", "Courier");
-
-pref("font.name.serif.th", "Tms Rmn");
-pref("font.name.sans-serif.th", "Helv");
-pref("font.name.monospace.th", "Courier");
-
-pref("font.name.serif.tr", "Tms Rmn");
-pref("font.name.sans-serif.tr", "Helv");
-pref("font.name.monospace.tr", "Courier");
-
-pref("font.name.serif.x-baltic", "Tms Rmn");
-pref("font.name.sans-serif.x-baltic", "Helv");
-pref("font.name.monospace.x-baltic", "Courier");
-
-pref("font.name.serif.x-central-euro", "Tms Rmn");
-pref("font.name.sans-serif.x-central-euro", "Helv");
-pref("font.name.monospace.x-central-euro", "Courier");
-
-pref("font.name.serif.x-cyrillic", "Tms Rmn");
-pref("font.name.sans-serif.x-cyrillic", "Helv");
-pref("font.name.monospace.x-cyrillic", "Courier");
-
-// Unicode fonts
-// Fontconfig will match substrings, so that we only need to list e.g.
-// Times New Roman WT and it will search for the J, SC, TC, K variants.
-// The DejaVu fonts are shipped with eCS, so list them first but include other
-// fonts that OS/2 users are likely to have.
-pref("font.name.serif.x-unicode", "Times New Roman MT 30");
-pref("font.name-list.serif.x-unicode", "DejaVu Serif, FreeSerif, Times New Roman WT, Times New Roman MT 30, Tms Rmn");
-pref("font.name.sans-serif.x-unicode", "Lucida Sans Unicode");
-pref("font.name-list.sans-serif.x-unicode", "DejaVu Sans, FreeSans, Arial Unicode, Lucida Sans Unicode, Helv");
-pref("font.name.monospace.x-unicode", "DejaVu Sans Mono");
-pref("font.name-list.monospace.x-unicode", "DejaVu Sans Mono, FreeMono, Andale Mono, Courier New, Courier");
-pref("font.name.fantasy.x-unicode", "Times New Roman MT 30");
-pref("font.name-list.fantasy.x-unicode", "DejaVu Serif, FreeSerif, Times New Roman WT, Times New Roman MT 30");
-pref("font.name.cursive.x-unicode", "Times New Roman MT 30");
-pref("font.name-list.cursive.x-unicode", "DejaVu Serif, FreeSerif, Times New Roman WT, Times New Roman MT 30");
-
-pref("font.name.serif.x-western", "Tms Rmn");
-pref("font.name.sans-serif.x-western", "Helv");
-pref("font.name.monospace.x-western", "Courier");
-
-pref("font.name.serif.zh-CN", "Times New Roman WT SC");
-pref("font.name-list.serif.zh_CN", "Times New Roman WT SC, Times New Roman MT 30, Times New Roman WT, Tms Rmn");
-pref("font.name.sans-serif.zh-CN", "Helv");
-pref("font.name.monospace.zh-CN", "Courier");
-
-pref("font.name.serif.zh-TW", "Times New Roman WT TC");
-pref("font.name-list.serif.zh-TW", "Times New Roman WT TC, Times New Roman MT 30, Times New Roman WT, Tms Rmn");
-pref("font.name.sans-serif.zh-TW", "Helv");
-pref("font.name.monospace.zh-TW", "Courier");
-
-// just copied values from zh-TW
-pref("font.name.serif.zh-HK", "Times New Roman WT TC");
-pref("font.name-list.serif.zh-HK", "Times New Roman WT TC, Times New Roman MT 30, Times New Roman WT, Tms Rmn");
-pref("font.name.sans-serif.zh-HK", "Helv");
-pref("font.name.monospace.zh-HK", "Courier");
-
-pref("font.default", "serif");
-
-pref("font.default.ar", "serif");
-pref("font.size.variable.ar", 16);
-pref("font.size.fixed.ar", 13);
-
-pref("font.default.el", "serif");
-pref("font.size.variable.el", 16);
-pref("font.size.fixed.el", 13);
-
-pref("font.default.he", "serif");
-pref("font.size.variable.he", 16);
-pref("font.size.fixed.he", 13);
-
-pref("font.default.ja", "serif");
-pref("font.size.variable.ja", 16);
-pref("font.size.fixed.ja", 16);
-
-pref("font.default.ko", "serif");
-pref("font.size.variable.ko", 16);
-pref("font.size.fixed.ko", 16);
-
-pref("font.default.th", "serif");
-pref("font.size.variable.th", 16);
-pref("font.size.fixed.th", 13);
-
-pref("font.default.tr", "serif");
-pref("font.size.variable.tr", 16);
-pref("font.size.fixed.tr", 13);
-
-pref("font.default.x-baltic", "serif");
-pref("font.size.variable.x-baltic", 16);
-pref("font.size.fixed.x-baltic", 13);
-
-pref("font.default.x-central-euro", "serif");
-pref("font.size.variable.x-central-euro", 16);
-pref("font.size.fixed.x-central-euro", 13);
-
-pref("font.default.x-cyrillic", "serif");
-pref("font.size.variable.x-cyrillic", 16);
-pref("font.size.fixed.x-cyrillic", 13);
-
-pref("font.default.x-devanagari", "serif");
-pref("font.size.variable.x-devanagari", 16);
-pref("font.size.fixed.x-devanagari", 13);
-
-pref("font.default.x-tamil", "serif");
-pref("font.size.variable.x-tamil", 16);
-pref("font.size.fixed.x-tamil", 13);
-
-pref("font.default.x-unicode", "serif");
-pref("font.size.variable.x-unicode", 16);
-pref("font.size.fixed.x-unicode", 13);
-
-pref("font.default.x-western", "serif");
-pref("font.size.variable.x-western", 16);
-pref("font.size.fixed.x-western", 13);
-
-pref("font.default.zh-CN", "serif");
-pref("font.size.variable.zh-CN", 16);
-pref("font.size.fixed.zh-CN", 16);
-
-pref("font.default.zh-TW", "serif");
-pref("font.size.variable.zh-TW", 16);
-pref("font.size.fixed.zh-TW", 16);
-
-pref("font.default.zh-HK", "serif");
-pref("font.size.variable.zh-HK", 16);
-pref("font.size.fixed.zh-HK", 16);
-
-pref("netinst.profile.show_profile_wizard", true); 
-
-pref("middlemouse.paste", true);
-
-// override double-click word selection behavior.
-pref("layout.word_select.eat_space_to_next_word", true);
-pref("layout.word_select.stop_at_punctuation", false);
-
-// If false, will always use closest matching size for a given
-// image font.  If true, will substitute a vector font for a given
-// image font if the given size is smaller/larger than can be handled
-// by the image font.
-pref("browser.display.substitute_vector_fonts", true);
-
-// print_extra_margin enables platforms to specify an extra gap or margin
-// around the content of the page for Print Preview only
-pref("print.print_extra_margin", 90); // twips (90 twips is an eigth of an inch)
-
-pref("mail.compose.max_recycled_windows", 0);
-
-// Disable IPv6 name lookups by default.
-// This is because OS/2 doesn't support IPv6
-pref("network.dns.disableIPv6", true);
-
-// IMEs of OS/2 might use non-topmost windows for topmost <panel> element,
-// see bug 451015. If there are other problems by this value, we may need to
-// change this value.
-pref("ui.panel.default_level_parent", false);
-
-pref("mousewheel.system_scroll_override_on_root_content.enabled", false);
-
-# OS2
-#endif
-
 #ifdef ANDROID
 // Handled differently under Mac/Windows
 pref("network.protocol-handler.warn-external.file", false);
@@ -3330,10 +3164,6 @@ pref("font.name.serif.x-unicode", "Charis SIL Compact");
 pref("font.name.sans-serif.x-unicode", "Fira Sans OT");
 pref("font.name.monospace.x-unicode", "Fira Mono OT");
 
-pref("font.name.serif.x-user-def", "Charis SIL Compact");
-pref("font.name.sans-serif.x-user-def", "Fira Sans OT");
-pref("font.name.monospace.x-user-def", "Fira Mono OT");
-
 pref("font.name.serif.x-western", "Charis SIL Compact");
 pref("font.name.sans-serif.x-western", "Fira Sans OT");
 pref("font.name.monospace.x-western", "Fira Mono OT");
@@ -3415,12 +3245,6 @@ pref("font.name.monospace.x-unicode", "Droid Sans Mono");
 pref("font.name-list.serif.x-unicode", "Droid Serif");
 pref("font.name-list.sans-serif.x-unicode", "Clear Sans, Roboto, Droid Sans");
 
-pref("font.name.serif.x-user-def", "Charis SIL Compact");
-pref("font.name.sans-serif.x-user-def", "Clear Sans");
-pref("font.name.monospace.x-user-def", "Droid Sans Mono");
-pref("font.name-list.serif.x-user-def", "Droid Serif");
-pref("font.name-list.sans-serif.x-user-def", "Clear Sans, Roboto, Droid Sans");
-
 pref("font.name.serif.x-western", "Charis SIL Compact");
 pref("font.name.sans-serif.x-western", "Clear Sans");
 pref("font.name.monospace.x-western", "Droid Sans Mono");
@@ -3496,10 +3320,6 @@ pref("font.size.fixed.x-cyrillic", 12);
 pref("font.default.x-unicode", "sans-serif");
 pref("font.size.variable.x-unicode", 16);
 pref("font.size.fixed.x-unicode", 12);
-
-pref("font.default.x-user-def", "sans-serif");
-pref("font.size.variable.x-user-def", 16);
-pref("font.size.fixed.x-user-def", 12);
 
 pref("font.default.x-western", "sans-serif");
 pref("font.size.variable.x-western", 16);
@@ -3693,10 +3513,6 @@ pref("font.name.serif.x-unicode", "serif");
 pref("font.name.sans-serif.x-unicode", "sans-serif");
 pref("font.name.monospace.x-unicode", "monospace");
 
-pref("font.name.serif.x-user-def", "serif");
-pref("font.name.sans-serif.x-user-def", "sans-serif");
-pref("font.name.monospace.x-user-def", "monospace");
-
 pref("font.name.serif.x-western", "serif");
 pref("font.name.sans-serif.x-western", "sans-serif");
 pref("font.name.monospace.x-western", "monospace");
@@ -3757,10 +3573,6 @@ pref("font.size.fixed.x-cyrillic", 12);
 pref("font.default.x-unicode", "serif");
 pref("font.size.variable.x-unicode", 16);
 pref("font.size.fixed.x-unicode", 12);
-
-pref("font.default.x-user-def", "serif");
-pref("font.size.variable.x-user-def", 16);
-pref("font.size.fixed.x-user-def", 12);
 
 pref("font.default.x-western", "serif");
 pref("font.size.variable.x-western", 16);
@@ -3861,7 +3673,11 @@ pref("ui.panel.default_level_parent", true);
 
 pref("mousewheel.system_scroll_override_on_root_content.enabled", false);
 
-pref("ui.key.menuAccessKeyFocuses", true);
+#if MOZ_WIDGET_GTK == 2
+pref("intl.ime.use_simple_context_on_password_field", true);
+#else
+pref("intl.ime.use_simple_context_on_password_field", false);
+#endif
 
 # XP_UNIX
 #endif
@@ -3900,9 +3716,8 @@ pref("print.print_command", "lp -c -s ${MOZ_PRINTER_NAME:+-d\"$MOZ_PRINTER_NAME\
 pref("signon.rememberSignons",              true);
 pref("signon.autofillForms",                true);
 pref("signon.autologin.proxy",              false);
+pref("signon.storeWhenAutocompleteOff",     true);
 pref("signon.debug",                        false);
-// Override autocomplete=false for password manager
-pref("signon.overrideAutocomplete",         false);
 
 // Satchel (Form Manager) prefs
 pref("browser.formfill.debug",            false);
@@ -4058,6 +3873,7 @@ pref("webgl.lose-context-on-heap-minimize", false);
 pref("webgl.can-lose-context-in-foreground", true);
 pref("webgl.max-warnings-per-context", 32);
 pref("webgl.enable-draft-extensions", false);
+pref("webgl.enable-privileged-extensions", false);
 #ifdef MOZ_WIDGET_GONK
 pref("gfx.gralloc.fence-with-readpixels", false);
 #endif
@@ -4070,6 +3886,22 @@ pref("stagefright.disabled", false);
 #ifdef XP_WIN
 // The default TCP send window on Windows is too small, and autotuning only occurs on receive
 pref("network.tcp.sendbuffer", 131072);
+#endif
+// TCP Keepalive
+pref("network.tcp.keepalive.enabled", true);
+// Default idle time before first TCP keepalive probe; same time for interval
+// between successful probes. Can be overridden in socket transport API.
+// Win, Linux and Mac.
+pref("network.tcp.keepalive.idle_time", 600); // seconds; 10 mins
+// Default timeout for retransmission of unack'd keepalive probes.
+// Win and Linux only; not configurable on Mac.
+#if defined(XP_UNIX) && !defined(XP_MACOSX) || defined(XP_WIN)
+pref("network.tcp.keepalive.retry_interval", 1); // seconds
+#endif
+// Default maximum probe retransmissions.
+// Linux only; not configurable on Win and Mac; fixed at 10 and 8 respectively.
+#ifdef XP_UNIX && !defined(XP_MACOSX)
+pref("network.tcp.keepalive.probe_count", 4);
 #endif
 
 // Whether to disable acceleration for all widgets.
@@ -4100,22 +3932,33 @@ pref("layers.scroll-graph", false);
 
 // Set the default values, and then override per-platform as needed
 pref("layers.offmainthreadcomposition.enabled", false);
+// Compositor target frame rate. NOTE: If vsync is enabled the compositor
+// frame rate will still be capped.
+// -1 -> default (match layout.frame_rate or 60 FPS)
+// 0  -> full-tilt mode: Recomposite even if not transaction occured.
+pref("layers.offmainthreadcomposition.frame-rate", -1);
 // Whether to use the deprecated texture architecture rather than the new one.
-pref("layers.use-deprecated-textures", true);
+#ifndef XP_WIN
 // Asynchonous video compositing using the ImageBridge IPDL protocol.
 // requires off-main-thread compositing.
+// Never works on Windows, so no point pref'ing it on.
 pref("layers.async-video.enabled",false);
+pref("layers.use-deprecated-textures", true);
+#endif
+
+#ifdef MOZ_X11
+// OMTC off by default on Linux, but if activated, use new textures and async-video.
+pref("layers.async-video.enabled", true);
+#endif
 
 #ifdef XP_MACOSX
 pref("layers.offmainthreadcomposition.enabled", true);
-pref("layers.use-deprecated-textures", false);
 pref("layers.async-video.enabled",true);
 #endif
 
 // ANDROID covers android and b2g
 #ifdef ANDROID
 pref("layers.offmainthreadcomposition.enabled", true);
-pref("layers.use-deprecated-textures", false);
 pref("layers.async-video.enabled",true);
 #endif
 
@@ -4128,8 +3971,9 @@ pref("layers.offmainthreadcomposition.force-basic", false);
 
 // Whether to animate simple opacity and transforms on the compositor
 pref("layers.offmainthreadcomposition.async-animations", false);
-// Whether to prefer normal memory over shared memory. Ignored with cross-process compositing
-pref("layers.prefer-memory-over-shmem", true);
+
+// Whether to log information about off main thread animations to stderr
+pref("layers.offmainthreadcomposition.log-animations", false);
 
 pref("layers.bufferrotation.enabled", true);
 
@@ -4262,6 +4106,9 @@ pref("dom.w3c_touch_events.enabled", 2);
 // W3C draft pointer events
 pref("dom.w3c_pointer_events.enabled", false);
 
+// W3C touch-action css property (related to touch and pointer events)
+pref("layout.css.touch_action.enabled", false);
+
 // enable JS dump() function.
 pref("browser.dom.window.dump.enabled", false);
 
@@ -4306,14 +4153,20 @@ pref("memory.free_dirty_pages", false);
 pref("memory.system_memory_reporter", false);
 #endif
 
+// Don't dump memory reports on OOM, by default.
+pref("memory.dump_reports_on_oom", false);
+
+// Number of stack frames to capture in createObjectURL for about:memory.
+pref("memory.blob_report.stack_frames", 0);
+
 pref("social.enabled", false);
 // comma separated list of domain origins (e.g. https://domain.com) for
 // providers that can install from their own website without user warnings.
 // entries are
 pref("social.whitelist", "https://mozsocial.cliqz.com,https://now.msn.com,https://mixi.jp");
-// omma separated list of domain origins (e.g. https://domain.com) for directory
-// websites (e.g. AMO) that can install providers for other sites
-pref("social.directories", "https://addons.mozilla.org");
+// comma separated list of domain origins (e.g. https://domain.com) for
+// directory websites (e.g. AMO) that can install providers for other sites
+pref("social.directories", "https://activations.mozilla.org");
 // remote-install allows any website to activate a provider, with extended UI
 // notifying user of installation. we can later pref off remote install if
 // necessary. This does not affect whitelisted and directory installs.
@@ -4478,3 +4331,12 @@ pref("urlclassifier.download_allow_table", "");
 
 // Turn off Spatial navigation by default.
 pref("snav.enabled", false);
+
+// Wakelock is disabled by default.
+pref("dom.wakelock.enabled", false);
+
+// The URL of the Firefox Accounts auth server backend
+pref("identity.fxaccounts.auth.uri", "https://api.accounts.firefox.com/v1");
+
+// disable mozsample size for now
+pref("image.mozsamplesize.enabled", false);

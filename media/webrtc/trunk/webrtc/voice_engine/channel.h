@@ -264,14 +264,19 @@ public:
     int GetRemoteRTCP_CNAME(char cName[256]);
     int GetRemoteRTCPData(unsigned int& NTPHigh, unsigned int& NTPLow,
                           unsigned int& timestamp,
-                          unsigned int& playoutTimestamp, unsigned int* jitter,
-                          unsigned short* fractionLost);
+                          unsigned int& playoutTimestamp,
+                          unsigned int& sendPacketCount,
+                          unsigned int& sendOctetCount,
+                          unsigned int* jitter,
+                          unsigned short* fractionLost,
+                          unsigned int* cumulativeLost);
     int SendApplicationDefinedRTCPPacket(unsigned char subType,
                                          unsigned int name, const char* data,
                                          unsigned short dataLengthInBytes);
     int GetRTPStatistics(unsigned int& averageJitterMs,
                          unsigned int& maxJitterMs,
-                         unsigned int& discardedPackets);
+                         unsigned int& discardedPackets,
+                         unsigned int& cumulativeLost);
     int GetRemoteRTCPSenderInfo(SenderInfo* sender_info);
     int GetRemoteRTCPReportBlocks(std::vector<ReportBlock>* report_blocks);
     int GetRTPStatistics(CallStatistics& stats);

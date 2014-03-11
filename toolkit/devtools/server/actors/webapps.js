@@ -120,7 +120,7 @@ function WebappsActor(aConnection) {
   promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js").Promise;
 
   // Keep reference of already created app actors.
-  // key: app frame message manager, value: ContentTabActor's grip() value
+  // key: app frame message manager, value: ContentActor's grip() value
   this._appActorsMap = new Map();
 
   this.conn = aConnection;
@@ -165,12 +165,12 @@ WebappsActor.prototype = {
     reg.webapps[aId] = aApp;
     reg.updatePermissionsForApp(aId);
 
-    reg._readManifests([{ id: aId }], function(aResult) {
+    reg._readManifests([{ id: aId }]).then((aResult) => {
       let manifest = aResult[0].manifest;
       aApp.name = manifest.name;
       reg.updateAppHandlers(null, manifest, aApp);
 
-      reg._saveApps(function() {
+      reg._saveApps().then(() => {
         aApp.manifest = manifest;
 
         // Needed to evict manifest cache on content side
@@ -264,17 +264,8 @@ WebappsActor.prototype = {
       if (aManifest) {
         return promise.resolve(aManifest);
       } else {
-        let deferred = promise.defer();
-        let manFile = aDir.clone();
-        manFile.append("manifest.webapp");
-        DOMApplicationRegistry._loadJSONAsync(manFile, function(aManifest) {
-          if (!aManifest) {
-            deferred.reject("Error parsing manifest.webapp.");
-          } else {
-            deferred.resolve(aManifest);
-          }
-        });
-        return deferred.promise;
+        let manFile = OS.Path.join(aDir.path, "manifest.webapp");
+        return AppsUtils.loadJSONAsync(manFile);
       }
     }
     function checkSideloading(aManifest) {
@@ -285,13 +276,10 @@ WebappsActor.prototype = {
       // The destination directory for this app.
       let installDir = DOMApplicationRegistry._getAppDir(aId);
       if (aManifest) {
-        let deferred = promise.defer();
-        let manFile = installDir.clone();
-        manFile.append("manifest.webapp");
-        DOMApplicationRegistry._writeFile(manFile, JSON.stringify(aManifest), function () {
-          deferred.resolve(aAppType);
+        let manFile = OS.Path.join(installDir.path, "manifest.webapp");
+        return DOMApplicationRegistry._writeFile(manFile, JSON.stringify(aManifest)).then(() => {
+          return aAppType;
         });
-        return deferred.promise;
       } else {
         let manFile = aDir.clone();
         manFile.append("manifest.webapp");
@@ -304,21 +292,16 @@ WebappsActor.prototype = {
         return { metadata: aMetadata, appType: aAppType };
       }
       // Read the origin and manifest url from metadata.json
-      let deferred = promise.defer();
-      let metaFile = aDir.clone();
-      metaFile.append("metadata.json");
-      DOMApplicationRegistry._loadJSONAsync(metaFile, function(aMetadata) {
+      let metaFile = OS.Path.join(aDir.path, "metadata.json");
+      return AppsUtils.loadJSONAsync(metaFile).then((aMetadata) => {
         if (!aMetadata) {
-          deferred.reject("Error parsing metadata.json.");
-          return;
+          throw("Error parsing metadata.json.");
         }
         if (!aMetadata.origin) {
-          deferred.reject("Missing 'origin' property in metadata.json");
-          return;
+          throw("Missing 'origin' property in metadata.json");
         }
-        deferred.resolve({ metadata: aMetadata, appType: aAppType });
+        return { metadata: aMetadata, appType: aAppType };
       });
-      return deferred.promise;
     }
     let runnable = {
       run: function run() {
@@ -581,15 +564,15 @@ WebappsActor.prototype = {
       return { error: "appNotFound" };
     }
 
-    if (this._isAppAllowedForManifest(app.manifestURL)) {
-      let deferred = promise.defer();
-      reg.getManifestFor(manifestURL, function (manifest) {
+    return this._isAppAllowedForURL(app.manifestURL).then(allowed => {
+      if (!allowed) {
+        return { error: "forbidden" };
+      }
+      return reg.getManifestFor(manifestURL).then(function (manifest) {
         app.manifest = manifest;
-        deferred.resolve({app: app});
+        return { app: app };
       });
-      return deferred.promise;
-    }
-    return { error: "forbidden" };
+    });
   },
 
   _areCertifiedAppsAllowed: function wa__areCertifiedAppsAllowed() {
@@ -645,7 +628,7 @@ WebappsActor.prototype = {
     let reg = DOMApplicationRegistry;
     let id = reg._appIdForManifestURL(aManifestURL);
 
-    reg._readManifests([{ id: id }], function (aResults) {
+    reg._readManifests([{ id: id }]).then((aResults) => {
       deferred.resolve(aResults[0].manifest);
     });
 
@@ -694,7 +677,7 @@ WebappsActor.prototype = {
       } catch(e) {
         deferred.resolve({
           error: "noIcon",
-          message: "The icon file '" + iconURL + "' doesn't exists"
+          message: "The icon file '" + iconURL + "' doesn't exist"
         });
         return;
       }
@@ -806,73 +789,6 @@ WebappsActor.prototype = {
     });
   },
 
-  _connectToApp: function (aFrame) {
-    let deferred = Promise.defer();
-
-    let mm = aFrame.QueryInterface(Ci.nsIFrameLoaderOwner).frameLoader.messageManager;
-    mm.loadFrameScript("resource://gre/modules/devtools/server/child.js", false);
-
-    let childTransport, prefix;
-
-    let onActorCreated = makeInfallible(function (msg) {
-      mm.removeMessageListener("debug:actor", onActorCreated);
-
-      dump("***** Got debug:actor\n");
-      let { actor, appId } = msg.json;
-      prefix = msg.json.prefix;
-
-      // Pipe Debugger message from/to parent/child via the message manager
-      childTransport = new ChildDebuggerTransport(mm, prefix);
-      childTransport.hooks = {
-        onPacket: this.conn.send.bind(this.conn),
-        onClosed: function () {}
-      };
-      childTransport.ready();
-
-      this.conn.setForwarding(prefix, childTransport);
-
-      debug("establishing forwarding for app with prefix " + prefix);
-
-      this._appActorsMap.set(mm, actor);
-
-      deferred.resolve(actor);
-    }).bind(this);
-    mm.addMessageListener("debug:actor", onActorCreated);
-
-    let onMessageManagerDisconnect = makeInfallible(function (subject, topic, data) {
-      if (subject == mm) {
-        Services.obs.removeObserver(onMessageManagerDisconnect, topic);
-        if (childTransport) {
-          // If we have a child transport, the actor has already
-          // been created. We need to stop using this message manager.
-          childTransport.close();
-          this.conn.cancelForwarding(prefix);
-        } else {
-          // Otherwise, the app has been closed before the actor
-          // had a chance to be created, so we are not able to create
-          // the actor.
-          deferred.resolve(null);
-        }
-        let actor = this._appActorsMap.get(mm);
-        if (actor) {
-          // The ContentAppActor within the child process doesn't necessary
-          // have to time to uninitialize itself when the app is closed/killed.
-          // So ensure telling the client that the related actor is detached.
-          this.conn.send({ from: actor.actor,
-                           type: "tabDetached" });
-          this._appActorsMap.delete(mm);
-        }
-      }
-    }).bind(this);
-    Services.obs.addObserver(onMessageManagerDisconnect,
-                             "message-manager-disconnect", false);
-
-    let prefixStart = this.conn.prefix + "child";
-    mm.sendAsyncMessage("debug:connect", { prefix: prefixStart });
-
-    return deferred.promise;
-  },
-
   getAppActor: function ({ manifestURL }) {
     debug("getAppActor\n");
 
@@ -901,13 +817,21 @@ WebappsActor.prototype = {
 
       // Only create a new actor, if we haven't already
       // instanciated one for this connection.
+      let map = this._appActorsMap;
       let mm = appFrame.QueryInterface(Ci.nsIFrameLoaderOwner)
                        .frameLoader
                        .messageManager;
-      let actor = this._appActorsMap.get(mm);
+      let actor = map.get(mm);
       if (!actor) {
-        return this._connectToApp(appFrame)
-                   .then(function (actor) ({ actor: actor }));
+        let onConnect = actor => {
+          map.set(mm, actor);
+          return { actor: actor };
+        };
+        let onDisconnect = mm => {
+          map.delete(mm);
+        };
+        return DebuggerServer.connectToChild(this.conn, mm, onDisconnect)
+                             .then(onConnect);
       }
 
       return { actor: actor };
@@ -1005,24 +929,18 @@ WebappsActor.prototype = {
  * The request types this actor can handle.
  */
 WebappsActor.prototype.requestTypes = {
-  "install": WebappsActor.prototype.install
+  "install": WebappsActor.prototype.install,
+  "uploadPackage": WebappsActor.prototype.uploadPackage,
+  "getAll": WebappsActor.prototype.getAll,
+  "getApp": WebappsActor.prototype.getApp,
+  "launch": WebappsActor.prototype.launch,
+  "close": WebappsActor.prototype.close,
+  "uninstall": WebappsActor.prototype.uninstall,
+  "listRunningApps": WebappsActor.prototype.listRunningApps,
+  "getAppActor": WebappsActor.prototype.getAppActor,
+  "watchApps": WebappsActor.prototype.watchApps,
+  "unwatchApps": WebappsActor.prototype.unwatchApps,
+  "getIconAsDataURL": WebappsActor.prototype.getIconAsDataURL
 };
-
-// Until we implement unix domain socket, we only enable app install
-// only on production devices
-if (Services.prefs.getBoolPref("devtools.debugger.enable-content-actors")) {
-  let requestTypes = WebappsActor.prototype.requestTypes;
-  requestTypes.uploadPackage = WebappsActor.prototype.uploadPackage;
-  requestTypes.getAll = WebappsActor.prototype.getAll;
-  requestTypes.getApp = WebappsActor.prototype.getApp;
-  requestTypes.launch = WebappsActor.prototype.launch;
-  requestTypes.close  = WebappsActor.prototype.close;
-  requestTypes.uninstall = WebappsActor.prototype.uninstall;
-  requestTypes.listRunningApps = WebappsActor.prototype.listRunningApps;
-  requestTypes.getAppActor = WebappsActor.prototype.getAppActor;
-  requestTypes.watchApps = WebappsActor.prototype.watchApps;
-  requestTypes.unwatchApps = WebappsActor.prototype.unwatchApps;
-  requestTypes.getIconAsDataURL = WebappsActor.prototype.getIconAsDataURL;
-}
 
 DebuggerServer.addGlobalActor(WebappsActor, "webappsActor");

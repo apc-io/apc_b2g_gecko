@@ -14,6 +14,7 @@ interface nsIMessageSender;
 interface nsIVariant;
 interface nsIDOMElement;
 interface nsITabParent;
+interface nsILoadContext;
 
 typedef unsigned long long nsContentViewId;
 
@@ -111,7 +112,7 @@ interface nsIContentViewManager : nsISupports
   readonly attribute nsIContentView rootContentView;
 };
 
-[scriptable, builtinclass, uuid(5b9949dc-56f1-47b6-b6d2-3785bb90ed6d)]
+[scriptable, builtinclass, uuid(a5cefcc8-551b-4901-83f3-7436b09ecaba)]
 interface nsIFrameLoader : nsISupports
 {
   /**
@@ -124,6 +125,13 @@ interface nsIFrameLoader : nsISupports
    * returns null.
    */
   readonly attribute nsITabParent tabParent;
+
+  /**
+   * Get an nsILoadContext for the top-level docshell. For remote
+   * frames, a shim is returned that contains private browsing and app
+   * information.
+   */
+  readonly attribute nsILoadContext loadContext;
 
   /**
    * Start loading the frame. This method figures out what to load
@@ -196,8 +204,6 @@ interface nsIFrameLoader : nsISupports
                                 in long aCharCode,
                                 in long aModifiers,
                                 [optional] in boolean aPreventDefault);
-
-  attribute boolean delayRemoteDialogs;
 
   /** 
    * The default rendering mode is synchronous scrolling.  In this
@@ -272,6 +278,11 @@ interface nsIFrameLoader : nsISupports
    * have a notion of visibility in the parent process when frames are OOP.
    */
   [infallible] attribute boolean visible;
+
+  /**
+   * Find out whether the owner content really is a browser or app frame
+   */
+  readonly attribute boolean ownerIsBrowserOrAppFrame;
 };
 
 %{C++

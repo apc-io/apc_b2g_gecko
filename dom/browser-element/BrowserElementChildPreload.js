@@ -60,7 +60,7 @@ let CERTIFICATE_ERROR_PAGE_PREF = 'security.alternate_certificate_error_page';
 let NS_ERROR_MODULE_BASE_OFFSET = 0x45;
 let NS_ERROR_MODULE_SECURITY= 21;
 function NS_ERROR_GET_MODULE(err) {
-  return ((((err) >> 16) - NS_ERROR_MODULE_BASE_OFFSET) & 0x1fff) 
+  return ((((err) >> 16) - NS_ERROR_MODULE_BASE_OFFSET) & 0x1fff);
 }
 
 function NS_ERROR_GET_CODE(err) {
@@ -73,7 +73,6 @@ let SEC_ERROR_CA_CERT_INVALID =   (SEC_ERROR_BASE + 36);
 let SEC_ERROR_UNTRUSTED_ISSUER = (SEC_ERROR_BASE + 20);
 let SEC_ERROR_EXPIRED_ISSUER_CERTIFICATE = (SEC_ERROR_BASE + 30);
 let SEC_ERROR_UNTRUSTED_CERT = (SEC_ERROR_BASE + 21);
-let SEC_ERROR_INADEQUATE_KEY_USAGE = (SEC_ERROR_BASE + 90);
 let SEC_ERROR_EXPIRED_CERTIFICATE = (SEC_ERROR_BASE + 11);
 let SEC_ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED = (SEC_ERROR_BASE + 176);
 
@@ -82,14 +81,13 @@ let SSL_ERROR_BAD_CERT_DOMAIN = (SSL_ERROR_BASE + 12);
 
 function getErrorClass(errorCode) {
   let NSPRCode = -1 * NS_ERROR_GET_CODE(errorCode);
- 
+
   switch (NSPRCode) {
     case SEC_ERROR_UNKNOWN_ISSUER:
     case SEC_ERROR_CA_CERT_INVALID:
     case SEC_ERROR_UNTRUSTED_ISSUER:
     case SEC_ERROR_EXPIRED_ISSUER_CERTIFICATE:
     case SEC_ERROR_UNTRUSTED_CERT:
-    case SEC_ERROR_INADEQUATE_KEY_USAGE:
     case SSL_ERROR_BAD_CERT_DOMAIN:
     case SEC_ERROR_EXPIRED_CERTIFICATE:
     case SEC_ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED:
@@ -100,6 +98,14 @@ function getErrorClass(errorCode) {
 
   return null;
 }
+
+const OBSERVED_EVENTS = [
+  'fullscreen-origin-change',
+  'ask-parent-to-exit-fullscreen',
+  'ask-parent-to-rollback-fullscreen',
+  'xpcom-shutdown',
+  'activity-done'
+];
 
 /**
  * The BrowserElementChild implements one half of <iframe mozbrowser>.
@@ -128,6 +134,9 @@ function BrowserElementChild() {
   this._ownerVisible = true;
 
   this._nextPaintHandler = null;
+
+  this._isContentWindowCreated = false;
+  this._pendingSetInputMethodActive = [];
 
   this._init();
 };
@@ -172,6 +181,11 @@ BrowserElementChild.prototype = {
 
     addEventListener('DOMLinkAdded',
                      this._linkAddedHandler.bind(this),
+                     /* useCapture = */ true,
+                     /* wantsUntrusted = */ false);
+
+    addEventListener('DOMMetaAdded',
+                     this._metaAddedHandler.bind(this),
                      /* useCapture = */ true,
                      /* wantsUntrusted = */ false);
 
@@ -250,25 +264,9 @@ BrowserElementChild.prototype = {
                                this._scrollEventHandler.bind(this),
                                /* useCapture = */ false);
 
-    Services.obs.addObserver(this,
-                             "fullscreen-origin-change",
-                             /* ownsWeak = */ true);
-
-    Services.obs.addObserver(this,
-                             'ask-parent-to-exit-fullscreen',
-                             /* ownsWeak = */ true);
-
-    Services.obs.addObserver(this,
-                             'ask-parent-to-rollback-fullscreen',
-                             /* ownsWeak = */ true);
-
-    Services.obs.addObserver(this,
-                             'xpcom-shutdown',
-                             /* ownsWeak = */ true);
-
-    Services.obs.addObserver(this,
-                             'activity-done',
-                             /* ownsWeak = */ true);
+    OBSERVED_EVENTS.forEach((aTopic) => {
+      Services.obs.addObserver(this, aTopic, false);
+    });
   },
 
   observe: function(subject, topic, data) {
@@ -303,6 +301,9 @@ BrowserElementChild.prototype = {
    */
   _unloadHandler: function() {
     this._shuttingDown = true;
+    OBSERVED_EVENTS.forEach((aTopic) => {
+      Services.obs.removeObserver(this, aTopic);
+    });
   },
 
   _tryGetInnerWindowID: function(win) {
@@ -503,6 +504,54 @@ BrowserElementChild.prototype = {
     }, this);
   },
 
+  _metaAddedHandler: function(e) {
+    let win = e.target.ownerDocument.defaultView;
+    // Ignore metas which don't come from the top-level
+    // <iframe mozbrowser> window.
+    if (win != content) {
+      debug('Not top level!');
+      return;
+    }
+
+    if (!e.target.name) {
+      return;
+    }
+
+    debug('Got metaAdded: (' + e.target.name + ') ' + e.target.content);
+    if (e.target.name == 'application-name') {
+      let meta = { name: e.target.name,
+                   content: e.target.content };
+
+      let lang;
+      let elm;
+
+      for (elm = e.target;
+           !lang && elm && elm.nodeType == e.target.ELEMENT_NODE;
+           elm = elm.parentNode) {
+        if (elm.hasAttribute('lang')) {
+          lang = elm.getAttribute('lang');
+          continue;
+        }
+
+        if (elm.hasAttributeNS('http://www.w3.org/XML/1998/namespace', 'lang')) {
+          lang = elm.getAttributeNS('http://www.w3.org/XML/1998/namespace', 'lang');
+          continue;
+        }
+      }
+
+      // No lang has been detected.
+      if (!lang && elm.nodeType == e.target.DOCUMENT_NODE) {
+        lang = elm.contentLanguage;
+      }
+
+      if (lang) {
+        meta.lang = lang;
+      }
+
+      sendAsyncMsg('metachange', meta);
+    }
+  },
+
   _addMozAfterPaintHandler: function(callback) {
     function onMozAfterPaint() {
       let uri = docShell.QueryInterface(Ci.nsIWebNavigation).currentURI;
@@ -566,6 +615,11 @@ BrowserElementChild.prototype = {
       this._addMozAfterPaintHandler(function () {
         sendAsyncMsg('documentfirstpaint');
       });
+      this._isContentWindowCreated = true;
+      // Handle pending SetInputMethodActive request.
+      while (this._pendingSetInputMethodActive.length > 0) {
+        this._recvSetInputMethodActive(this._pendingSetInputMethodActive.shift());
+      }
     }
   },
 
@@ -680,10 +734,11 @@ BrowserElementChild.prototype = {
     let self = this;
     let maxWidth = data.json.args.width;
     let maxHeight = data.json.args.height;
+    let mimeType = data.json.args.mimeType;
     let domRequestID = data.json.id;
 
     let takeScreenshotClosure = function() {
-      self._takeScreenshot(maxWidth, maxHeight, domRequestID);
+      self._takeScreenshot(maxWidth, maxHeight, mimeType, domRequestID);
     };
 
     let maxDelayMS = 2000;
@@ -701,17 +756,21 @@ BrowserElementChild.prototype = {
 
   /**
    * Actually take a screenshot and foward the result up to our parent, given
-   * the desired maxWidth and maxHeight, and given the DOMRequest ID associated
-   * with the request from the parent.
+   * the desired maxWidth and maxHeight (in CSS pixels), and given the
+   * DOMRequest ID associated with the request from the parent.
    */
-  _takeScreenshot: function(maxWidth, maxHeight, domRequestID) {
+  _takeScreenshot: function(maxWidth, maxHeight, mimeType, domRequestID) {
     // You can think of the screenshotting algorithm as carrying out the
     // following steps:
     //
+    // - Calculate maxWidth, maxHeight, and viewport's width and height in the
+    //   dimension of device pixels by multiply the numbers with
+    //   window.devicePixelRatio.
+    //
     // - Let scaleWidth be the factor by which we'd need to downscale the
-    //   viewport so it would fit within maxWidth.  (If the viewport's width
-    //   is less than maxWidth, let scaleWidth be 1.) Compute scaleHeight
-    //   the same way.
+    //   viewport pixel width so it would fit within maxPixelWidth.
+    //   (If the viewport's pixel width is less than maxPixelWidth, let
+    //   scaleWidth be 1.) Compute scaleHeight the same way.
     //
     // - Scale the viewport by max(scaleWidth, scaleHeight).  Now either the
     //   viewport's width is no larger than maxWidth, the viewport's height is
@@ -720,10 +779,14 @@ BrowserElementChild.prototype = {
     // - Crop the viewport so its width is no larger than maxWidth and its
     //   height is no larger than maxHeight.
     //
+    // - Set mozOpaque to true and background color to solid white
+    //   if we are taking a JPEG screenshot, keep transparent if otherwise.
+    //
     // - Return a screenshot of the page's viewport scaled and cropped per
     //   above.
     debug("Taking a screenshot: maxWidth=" + maxWidth +
           ", maxHeight=" + maxHeight +
+          ", mimeType=" + mimeType +
           ", domRequestID=" + domRequestID + ".");
 
     if (!content) {
@@ -733,27 +796,40 @@ BrowserElementChild.prototype = {
       return;
     }
 
-    let scaleWidth = Math.min(1, maxWidth / content.innerWidth);
-    let scaleHeight = Math.min(1, maxHeight / content.innerHeight);
+    let devicePixelRatio = content.devicePixelRatio;
+
+    let maxPixelWidth = Math.round(maxWidth * devicePixelRatio);
+    let maxPixelHeight = Math.round(maxHeight * devicePixelRatio);
+
+    let contentPixelWidth = content.innerWidth * devicePixelRatio;
+    let contentPixelHeight = content.innerHeight * devicePixelRatio;
+
+    let scaleWidth = Math.min(1, maxPixelWidth / contentPixelWidth);
+    let scaleHeight = Math.min(1, maxPixelHeight / contentPixelHeight);
 
     let scale = Math.max(scaleWidth, scaleHeight);
 
-    let canvasWidth = Math.min(maxWidth, Math.round(content.innerWidth * scale));
-    let canvasHeight = Math.min(maxHeight, Math.round(content.innerHeight * scale));
+    let canvasWidth =
+      Math.min(maxPixelWidth, Math.round(contentPixelWidth * scale));
+    let canvasHeight =
+      Math.min(maxPixelHeight, Math.round(contentPixelHeight * scale));
+
+    let transparent = (mimeType !== 'image/jpeg');
 
     var canvas = content.document
       .createElementNS("http://www.w3.org/1999/xhtml", "canvas");
-    canvas.mozOpaque = true;
+    if (!transparent)
+      canvas.mozOpaque = true;
     canvas.width = canvasWidth;
     canvas.height = canvasHeight;
 
-    var ctx = canvas.getContext("2d");
-    ctx.scale(scale, scale);
+    var ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.scale(scale * devicePixelRatio, scale * devicePixelRatio);
     ctx.drawWindow(content, 0, 0, content.innerWidth, content.innerHeight,
-                   "rgb(255,255,255)");
+                   transparent ? "rgba(255,255,255,0)" : "rgb(255,255,255)");
 
-    // Take a JPEG screenshot to hack around the fact that we can't specify
-    // opaque PNG.  This requires us to unpremultiply the alpha channel, which
+    // Take a JPEG screenshot by default instead of PNG with alpha channel.
+    // This requires us to unpremultiply the alpha channel, which
     // is expensive on ARM processors because they lack a hardware integer
     // division instruction.
     canvas.toBlob(function(blob) {
@@ -761,7 +837,7 @@ BrowserElementChild.prototype = {
         id: domRequestID,
         successRv: blob
       });
-    }, 'image/jpeg');
+    }, mimeType);
   },
 
   _recvFireCtxCallback: function(data) {
@@ -904,6 +980,17 @@ BrowserElementChild.prototype = {
 
   _recvSetInputMethodActive: function(data) {
     let msgData = { id: data.json.id };
+    if (!this._isContentWindowCreated) {
+      if (data.json.args.isActive) {
+        // To activate the input method, we should wait before the content
+        // window is ready.
+        this._pendingSetInputMethodActive.push(data);
+        return;
+      }
+      msgData.successRv = null;
+      sendAsyncMsg('got-set-input-method-active', msgData);
+      return;
+    }
     // Unwrap to access webpage content.
     let nav = XPCNativeWrapper.unwrap(content.document.defaultView.navigator);
     if (nav.mozInputMethod) {
@@ -977,7 +1064,7 @@ BrowserElementChild.prototype = {
           return;
         }
 
-        if (NS_ERROR_GET_MODULE(status) == NS_ERROR_MODULE_SECURITY && 
+        if (NS_ERROR_GET_MODULE(status) == NS_ERROR_MODULE_SECURITY &&
             getErrorClass(status) == Ci.nsINSSErrorsService.ERROR_CLASS_BAD_CERT) {
 
           // XXX Is there a point firing the event if the error page is not

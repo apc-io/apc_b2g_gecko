@@ -100,6 +100,16 @@ protected:
 class nsXHREventTarget : public nsDOMEventTargetHelper,
                          public nsIXMLHttpRequestEventTarget
 {
+protected:
+  nsXHREventTarget(nsDOMEventTargetHelper* aOwner)
+    : nsDOMEventTargetHelper(aOwner)
+  {
+  }
+
+  nsXHREventTarget()
+  {
+  }
+
 public:
   typedef mozilla::dom::XMLHttpRequestResponseType
           XMLHttpRequestResponseType;
@@ -129,10 +139,10 @@ class nsXMLHttpRequestUpload MOZ_FINAL : public nsXHREventTarget,
 {
 public:
   nsXMLHttpRequestUpload(nsDOMEventTargetHelper* aOwner)
+    : nsXHREventTarget(aOwner)
   {
-    BindToOwner(aOwner);
-    SetIsDOMBinding();
   }
+
   NS_DECL_ISUPPORTS_INHERITED
   NS_FORWARD_NSIXMLHTTPREQUESTEVENTTARGET(nsXHREventTarget::)
   NS_REALLY_FORWARD_NSIDOMEVENTTARGET(nsXHREventTarget)
@@ -523,6 +533,14 @@ public:
 
   virtual void DisconnectFromOwner() MOZ_OVERRIDE;
 
+  static void SetDontWarnAboutSyncXHR(bool aVal)
+  {
+    sDontWarnAboutSyncXHR = aVal;
+  }
+  static bool DontWarnAboutSyncXHR()
+  {
+    return sDontWarnAboutSyncXHR;
+  }
 protected:
   nsresult DetectCharset();
   nsresult AppendToResponseText(const char * aBuffer, uint32_t aBufferLen);
@@ -726,6 +744,25 @@ protected:
 
   // Helper object to manage our XPCOM scriptability bits
   nsXMLHttpRequestXPCOMifier* mXPCOMifier;
+
+  static bool sDontWarnAboutSyncXHR;
+};
+
+class MOZ_STACK_CLASS AutoDontWarnAboutSyncXHR
+{
+public:
+  AutoDontWarnAboutSyncXHR() : mOldVal(nsXMLHttpRequest::DontWarnAboutSyncXHR())
+  {
+    nsXMLHttpRequest::SetDontWarnAboutSyncXHR(true);
+  }
+
+  ~AutoDontWarnAboutSyncXHR()
+  {
+    nsXMLHttpRequest::SetDontWarnAboutSyncXHR(mOldVal);
+  }
+
+private:
+  bool mOldVal;
 };
 
 // A shim class designed to expose the non-DOM interfaces of

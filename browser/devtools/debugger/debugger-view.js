@@ -26,10 +26,10 @@ const SEARCH_FUNCTION_FLAG = "@";
 const SEARCH_TOKEN_FLAG = "#";
 const SEARCH_LINE_FLAG = ":";
 const SEARCH_VARIABLE_FLAG = "*";
+const SEARCH_AUTOFILL = [SEARCH_GLOBAL_FLAG, SEARCH_FUNCTION_FLAG, SEARCH_TOKEN_FLAG];
 const EDITOR_VARIABLE_HOVER_DELAY = 350; // ms
-const EDITOR_VARIABLE_POPUP_OFFSET_X = 5; // px
-const EDITOR_VARIABLE_POPUP_OFFSET_Y = 0; // px
-const EDITOR_VARIABLE_POPUP_POSITION = "before_start";
+const EDITOR_VARIABLE_POPUP_POSITION = "topcenter bottomleft";
+const TOOLBAR_ORDER_POPUP_POSITION = "topcenter bottomleft";
 
 /**
  * Object defining the debugger view components.
@@ -55,7 +55,6 @@ let DebuggerView = {
     this.Filtering.initialize();
     this.FilteredSources.initialize();
     this.FilteredFunctions.initialize();
-    this.ChromeGlobals.initialize();
     this.StackFrames.initialize();
     this.StackFramesClassicList.initialize();
     this.Sources.initialize();
@@ -91,7 +90,6 @@ let DebuggerView = {
     this.Filtering.destroy();
     this.FilteredSources.destroy();
     this.FilteredFunctions.destroy();
-    this.ChromeGlobals.destroy();
     this.StackFrames.destroy();
     this.StackFramesClassicList.destroy();
     this.Sources.destroy();
@@ -164,9 +162,16 @@ let DebuggerView = {
       emptyText: L10N.getStr("emptyVariablesText"),
       onlyEnumVisible: Prefs.variablesOnlyEnumVisible,
       searchEnabled: Prefs.variablesSearchboxVisible,
-      eval: DebuggerController.StackFrames.evaluate,
+      eval: (variable, value) => {
+        let string = variable.evaluationMacro(variable, value);
+        DebuggerController.StackFrames.evaluate(string);
+      },
       lazyEmpty: true
     });
+
+    // Attach the current toolbox to the VView so it can link DOMNodes to
+    // the inspector/highlighter
+    this.Variables.toolbox = DebuggerController._toolbox;
 
     // Attach a controller that handles interfacing with the debugger protocol.
     VariablesViewController.attach(this.Variables, {
@@ -181,6 +186,9 @@ let DebuggerView = {
     // Relay events from the VariablesView.
     this.Variables.on("fetched", (aEvent, aType) => {
       switch (aType) {
+        case "scopes":
+          window.emit(EVENTS.FETCHED_SCOPES);
+          break;
         case "variables":
           window.emit(EVENTS.FETCHED_VARIABLES);
           break;
@@ -380,7 +388,8 @@ let DebuggerView = {
     this._setEditorText(L10N.getStr("loadingText"));
     this._editorSource = { url: aSource.url, promise: deferred.promise };
 
-    DebuggerController.SourceScripts.getText(aSource).then(([, aText]) => {
+    DebuggerController.SourceScripts.getText(aSource)
+                                    .then(([, aText, aContentType]) => {
       // Avoid setting an unexpected source. This may happen when switching
       // very fast between sources that haven't been fetched yet.
       if (this._editorSource.url != aSource.url) {
@@ -388,7 +397,7 @@ let DebuggerView = {
       }
 
       this._setEditorText(aText);
-      this._setEditorMode(aSource.url, aSource.contentType, aText);
+      this._setEditorMode(aSource.url, aContentType, aText);
 
       // Synchronize any other components with the currently displayed source.
       DebuggerView.Sources.selectedValue = aSource.url;
@@ -398,7 +407,7 @@ let DebuggerView = {
 
       // Resolve and notify that a source file was shown.
       window.emit(EVENTS.SOURCE_SHOWN, aSource);
-      deferred.resolve([aSource, aText]);
+      deferred.resolve([aSource, aText, aContentType]);
     },
     ([, aError]) => {
       let msg = L10N.getStr("errorLoadingText") + DevToolsUtils.safeErrorString(aError);
@@ -458,10 +467,14 @@ let DebuggerView = {
 
     // Make sure the requested source client is shown in the editor, then
     // update the source editor's caret position and debug location.
-    return this._setEditorSource(sourceForm, aFlags).then(() => {
+    return this._setEditorSource(sourceForm, aFlags)
+               .then(([,, aContentType]) => {
+      // Record the contentType learned from fetching
+      sourceForm.contentType = aContentType;
       // Line numbers in the source editor should start from 1. If invalid
       // or not specified, then don't do anything.
       if (aLine < 1) {
+        window.emit(EVENTS.EDITOR_LOCATION_SET);
         return;
       }
       if (aFlags.charOffset) {
@@ -477,6 +490,7 @@ let DebuggerView = {
       if (!aFlags.noDebug) {
         this.editor.setDebugLocation(aLine - 1);
       }
+      window.emit(EVENTS.EDITOR_LOCATION_SET);
     }).then(null, console.error);
   },
 
@@ -618,7 +632,6 @@ let DebuggerView = {
     this.FilteredSources.clearView();
     this.FilteredFunctions.clearView();
     this.GlobalSearch.clearView();
-    this.ChromeGlobals.empty();
     this.StackFrames.empty();
     this.Sources.empty();
     this.Variables.empty();
@@ -630,6 +643,8 @@ let DebuggerView = {
       this.editor.clearHistory();
       this._editorSource = {};
     }
+
+    this.Sources.emptyText = L10N.getStr("loadingSourcesText");
   },
 
   _startup: null,
@@ -640,7 +655,6 @@ let DebuggerView = {
   FilteredSources: null,
   FilteredFunctions: null,
   GlobalSearch: null,
-  ChromeGlobals: null,
   StackFrames: null,
   Sources: null,
   Tracer: null,
@@ -658,225 +672,6 @@ let DebuggerView = {
   _instrumentsPaneToggleButton: null,
   _collapsePaneString: "",
   _expandPaneString: ""
-};
-
-/**
- * A stacked list of items, compatible with WidgetMethods instances, used for
- * displaying views like the watch expressions, filtering or search results etc.
- *
- * You should never need to access these methods directly, use the wrapped
- * WidgetMethods instead.
- *
- * @param nsIDOMNode aNode
- *        The element associated with the widget.
- */
-function ListWidget(aNode) {
-  this._parent = aNode;
-
-  // Create an internal list container.
-  this._list = document.createElement("vbox");
-  this._parent.appendChild(this._list);
-
-  // Delegate some of the associated node's methods to satisfy the interface
-  // required by WidgetMethods instances.
-  ViewHelpers.delegateWidgetAttributeMethods(this, aNode);
-  ViewHelpers.delegateWidgetEventMethods(this, aNode);
-}
-
-ListWidget.prototype = {
-  /**
-   * Overrides an item's element type (e.g. "vbox" or "hbox") in this container.
-   * @param string aType
-   */
-  itemType: "hbox",
-
-  /**
-   * Customization function for creating an item's UI in this container.
-   *
-   * @param nsIDOMNode aElementNode
-   *        The element associated with the displayed item.
-   * @param string aLabel
-   *        The item's label.
-   * @param string aValue
-   *        The item's value.
-   */
-  itemFactory: null,
-
-  /**
-   * Immediately inserts an item in this container at the specified index.
-   *
-   * @param number aIndex
-   *        The position in the container intended for this item.
-   * @param string aLabel
-   *        The label displayed in the container.
-   * @param string aValue
-   *        The actual internal value of the item.
-   * @param string aDescription [optional]
-   *        An optional description of the item.
-   * @param any aAttachment [optional]
-   *        Some attached primitive/object.
-   * @return nsIDOMNode
-   *         The element associated with the displayed item.
-   */
-  insertItemAt: function(aIndex, aLabel, aValue, aDescription, aAttachment) {
-    let list = this._list;
-    let childNodes = list.childNodes;
-
-    let element = document.createElement(this.itemType);
-    this.itemFactory(element, aAttachment, aLabel, aValue, aDescription);
-    this._removeEmptyNotice();
-
-    element.classList.add("list-widget-item");
-    return list.insertBefore(element, childNodes[aIndex]);
-  },
-
-  /**
-   * Returns the child node in this container situated at the specified index.
-   *
-   * @param number aIndex
-   *        The position in the container intended for this item.
-   * @return nsIDOMNode
-   *         The element associated with the displayed item.
-   */
-  getItemAtIndex: function(aIndex) {
-    return this._list.childNodes[aIndex];
-  },
-
-  /**
-   * Immediately removes the specified child node from this container.
-   *
-   * @param nsIDOMNode aChild
-   *        The element associated with the displayed item.
-   */
-  removeChild: function(aChild) {
-    this._list.removeChild(aChild);
-
-    if (this._selectedItem == aChild) {
-      this._selectedItem = null;
-    }
-    if (!this._list.hasChildNodes()) {
-      this._appendEmptyNotice();
-    }
-  },
-
-  /**
-   * Immediately removes all of the child nodes from this container.
-   */
-  removeAllItems: function() {
-    let parent = this._parent;
-    let list = this._list;
-
-    while (list.hasChildNodes()) {
-      list.firstChild.remove();
-    }
-    parent.scrollTop = 0;
-    parent.scrollLeft = 0;
-
-    this._selectedItem = null;
-    this._appendEmptyNotice();
-  },
-
-  /**
-   * Gets the currently selected child node in this container.
-   * @return nsIDOMNode
-   */
-  get selectedItem() this._selectedItem,
-
-  /**
-   * Sets the currently selected child node in this container.
-   * @param nsIDOMNode aChild
-   */
-  set selectedItem(aChild) {
-    let childNodes = this._list.childNodes;
-
-    if (!aChild) {
-      this._selectedItem = null;
-    }
-    for (let node of childNodes) {
-      if (node == aChild) {
-        node.classList.add("selected");
-        this._selectedItem = node;
-      } else {
-        node.classList.remove("selected");
-      }
-    }
-  },
-
-  /**
-   * Sets the text displayed permanently in this container's header.
-   * @param string aValue
-   */
-  set permaText(aValue) {
-    if (this._permaTextNode) {
-      this._permaTextNode.setAttribute("value", aValue);
-    }
-    this._permaTextValue = aValue;
-    this._appendPermaNotice();
-  },
-
-  /**
-   * Sets the text displayed in this container when there are no available items.
-   * @param string aValue
-   */
-  set emptyText(aValue) {
-    if (this._emptyTextNode) {
-      this._emptyTextNode.setAttribute("value", aValue);
-    }
-    this._emptyTextValue = aValue;
-    this._appendEmptyNotice();
-  },
-
-  /**
-   * Creates and appends a label displayed permanently in this container's header.
-   */
-  _appendPermaNotice: function() {
-    if (this._permaTextNode || !this._permaTextValue) {
-      return;
-    }
-
-    let label = document.createElement("label");
-    label.className = "empty list-widget-item";
-    label.setAttribute("value", this._permaTextValue);
-
-    this._parent.insertBefore(label, this._list);
-    this._permaTextNode = label;
-  },
-
-  /**
-   * Creates and appends a label signaling that this container is empty.
-   */
-  _appendEmptyNotice: function() {
-    if (this._emptyTextNode || !this._emptyTextValue) {
-      return;
-    }
-
-    let label = document.createElement("label");
-    label.className = "empty list-widget-item";
-    label.setAttribute("value", this._emptyTextValue);
-
-    this._parent.appendChild(label);
-    this._emptyTextNode = label;
-  },
-
-  /**
-   * Removes the label signaling that this container is empty.
-   */
-  _removeEmptyNotice: function() {
-    if (!this._emptyTextNode) {
-      return;
-    }
-
-    this._parent.removeChild(this._emptyTextNode);
-    this._emptyTextNode = null;
-  },
-
-  _parent: null,
-  _list: null,
-  _selectedItem: null,
-  _permaTextNode: null,
-  _permaTextValue: "",
-  _emptyTextNode: null,
-  _emptyTextValue: ""
 };
 
 /**
@@ -899,16 +694,17 @@ ResultsPanelContainer.prototype = Heritage.extend(WidgetMethods, {
     if (aNode) {
       if (!this._panel) {
         this._panel = document.createElement("panel");
-        this._panel.className = "results-panel";
+        this._panel.id = "results-panel";
         this._panel.setAttribute("level", "top");
         this._panel.setAttribute("noautofocus", "true");
         this._panel.setAttribute("consumeoutsideclicks", "false");
         document.documentElement.appendChild(this._panel);
       }
       if (!this.widget) {
-        this.widget = new ListWidget(this._panel);
-        this.widget.itemType = "vbox";
-        this.widget.itemFactory = this._createItemView;
+        this.widget = new SimpleListWidget(this._panel);
+        this.autoFocusOnFirstItem = false;
+        this.autoFocusOnSelection = false;
+        this.maintainSelectionVisible = false;
       }
     }
     // Cleanup the anchor and remove the previously created panel.
@@ -923,7 +719,9 @@ ResultsPanelContainer.prototype = Heritage.extend(WidgetMethods, {
    * Gets the anchor node for this container panel.
    * @return nsIDOMNode
    */
-  get anchor() this._anchor,
+  get anchor() {
+    return this._anchor;
+  },
 
   /**
    * Sets the container panel hidden or visible. It's hidden by default.
@@ -982,40 +780,43 @@ ResultsPanelContainer.prototype = Heritage.extend(WidgetMethods, {
   /**
    * Customization function for creating an item's UI.
    *
-   * @param nsIDOMNode aElementNode
-   *        The element associated with the displayed item.
-   * @param any aAttachment
-   *        Some attached primitive/object.
    * @param string aLabel
-   *        The item's label.
-   * @param string aValue
-   *        The item's value.
-   * @param string aDescription
-   *        An optional description of the item.
+   *        The item's label string.
+   * @param string aBeforeLabel
+   *        An optional string shown before the label.
+   * @param string aBelowLabel
+   *        An optional string shown underneath the label.
    */
-  _createItemView: function(aElementNode, aAttachment, aLabel, aValue, aDescription) {
-    let labelsGroup = document.createElement("hbox");
+  _createItemView: function(aLabel, aBelowLabel, aBeforeLabel) {
+    let container = document.createElement("vbox");
+    container.className = "results-panel-item";
 
-    if (aDescription) {
-      let preLabelNode = document.createElement("label");
-      preLabelNode.className = "plain results-panel-item-pre";
-      preLabelNode.setAttribute("value", aDescription);
-      labelsGroup.appendChild(preLabelNode);
-    }
-    if (aLabel) {
-      let labelNode = document.createElement("label");
-      labelNode.className = "plain results-panel-item-name";
-      labelNode.setAttribute("value", aLabel);
-      labelsGroup.appendChild(labelNode);
+    let firstRowLabels = document.createElement("hbox");
+    let secondRowLabels = document.createElement("hbox");
+
+    if (aBeforeLabel) {
+      let beforeLabelNode = document.createElement("label");
+      beforeLabelNode.className = "plain results-panel-item-label-before";
+      beforeLabelNode.setAttribute("value", aBeforeLabel);
+      firstRowLabels.appendChild(beforeLabelNode);
     }
 
-    let valueNode = document.createElement("label");
-    valueNode.className = "plain results-panel-item-details";
-    valueNode.setAttribute("value", aValue);
+    let labelNode = document.createElement("label");
+    labelNode.className = "plain results-panel-item-label";
+    labelNode.setAttribute("value", aLabel);
+    firstRowLabels.appendChild(labelNode);
 
-    aElementNode.className = "light results-panel-item";
-    aElementNode.appendChild(labelsGroup);
-    aElementNode.appendChild(valueNode);
+    if (aBelowLabel) {
+      let belowLabelNode = document.createElement("label");
+      belowLabelNode.className = "plain results-panel-item-label-below";
+      belowLabelNode.setAttribute("value", aBelowLabel);
+      secondRowLabels.appendChild(belowLabelNode);
+    }
+
+    container.appendChild(firstRowLabels);
+    container.appendChild(secondRowLabels);
+
+    return container;
   },
 
   _anchor: null,

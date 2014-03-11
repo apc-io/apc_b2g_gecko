@@ -9,9 +9,11 @@
 
 #include "mozilla/MemoryReporting.h"
 
+#include "builtin/TypedObject.h"
 #include "builtin/TypeRepresentation.h"
 #include "gc/Zone.h"
 #include "vm/GlobalObject.h"
+#include "vm/PIC.h"
 
 namespace js {
 
@@ -127,6 +129,7 @@ struct JSCompartment
   public:
     JSPrincipals                 *principals;
     bool                         isSystem;
+    bool                         isSelfHosting;
     bool                         marked;
 
 #ifdef DEBUG
@@ -241,12 +244,16 @@ struct JSCompartment
     /* Set of initial shapes in the compartment. */
     js::InitialShapeSet          initialShapes;
     void sweepInitialShapeTable();
-    void markAllInitialShapeTableEntries(JSTracer *trc);
 
     /* Set of default 'new' or lazy types in the compartment. */
     js::types::TypeObjectWithNewScriptSet newTypeObjects;
     js::types::TypeObjectWithNewScriptSet lazyTypeObjects;
     void sweepNewTypeObjectTable(js::types::TypeObjectWithNewScriptSet &table);
+#if defined(JSGC_GENERATIONAL) && defined(JS_GC_ZEAL)
+    void checkNewTypeObjectTableAfterMovingGC();
+    void checkInitialShapesTableAfterMovingGC();
+    void checkWrapperMapAfterMovingGC();
+#endif
 
     /*
      * Hash table of all manually call site-cloned functions from within
@@ -255,6 +262,12 @@ struct JSCompartment
      */
     js::CallsiteCloneTable callsiteClones;
     void sweepCallsiteClones();
+
+    /*
+     * Lazily initialized script source object to use for scripts cloned
+     * from the self-hosting global.
+     */
+    js::ReadBarriered<js::ScriptSourceObject> selfHostingScriptSource;
 
     /* During GC, stores the index of this compartment in rt->compartments. */
     unsigned                     gcIndex;
@@ -293,7 +306,6 @@ struct JSCompartment
 
     /* Mark cross-compartment wrappers. */
     void markCrossCompartmentWrappers(JSTracer *trc);
-    void markAllCrossCompartmentWrappers(JSTracer *trc);
 
     inline bool wrap(JSContext *cx, JS::MutableHandleValue vp,
                      JS::HandleObject existing = js::NullPtr());
@@ -308,7 +320,7 @@ struct JSCompartment
     bool wrap(JSContext *cx, JS::MutableHandle<js::PropertyDescriptor> desc);
     bool wrap(JSContext *cx, js::AutoIdVector &props);
 
-    bool putWrapper(const js::CrossCompartmentKey& wrapped, const js::Value& wrapper);
+    bool putWrapper(JSContext *cx, const js::CrossCompartmentKey& wrapped, const js::Value& wrapper);
 
     js::WrapperMap::Ptr lookupWrapper(const js::Value& wrapped) {
         return crossCompartmentWrappers.lookup(wrapped);
@@ -499,7 +511,7 @@ class js::AutoDebugModeInvalidation
         // must all agree on the toggle. This is so we can decide if we need
         // to invalidate on-stack scripts.
         MOZ_ASSERT_IF(needInvalidation_ != NoNeed,
-                      needInvalidation_ == debugMode ? ToggledOn : ToggledOff);
+                      needInvalidation_ == (debugMode ? ToggledOn : ToggledOff));
         needInvalidation_ = debugMode ? ToggledOn : ToggledOff;
     }
 };
@@ -509,7 +521,7 @@ namespace js {
 inline bool
 ExclusiveContext::typeInferenceEnabled() const
 {
-    return compartment_->options().typeInference(this);
+    return zone()->types.inferenceEnabled;
 }
 
 inline js::Handle<js::GlobalObject*>

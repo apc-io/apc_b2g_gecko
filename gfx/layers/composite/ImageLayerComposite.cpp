@@ -7,7 +7,6 @@
 #include "CompositableHost.h"           // for CompositableHost
 #include "Layers.h"                     // for WriteSnapshotToDumpFile, etc
 #include "gfx2DGlue.h"                  // for ToFilter, ToMatrix4x4
-#include "gfx3DMatrix.h"                // for gfx3DMatrix
 #include "gfxRect.h"                    // for gfxRect
 #include "gfxUtils.h"                   // for gfxUtils, etc
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
@@ -21,10 +20,10 @@
 #include "nsAString.h"
 #include "nsAutoPtr.h"                  // for nsRefPtr
 #include "nsDebug.h"                    // for NS_ASSERTION
+#include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "nsPoint.h"                    // for nsIntPoint
 #include "nsRect.h"                     // for nsIntRect
 #include "nsString.h"                   // for nsAutoCString
-#include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
 
 using namespace mozilla::gfx;
 
@@ -48,10 +47,18 @@ ImageLayerComposite::~ImageLayerComposite()
   CleanupResources();
 }
 
-void
+bool
 ImageLayerComposite::SetCompositableHost(CompositableHost* aHost)
 {
-  mImageHost = aHost;
+  switch (aHost->GetType()) {
+    case BUFFER_IMAGE_SINGLE:
+    case BUFFER_IMAGE_BUFFERED:
+    case COMPOSITABLE_IMAGE:
+      mImageHost = aHost;
+      return true;
+    default:
+      return false;
+  }
 }
 
 void
@@ -84,37 +91,29 @@ ImageLayerComposite::RenderLayer(const nsIntRect& aClipRect)
 
 #ifdef MOZ_DUMP_PAINTING
   if (gfxUtils::sDumpPainting) {
-    RefPtr<gfx::DataSourceSurface> dSurf = mImageHost->GetAsSurface();
-    gfxPlatform *platform = gfxPlatform::GetPlatform();
-    RefPtr<gfx::DrawTarget> dt = platform->CreateDrawTargetForData(dSurf->GetData(),
-                                                                   dSurf->GetSize(),
-                                                                   dSurf->Stride(),
-                                                                   dSurf->GetFormat());
-    nsRefPtr<gfxASurface> surf = platform->GetThebesSurfaceForDrawTarget(dt);
+    RefPtr<gfx::DataSourceSurface> surf = mImageHost->GetAsSurface();
     WriteSnapshotToDumpFile(this, surf);
   }
 #endif
 
   mCompositor->MakeCurrent();
 
-  EffectChain effectChain;
+  EffectChain effectChain(this);
   LayerManagerComposite::AutoAddMaskEffect autoMaskEffect(mMaskLayer, effectChain);
 
-  gfx::Matrix4x4 transform;
-  ToMatrix4x4(GetEffectiveTransform(), transform);
   gfx::Rect clipRect(aClipRect.x, aClipRect.y, aClipRect.width, aClipRect.height);
   mImageHost->SetCompositor(mCompositor);
   mImageHost->Composite(effectChain,
                         GetEffectiveOpacity(),
-                        transform,
+                        GetEffectiveTransform(),
                         gfx::ToFilter(mFilter),
                         clipRect);
 }
 
-void 
-ImageLayerComposite::ComputeEffectiveTransforms(const gfx3DMatrix& aTransformToSurface)
+void
+ImageLayerComposite::ComputeEffectiveTransforms(const gfx::Matrix4x4& aTransformToSurface)
 {
-  gfx3DMatrix local = GetLocalTransform();
+  gfx::Matrix4x4 local = GetLocalTransform();
 
   // Snap image edges to pixel boundaries
   gfxRect sourceRect(0, 0, 0, 0);
@@ -125,9 +124,9 @@ ImageLayerComposite::ComputeEffectiveTransforms(const gfx3DMatrix& aTransformToS
       mImageHost->GetAsTextureHost() ? mImageHost->GetAsTextureHost()->GetSize()
                                      : mImageHost->GetDeprecatedTextureHost()->GetSize();
     sourceRect.SizeTo(size.width, size.height);
-    if (mScaleMode != SCALE_NONE &&
+    if (mScaleMode != ScaleMode::SCALE_NONE &&
         sourceRect.width != 0.0 && sourceRect.height != 0.0) {
-      NS_ASSERTION(mScaleMode == SCALE_STRETCH,
+      NS_ASSERTION(mScaleMode == ScaleMode::STRETCH,
                    "No other scalemodes than stretch and none supported yet.");
       local.Scale(mScaleToSize.width / sourceRect.width,
                   mScaleToSize.height / sourceRect.height, 1.0);

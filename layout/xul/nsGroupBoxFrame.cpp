@@ -18,14 +18,14 @@ public:
   nsGroupBoxFrame(nsIPresShell* aShell, nsStyleContext* aContext):
     nsBoxFrame(aShell, aContext) {}
 
-  NS_IMETHOD GetBorderAndPadding(nsMargin& aBorderAndPadding);
+  virtual nsresult GetBorderAndPadding(nsMargin& aBorderAndPadding);
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                 const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) MOZ_OVERRIDE;
 
-#ifdef DEBUG
-  NS_IMETHOD GetFrameName(nsAString& aResult) const {
+#ifdef DEBUG_FRAME_DUMP
+  virtual nsresult GetFrameName(nsAString& aResult) const {
     return MakeFrameName(NS_LITERAL_STRING("GroupBoxFrame"), aResult);
   }
 #endif
@@ -54,7 +54,7 @@ public:
       nsBoxFrame(aShell, aContext) {}
 
 
-#ifdef DEBUG
+#ifdef DEBUG_FRAME_DUMP
   NS_IMETHOD GetFrameName(nsString& aResult) const {
     return MakeFrameName("GroupBoxFrameInner", aResult);
   }
@@ -235,7 +235,7 @@ nsGroupBoxFrame::GetCaptionBox(nsPresContext* aPresContext, nsRect& aCaptionRect
     return child;
 }
 
-NS_IMETHODIMP
+nsresult
 nsGroupBoxFrame::GetBorderAndPadding(nsMargin& aBorderAndPadding)
 {
   aBorderAndPadding.SizeTo(0,0,0,0);

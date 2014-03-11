@@ -93,11 +93,7 @@ public :
    * Ogg+Opus if it is empty.
    */
   static already_AddRefed<MediaEncoder> CreateEncoder(const nsAString& aMIMEType,
-                                                      uint8_t aTrackTypes = ContainerWriter::HAS_AUDIO);
-  /**
-   * Check if run on Encoder thread
-   */
-  static bool OnEncoderThread();
+                                                      uint8_t aTrackTypes = ContainerWriter::CREATE_AUDIO_TRACK);
   /**
    * Encodes the raw track data and returns the final container data. Assuming
    * it is called on a single worker thread. The buffer of container data is
@@ -131,6 +127,14 @@ public :
   {
     return mState == ENCODE_ERROR;
   }
+
+#ifdef MOZ_WEBM_ENCODER
+  static bool IsWebMEncoderEnabled();
+#endif
+
+#ifdef MOZ_OMX_ENCODER
+  static bool IsOMXEncoderEnabled();
+#endif
 
 private:
   // Get encoded data from trackEncoder and write to muxer

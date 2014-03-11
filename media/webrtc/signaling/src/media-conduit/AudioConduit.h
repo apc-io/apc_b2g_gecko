@@ -11,6 +11,7 @@
 #include "nsTArray.h"
 
 #include "MediaConduitInterface.h"
+#include "MediaEngineWrapper.h"
 
 // Audio Engine Includes
 #include "webrtc/common_types.h"
@@ -22,7 +23,7 @@
 #include "webrtc/voice_engine/include/voe_external_media.h"
 #include "webrtc/voice_engine/include/voe_audio_processing.h"
 #include "webrtc/voice_engine/include/voe_video_sync.h"
-
+#include "webrtc/voice_engine/include/voe_rtp_rtcp.h"
 //Some WebRTC types for short notations
  using webrtc::VoEBase;
  using webrtc::VoENetwork;
@@ -30,12 +31,15 @@
  using webrtc::VoEExternalMedia;
  using webrtc::VoEAudioProcessing;
  using webrtc::VoEVideoSync;
-
+ using webrtc::VoERTP_RTCP;
 /** This file hosts several structures identifying different aspects
  * of a RTP Session.
  */
-
 namespace mozilla {
+// Helper function
+
+DOMHighResTimeStamp
+NTPtoDOMHighResTimeStamp(uint32_t ntpHigh, uint32_t ntpLow);
 
 /**
  * Concrete class for Audio session. Hooks up
@@ -80,13 +84,17 @@ public:
    */
   virtual MediaConduitErrorCode ConfigureRecvMediaCodecs(
     const std::vector<AudioCodecConfig* >& codecConfigList);
+  /**
+   * Function to enable the audio level extension
+   * @param enabled: enable extension
+   */
+  virtual MediaConduitErrorCode EnableAudioLevelExtension(bool enabled, uint8_t id);
 
   /**
    * Register External Transport to this Conduit. RTP and RTCP frames from the VoiceEngine
    * shall be passed to the registered transport for transporting externally.
    */
   virtual MediaConduitErrorCode AttachTransport(mozilla::RefPtr<TransportInterface> aTransport);
-
   /**
    * Function to deliver externally captured audio sample for encoding and transport
    * @param audioData [in]: Pointer to array containing a frame of audio
@@ -168,6 +176,17 @@ public:
 
   int GetChannel() { return mChannel; }
   webrtc::VoiceEngine* GetVoiceEngine() { return mVoiceEngine; }
+  bool GetLocalSSRC(unsigned int* ssrc);
+  bool GetRemoteSSRC(unsigned int* ssrc);
+  bool GetRTPStats(unsigned int* jitterMs, unsigned int* cumulativeLost);
+  bool GetRTCPReceiverReport(DOMHighResTimeStamp* timestamp,
+                             unsigned int* jitterMs,
+                             unsigned int* packetsReceived,
+                             uint64_t* bytesReceived,
+                             unsigned int *cumulativeLost);
+  bool GetRTCPSenderReport(DOMHighResTimeStamp* timestamp,
+                           unsigned int* packetsSent,
+                           uint64_t* bytesSent);
 
 private:
   WebrtcAudioConduit(const WebrtcAudioConduit& other) MOZ_DELETE;
@@ -211,18 +230,18 @@ private:
   // conduit to die
   webrtc::VoiceEngine* mVoiceEngine;
   mozilla::RefPtr<TransportInterface> mTransport;
-  webrtc::VoENetwork*  mPtrVoENetwork;
-  webrtc::VoEBase*     mPtrVoEBase;
-  webrtc::VoECodec*    mPtrVoECodec;
-  webrtc::VoEExternalMedia* mPtrVoEXmedia;
-  webrtc::VoEAudioProcessing* mPtrVoEProcessing;
-  webrtc::VoEVideoSync* mPtrVoEVideoSync;
-
+  ScopedCustomReleasePtr<webrtc::VoENetwork>   mPtrVoENetwork;
+  ScopedCustomReleasePtr<webrtc::VoEBase>      mPtrVoEBase;
+  ScopedCustomReleasePtr<webrtc::VoECodec>     mPtrVoECodec;
+  ScopedCustomReleasePtr<webrtc::VoEExternalMedia> mPtrVoEXmedia;
+  ScopedCustomReleasePtr<webrtc::VoEAudioProcessing> mPtrVoEProcessing;
+  ScopedCustomReleasePtr<webrtc::VoEVideoSync> mPtrVoEVideoSync;
+  ScopedCustomReleasePtr<webrtc::VoERTP_RTCP>  mPtrVoERTP_RTCP;
+  ScopedCustomReleasePtr<webrtc::VoERTP_RTCP>  mPtrRTP;
   //engine states of our interets
   bool mEngineTransmitting; // If true => VoiceEngine Send-subsystem is up
   bool mEngineReceiving;    // If true => VoiceEngine Receive-subsystem is up
                             // and playout is enabled
-
   // Keep track of each inserted RTP block and the time it was inserted
   // so we can estimate the clock time for a specific TimeStamp coming out
   // (for when we send data to MediaStreamTracks).  Blocks are aged out as needed.

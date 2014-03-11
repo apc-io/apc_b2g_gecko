@@ -29,7 +29,6 @@
 #include "TreeWalker.h"
 
 #include "nsIDOMElement.h"
-#include "nsIDOMDocument.h"
 #include "nsIDOMNodeFilter.h"
 #include "nsIDOMHTMLElement.h"
 #include "nsIDOMKeyEvent.h"
@@ -83,6 +82,7 @@
 #include "mozilla/unused.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/dom/TreeWalker.h"
 
 using namespace mozilla;
 using namespace mozilla::a11y;
@@ -383,9 +383,8 @@ Accessible::AccessKey() const
     return KeyBinding();
 
   nsresult rv = NS_ERROR_FAILURE;
-  int32_t itemType = 0, modifierMask = 0;
-  treeItem->GetItemType(&itemType);
-  switch (itemType) {
+  int32_t modifierMask = 0;
+  switch (treeItem->ItemType()) {
     case nsIDocShellTreeItem::typeChrome:
       rv = Preferences::GetInt("ui.key.chromeAccess", &modifierMask);
       break;
@@ -582,7 +581,6 @@ Accessible::VisibilityState()
     return states::INVISIBLE;
 
   nsIFrame* curFrame = frame;
-  nsPoint framePos(0, 0);
   do {
     nsView* view = curFrame->GetView();
     if (view && view->GetVisibility() == nsViewVisibility_kHide)
@@ -606,11 +604,11 @@ Accessible::VisibilityState()
 
     // If contained by scrollable frame then check that at least 12 pixels
     // around the object is visible, otherwise the object is offscreen.
-    framePos += curFrame->GetPosition();
     nsIScrollableFrame* scrollableFrame = do_QueryFrame(parentFrame);
     if (scrollableFrame) {
       nsRect scrollPortRect = scrollableFrame->GetScrollPortRect();
-      nsRect frameRect(framePos, frame->GetSize());
+      nsRect frameRect = nsLayoutUtils::TransformFrameRectToAncestor(
+        frame, frame->GetRectRelativeToSelf(), parentFrame);
       if (!scrollPortRect.Contains(frameRect)) {
         const nscoord kMinPixels = nsPresContext::CSSPixelsToAppUnits(12);
         scrollPortRect.Deflate(kMinPixels, kMinPixels);
@@ -921,7 +919,26 @@ void
 Accessible::GetBoundsRect(nsRect& aTotalBounds, nsIFrame** aBoundingFrame)
 {
   nsIFrame* frame = GetFrame();
-  if (frame) {
+  if (frame && mContent) {
+    nsRect* hitRegionRect = static_cast<nsRect*>(mContent->GetProperty(nsGkAtoms::hitregion));
+
+    if (hitRegionRect) {
+      // This is for canvas fallback content
+      // Find a canvas frame the found hit region is relative to.
+      nsIFrame* canvasFrame = frame->GetParent();
+      while (canvasFrame && (canvasFrame->GetType() != nsGkAtoms::HTMLCanvasFrame))
+        canvasFrame = canvasFrame->GetParent();
+
+      // make the canvas the bounding frame
+      if (canvasFrame) {
+        *aBoundingFrame = canvasFrame;
+
+        aTotalBounds = *hitRegionRect;
+
+        return;
+      }
+    }
+
     *aBoundingFrame = nsLayoutUtils::GetContainingBlockForClientRect(frame);
     aTotalBounds = nsLayoutUtils::
       GetAllInFlowRectsUnion(frame, *aBoundingFrame,
@@ -1662,7 +1679,7 @@ Accessible::MinValue() const
 double
 Accessible::Step() const
 {
-  return UnspecifiedNaN(); // no mimimum increment (step) in ARIA.
+  return UnspecifiedNaN<double>(); // no mimimum increment (step) in ARIA.
 }
 
 double
@@ -2120,10 +2137,9 @@ Accessible::RelationByType(RelationType aType)
           // If the item type is typeContent, we assume we are in browser tab
           // content. Note, this includes content such as about:addons,
           // for consistency.
-          int32_t itemType = 0;
-          root->GetItemType(&itemType);
-          if (itemType == nsIDocShellTreeItem::typeContent)
+          if (root->ItemType() == nsIDocShellTreeItem::typeContent) {
             return Relation(nsAccUtils::GetDocAccessibleFor(root));
+          }
         }
       }
       return  Relation();
@@ -2650,7 +2666,7 @@ Accessible::RemoveChild(Accessible* aChild)
 }
 
 Accessible*
-Accessible::GetChildAt(uint32_t aIndex)
+Accessible::GetChildAt(uint32_t aIndex) const
 {
   Accessible* child = mChildren.SafeElementAt(aIndex, nullptr);
   if (!child)
@@ -2669,12 +2685,6 @@ uint32_t
 Accessible::ChildCount() const
 {
   return mChildren.Length();
-}
-
-int32_t
-Accessible::GetIndexOf(Accessible* aChild)
-{
-  return (aChild->mParent != this) ? -1 : aChild->IndexInParent();
 }
 
 int32_t
@@ -3069,52 +3079,19 @@ Accessible::GetSiblingAtOffset(int32_t aOffset, nsresult* aError) const
   return child;
 }
 
-Accessible* 
-Accessible::GetFirstAvailableAccessible(nsINode *aStartNode) const
-{
-  Accessible* accessible = mDoc->GetAccessible(aStartNode);
-  if (accessible)
-    return accessible;
-
-  nsCOMPtr<nsIDOMDocument> domDoc = do_QueryInterface(aStartNode->OwnerDoc());
-  NS_ENSURE_TRUE(domDoc, nullptr);
-
-  nsCOMPtr<nsIDOMNode> currentNode = do_QueryInterface(aStartNode);
-  nsCOMPtr<nsIDOMNode> rootNode = do_QueryInterface(GetNode());
-  nsCOMPtr<nsIDOMTreeWalker> walker;
-  domDoc->CreateTreeWalker(rootNode,
-                           nsIDOMNodeFilter::SHOW_ELEMENT | nsIDOMNodeFilter::SHOW_TEXT,
-                           nullptr, 1, getter_AddRefs(walker));
-  NS_ENSURE_TRUE(walker, nullptr);
-
-  walker->SetCurrentNode(currentNode);
-  while (true) {
-    walker->NextNode(getter_AddRefs(currentNode));
-    if (!currentNode)
-      return nullptr;
-
-    nsCOMPtr<nsINode> node(do_QueryInterface(currentNode));
-    Accessible* accessible = mDoc->GetAccessible(node);
-    if (accessible)
-      return accessible;
-  }
-
-  return nullptr;
-}
-
 double
 Accessible::AttrNumericValue(nsIAtom* aAttr) const
 {
   if (!mRoleMapEntry || mRoleMapEntry->valueRule == eNoValue)
-    return UnspecifiedNaN();
+    return UnspecifiedNaN<double>();
 
   nsAutoString attrValue;
   if (!mContent->GetAttr(kNameSpaceID_None, aAttr, attrValue))
-    return UnspecifiedNaN();
+    return UnspecifiedNaN<double>();
 
   nsresult error = NS_OK;
   double value = attrValue.ToDouble(&error);
-  return NS_FAILED(error) ? UnspecifiedNaN() : value;
+  return NS_FAILED(error) ? UnspecifiedNaN<double>() : value;
 }
 
 uint32_t

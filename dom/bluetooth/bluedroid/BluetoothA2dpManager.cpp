@@ -10,11 +10,12 @@
 
 #include <hardware/bluetooth.h>
 #include <hardware/bt_av.h>
+#if ANDROID_VERSION > 17
 #include <hardware/bt_rc.h>
+#endif
 
 #include "BluetoothCommon.h"
 #include "BluetoothService.h"
-#include "BluetoothServiceBluedroid.h"
 #include "BluetoothSocket.h"
 #include "BluetoothUtils.h"
 
@@ -32,7 +33,9 @@ namespace {
   StaticRefPtr<BluetoothA2dpManager> sBluetoothA2dpManager;
   bool sInShutdown = false;
   static const btav_interface_t* sBtA2dpInterface;
+#if ANDROID_VERSION > 17
   static const btrc_interface_t* sBtAvrcpInterface;
+#endif
 } // anonymous namespace
 
 class SinkPropertyChangedHandler : public nsRunnable
@@ -83,6 +86,7 @@ public:
   }
 };
 
+#if ANDROID_VERSION > 17
 class UpdateRegisterNotificationTask : public nsRunnable
 {
 public:
@@ -174,11 +178,12 @@ private:
   uint8_t mNumAttr;
   btrc_media_attr_t* mPlayerAttrs;
 };
+#endif
 
 NS_IMETHODIMP
 BluetoothA2dpManager::Observe(nsISupports* aSubject,
                               const char* aTopic,
-                              const PRUnichar* aData)
+                              const char16_t* aData)
 {
   MOZ_ASSERT(sBluetoothA2dpManager);
 
@@ -192,6 +197,12 @@ BluetoothA2dpManager::Observe(nsISupports* aSubject,
 }
 
 BluetoothA2dpManager::BluetoothA2dpManager()
+{
+  Reset();
+}
+
+void
+BluetoothA2dpManager::Reset()
 {
   ResetA2dp();
   ResetAvrcp();
@@ -265,6 +276,7 @@ A2dpAudioStateCallback(btav_audio_state_t aState,
   NS_DispatchToMainThread(new SinkPropertyChangedHandler(signal));
 }
 
+#if ANDROID_VERSION > 17
 /*
  * Avrcp 1.3 callbacks
  */
@@ -370,6 +382,42 @@ AvrcpSetPlayerAppValueCallback(btrc_player_settings_t* aPlayerVals)
 
 // TODO: Support avrcp application setting related functions
 }
+#endif
+
+#if ANDROID_VERSION > 18
+/*
+ * This callback function is to get CT features from Feature Bit Mask.
+ * If Advanced Control Player bit is set, CT supports
+ * volume sync (absolute volume feature). If Browsing bit is set, Avrcp 1.4
+ * Browse feature will be supported
+ */
+static void
+AvrcpRemoteFeaturesCallback(bt_bdaddr_t* aBdAddress,
+                            btrc_remote_features_t aFeatures)
+{
+// TODO: Support avrcp 1.4 absolute volume/browse
+}
+
+/*
+ * This callback function is to get notification that volume changed on the
+ * remote car kit (if it supports Avrcp 1.4), not notification from phone.
+ */
+static void
+AvrcpRemoteVolumeChangedCallback(uint8_t aVolume, uint8_t aCType)
+{
+// TODO: Support avrcp 1.4 absolute volume/browse
+}
+
+/*
+ * This callback function is to get notification that volume changed on the
+ * remote car kit (if it supports Avrcp 1.4), not notification from phone.
+ */
+static void
+AvrcpPassThroughCallback(int id, int key_state)
+{
+// TODO: Support avrcp 1.4 absolute volume/browse
+}
+#endif
 
 static btav_callbacks_t sBtA2dpCallbacks = {
   sizeof(sBtA2dpCallbacks),
@@ -377,8 +425,12 @@ static btav_callbacks_t sBtA2dpCallbacks = {
   A2dpAudioStateCallback
 };
 
+#if ANDROID_VERSION > 17
 static btrc_callbacks_t sBtAvrcpCallbacks = {
   sizeof(sBtAvrcpCallbacks),
+#if ANDROID_VERSION > 18
+  AvrcpRemoteFeaturesCallback,
+#endif
   AvrcpGetPlayStatusCallback,
   AvrcpListPlayerAppAttributeCallback,
   AvrcpListPlayerAppValuesCallback,
@@ -387,8 +439,13 @@ static btrc_callbacks_t sBtAvrcpCallbacks = {
   AvrcpGetPlayerAppValuesTextCallback,
   AvrcpSetPlayerAppValueCallback,
   AvrcpGetElementAttrCallback,
-  AvrcpRegisterNotificationCallback
+  AvrcpRegisterNotificationCallback,
+#if ANDROID_VERSION > 18
+  AvrcpRemoteVolumeChangedCallback,
+  AvrcpPassThroughCallback
+#endif
 };
+#endif
 
 /*
  * This function will be only called when Bluetooth is turning on.
@@ -412,6 +469,7 @@ BluetoothA2dpManager::Init()
     return false;
   }
 
+#if ANDROID_VERSION > 17
   sBtAvrcpInterface = (btrc_interface_t *)btInf->
     get_profile_interface(BT_PROFILE_AV_RC_ID);
   NS_ENSURE_TRUE(sBtAvrcpInterface, false);
@@ -421,6 +479,7 @@ BluetoothA2dpManager::Init()
     BT_LOGR("Warning: failed to init avrcp module");
     return false;
   }
+#endif
 
   return true;
 }
@@ -517,53 +576,74 @@ BluetoothA2dpManager::Connect(const nsAString& aDeviceAddress,
 
   BluetoothService* bs = BluetoothService::Get();
   if (!bs || sInShutdown) {
-    aController->OnConnect(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
+    aController->NotifyCompletion(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
     return;
   }
 
   if (mA2dpConnected) {
-    aController->OnConnect(NS_LITERAL_STRING(ERR_ALREADY_CONNECTED));
+    aController->NotifyCompletion(NS_LITERAL_STRING(ERR_ALREADY_CONNECTED));
     return;
   }
 
   mDeviceAddress = aDeviceAddress;
   mController = aController;
 
+  if (!sBtA2dpInterface) {
+    BT_LOGR("sBluetoothA2dpInterface is null");
+    aController->NotifyCompletion(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
+    return;
+  }
+
   bt_bdaddr_t remoteAddress;
   StringToBdAddressType(aDeviceAddress, &remoteAddress);
-  NS_ENSURE_TRUE_VOID(sBtA2dpInterface);
-  NS_ENSURE_TRUE_VOID(BT_STATUS_SUCCESS ==
-                      sBtA2dpInterface->connect(&remoteAddress));
+
+  bt_status_t result = sBtA2dpInterface->connect(&remoteAddress);
+  if (BT_STATUS_SUCCESS != result) {
+    BT_LOGR("Failed to connect: %x", result);
+    aController->NotifyCompletion(NS_LITERAL_STRING(ERR_CONNECTION_FAILED));
+    return;
+  }
 }
 
 void
 BluetoothA2dpManager::Disconnect(BluetoothProfileController* aController)
 {
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(!mController);
+
   BluetoothService* bs = BluetoothService::Get();
   if (!bs) {
     if (aController) {
-      aController->OnDisconnect(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
+      aController->NotifyCompletion(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
     }
     return;
   }
 
   if (!mA2dpConnected) {
     if (aController) {
-      aController->OnDisconnect(NS_LITERAL_STRING(ERR_ALREADY_DISCONNECTED));
+      aController->NotifyCompletion(NS_LITERAL_STRING(ERR_ALREADY_DISCONNECTED));
     }
     return;
   }
 
   MOZ_ASSERT(!mDeviceAddress.IsEmpty());
-  MOZ_ASSERT(!mController);
 
   mController = aController;
 
+  if (!sBtA2dpInterface) {
+    BT_LOGR("sBluetoothA2dpInterface is null");
+    aController->NotifyCompletion(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
+    return;
+  }
+
   bt_bdaddr_t remoteAddress;
   StringToBdAddressType(mDeviceAddress, &remoteAddress);
-  if (sBtA2dpInterface) {
-    NS_ENSURE_TRUE_VOID(BT_STATUS_SUCCESS ==
-                        sBtA2dpInterface->disconnect(&remoteAddress));
+
+  bt_status_t result = sBtA2dpInterface->disconnect(&remoteAddress);
+  if (BT_STATUS_SUCCESS != result) {
+    BT_LOGR("Failed to disconnect: %x", result);
+    aController->NotifyCompletion(NS_LITERAL_STRING(ERR_DISCONNECTION_FAILED));
+    return;
   }
 }
 
@@ -579,7 +659,7 @@ BluetoothA2dpManager::OnConnect(const nsAString& aErrorStr)
   NS_ENSURE_TRUE_VOID(mController);
 
   nsRefPtr<BluetoothProfileController> controller = mController.forget();
-  controller->OnConnect(aErrorStr);
+  controller->NotifyCompletion(aErrorStr);
 }
 
 void
@@ -594,7 +674,9 @@ BluetoothA2dpManager::OnDisconnect(const nsAString& aErrorStr)
   NS_ENSURE_TRUE_VOID(mController);
 
   nsRefPtr<BluetoothProfileController> controller = mController.forget();
-  controller->OnDisconnect(aErrorStr);
+  controller->NotifyCompletion(aErrorStr);
+
+  Reset();
 }
 
 /* HandleSinkPropertyChanged update sink state in A2dp
@@ -623,6 +705,14 @@ BluetoothA2dpManager::HandleSinkPropertyChanged(const BluetoothSignal& aSignal)
              BluetoothValue::TArrayOfBluetoothNamedValue);
 
   const nsString& address = aSignal.path();
+  /**
+   * Update sink property only if
+   * - mDeviceAddress is empty (A2dp is disconnected), or
+   * - this property change is from the connected sink.
+   */
+  NS_ENSURE_TRUE_VOID(mDeviceAddress.IsEmpty() ||
+                      mDeviceAddress.Equals(address));
+
   const InfallibleTArray<BluetoothNamedValue>& arr =
     aSignal.value().get_ArrayOfBluetoothNamedValue();
   MOZ_ASSERT(arr.Length() == 1);
@@ -763,12 +853,13 @@ void
 BluetoothA2dpManager::UpdateMetaData(const nsAString& aTitle,
                                      const nsAString& aArtist,
                                      const nsAString& aAlbum,
-                                     uint32_t aMediaNumber,
-                                     uint32_t aTotalMediaCount,
+                                     uint64_t aMediaNumber,
+                                     uint64_t aTotalMediaCount,
                                      uint32_t aDuration)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
+#if ANDROID_VERSION > 17
   NS_ENSURE_TRUE_VOID(sBtAvrcpInterface);
 
   // Send track changed and position changed if track num is not the same.
@@ -803,6 +894,7 @@ BluetoothA2dpManager::UpdateMetaData(const nsAString& aTitle,
   mMediaNumber = aMediaNumber;
   mTotalMediaCount = aTotalMediaCount;
   mDuration = aDuration;
+#endif
 }
 
 /*
@@ -816,6 +908,7 @@ BluetoothA2dpManager::UpdatePlayStatus(uint32_t aDuration,
 {
   MOZ_ASSERT(NS_IsMainThread());
 
+#if ANDROID_VERSION > 17
   NS_ENSURE_TRUE_VOID(sBtAvrcpInterface);
   // when play status changed, send both play status and position
   if (mPlayStatus != aPlayStatus &&
@@ -843,12 +936,13 @@ BluetoothA2dpManager::UpdatePlayStatus(uint32_t aDuration,
   mDuration = aDuration;
   mPosition = aPosition;
   mPlayStatus = aPlayStatus;
+#endif
 }
 
 /*
  * This function handles RegisterNotification request from
  * AvrcpRegisterNotificationCallback, which updates current
- * track/status/position status.
+ * track/status/position status in the INTERRIM response.
  *
  * aParam is only valid when position changed
  */
@@ -857,6 +951,7 @@ BluetoothA2dpManager::UpdateRegisterNotification(int aEventId, int aParam)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
+#if ANDROID_VERSION > 17
   NS_ENSURE_TRUE_VOID(sBtAvrcpInterface);
 
   btrc_register_notification_t param;
@@ -867,16 +962,34 @@ BluetoothA2dpManager::UpdateRegisterNotification(int aEventId, int aParam)
       param.play_status = (btrc_play_status_t)mPlayStatus;
       break;
     case BTRC_EVT_TRACK_CHANGE:
+      // In AVRCP 1.3 and 1.4, the identifier parameter of EVENT_TRACK_CHANGED
+      // is different.
+      // AVRCP 1.4: If no track is selected, we shall return 0xFFFFFFFFFFFFFFFF,
+      // otherwise return 0x0 in the INTERRIM response. The expanded text in
+      // version 1.4 is to allow for new UID feature. As for AVRCP 1.3, we shall
+      // return 0xFFFFFFFF. Since PTS enforces to check this part to comply with
+      // the most updated spec.
       mTrackChangedNotifyType = BTRC_NOTIFICATION_TYPE_INTERIM;
       // needs to convert to network big endian format since track stores
-      // as uint8[8]. 56 = 8 * (BTRC_UID_SIZE -1)
-      for (int i = 0; i < BTRC_UID_SIZE; ++i) {
-        param.track[i] = (mMediaNumber >> (56 - 8 * i));
+      // as uint8[8]. 56 = 8 * (BTRC_UID_SIZE -1).
+      for (int index = 0; index < BTRC_UID_SIZE; ++index) {
+        // We cannot easily check if a track is selected, so whenever A2DP is
+        // streaming, we assume a track is selected.
+        if (mSinkState == BluetoothA2dpManager::SinkState::SINK_PLAYING) {
+          param.track[index] = 0x0;
+        } else {
+          param.track[index] = 0xFF;
+        }
       }
       break;
     case BTRC_EVT_PLAY_POS_CHANGED:
+      // If no track is selected, return 0xFFFFFFFF in the INTERIM response
       mPlayPosChangedNotifyType = BTRC_NOTIFICATION_TYPE_INTERIM;
-      param.song_pos = mPosition;
+      if (mSinkState == BluetoothA2dpManager::SinkState::SINK_PLAYING) {
+        param.song_pos = mPosition;
+      } else {
+        param.song_pos = 0xFFFFFFFF;
+      }
       mPlaybackInterval = aParam;
       break;
     default:
@@ -886,6 +999,7 @@ BluetoothA2dpManager::UpdateRegisterNotification(int aEventId, int aParam)
   sBtAvrcpInterface->register_notification_rsp((btrc_event_id_t)aEventId,
                                                BTRC_NOTIFICATION_TYPE_INTERIM,
                                                &param);
+#endif
 }
 
 void
@@ -912,13 +1026,13 @@ BluetoothA2dpManager::GetPosition()
   return mPosition;
 }
 
-uint32_t
+uint64_t
 BluetoothA2dpManager::GetMediaNumber()
 {
   return mMediaNumber;
 }
 
-uint32_t
+uint64_t
 BluetoothA2dpManager::GetTotalMediaNumber()
 {
   return mTotalMediaCount;

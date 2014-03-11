@@ -63,11 +63,10 @@ SVGFEGaussianBlurElement::SetStdDeviation(float stdDeviationX, float stdDeviatio
   mNumberPairAttributes[STD_DEV].SetBaseValues(stdDeviationX, stdDeviationY, this);
 }
 
-static const float kMaxStdDeviation = 500;
-
 FilterPrimitiveDescription
 SVGFEGaussianBlurElement::GetPrimitiveDescription(nsSVGFilterInstance* aInstance,
                                                   const IntRect& aFilterSubregion,
+                                                  const nsTArray<bool>& aInputsAreTainted,
                                                   nsTArray<RefPtr<SourceSurface>>& aInputImages)
 {
   float stdX = aInstance->GetPrimitiveNumber(SVGContentUtils::X,
@@ -80,8 +79,6 @@ SVGFEGaussianBlurElement::GetPrimitiveDescription(nsSVGFilterInstance* aInstance
     return FilterPrimitiveDescription(FilterPrimitiveDescription::eNone);
   }
 
-  stdX = std::min(stdX, kMaxStdDeviation);
-  stdY = std::min(stdY, kMaxStdDeviation);
   FilterPrimitiveDescription descr(FilterPrimitiveDescription::eGaussianBlur);
   descr.Attributes().Set(eGaussianBlurStdDeviation, Size(stdX, stdY));
   return descr;

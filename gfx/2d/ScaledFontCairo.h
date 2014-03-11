@@ -16,6 +16,7 @@ namespace gfx {
 class ScaledFontCairo : public ScaledFontBase
 {
 public:
+  MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(ScaledFontCairo)
 
   ScaledFontCairo(cairo_scaled_font_t* aScaledFont, Float aSize);
 
@@ -32,8 +33,9 @@ public:
 class GlyphRenderingOptionsCairo : public GlyphRenderingOptions
 {
 public:
+  MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(GlyphRenderingOptionsCairo)
   GlyphRenderingOptionsCairo()
-    : mHinting(FONT_HINTING_NORMAL)
+    : mHinting(FontHinting::NORMAL)
     , mAutoHinting(false)
   {
   }
@@ -42,7 +44,7 @@ public:
   void SetAutoHinting(bool aAutoHinting) { mAutoHinting = aAutoHinting; }
   FontHinting GetHinting() const { return mHinting; }
   bool GetAutoHinting() const { return mAutoHinting; }
-  virtual FontType GetType() const { return FONT_CAIRO; }
+  virtual FontType GetType() const { return FontType::CAIRO; }
 private:
   FontHinting mHinting;
   bool mAutoHinting;

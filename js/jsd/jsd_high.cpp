@@ -34,9 +34,9 @@ JSDStaticLock* _jsd_global_lock = nullptr;
 #ifdef DEBUG
 void JSD_ASSERT_VALID_CONTEXT(JSDContext* jsdc)
 {
-    JS_ASSERT(jsdc->inited);
-    JS_ASSERT(jsdc->jsrt);
-    JS_ASSERT(jsdc->glob);
+    MOZ_ASSERT(jsdc->inited);
+    MOZ_ASSERT(jsdc->jsrt);
+    MOZ_ASSERT(jsdc->glob);
 }
 #endif
 
@@ -126,7 +126,7 @@ _newJSDContext(JSRuntime*         jsrt,
     {
         JSAutoCompartment ac(cx, jsdc->glob);
         ok = JS_AddNamedObjectRoot(cx, &jsdc->glob, "JSD context global") &&
-             JS_InitStandardClasses(cx, jsdc->glob);
+             JS_InitStandardClasses(cx, JS::HandleObject::fromMarkedLocation(&jsdc->glob));
     }
     if( ! ok )
         goto label_newJSDContext_failure;
@@ -209,8 +209,8 @@ jsd_DebuggerOnForUser(JSRuntime*         jsrt,
 JSDContext*
 jsd_DebuggerOn(void)
 {
-    JS_ASSERT(_jsrt);
-    JS_ASSERT(_validateUserCallbacks(&_callbacks));
+    MOZ_ASSERT(_jsrt);
+    MOZ_ASSERT(_validateUserCallbacks(&_callbacks));
     return jsd_DebuggerOnForUser(_jsrt, &_callbacks, _user, nullptr);
 }
 
@@ -337,7 +337,7 @@ jsd_DebugErrorHook(JSContext *cx, const char *message,
     
     if( ! jsdc )
     {
-        JS_ASSERT(0);
+        MOZ_ASSERT(0);
         return true;
     }
     if( JSD_IS_DANGEROUS_THREAD(jsdc) )
@@ -360,7 +360,7 @@ jsd_DebugErrorHook(JSContext *cx, const char *message,
             return false;
         case JSD_ERROR_REPORTER_DEBUG:
         {
-            jsval rval;
+            JS::RootedValue rval(cx);
             JSD_ExecutionHookProc   hook;
             void*                   hookData;
 
@@ -371,7 +371,7 @@ jsd_DebugErrorHook(JSContext *cx, const char *message,
             JSD_UNLOCK();
 
             jsd_CallExecutionHook(jsdc, cx, JSD_HOOK_DEBUG_REQUESTED,
-                                  hook, hookData, &rval);
+                                  hook, hookData, rval.address());
             /* XXX Should make this dependent on ExecutionHook retval */
             return true;
         }
@@ -380,7 +380,7 @@ jsd_DebugErrorHook(JSContext *cx, const char *message,
                 JS_ClearPendingException(cx);
             return false;
         default:
-            JS_ASSERT(0);
+            MOZ_ASSERT(0);
             break;
     }
     return true;

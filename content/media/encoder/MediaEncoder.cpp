@@ -7,12 +7,16 @@
 #include "nsIPrincipal.h"
 #include "nsMimeTypes.h"
 #include "prlog.h"
+#include "mozilla/Preferences.h"
 
-#ifdef MOZ_OGG
 #include "OggWriter.h"
-#endif
 #ifdef MOZ_OPUS
 #include "OpusTrackEncoder.h"
+
+#endif
+
+#ifdef MOZ_VORBIS
+#include "VorbisTrackEncoder.h"
 #endif
 #ifdef MOZ_WEBM_ENCODER
 #include "VorbisTrackEncoder.h"
@@ -36,8 +40,6 @@ PRLogModuleInfo* gMediaEncoderLog;
 #endif
 
 namespace mozilla {
-
-static nsIThread* sEncoderThread = nullptr;
 
 void
 MediaEncoder::NotifyQueuedTrackChanges(MediaStreamGraph* aGraph,
@@ -75,11 +77,6 @@ MediaEncoder::NotifyRemoved(MediaStreamGraph* aGraph)
 
 }
 
-bool
-MediaEncoder::OnEncoderThread()
-{
-  return NS_GetCurrentThread() == sEncoderThread;
-}
 /* static */
 already_AddRefed<MediaEncoder>
 MediaEncoder::CreateEncoder(const nsAString& aMIMEType, uint8_t aTrackTypes)
@@ -99,10 +96,10 @@ MediaEncoder::CreateEncoder(const nsAString& aMIMEType, uint8_t aTrackTypes)
     return nullptr;
   }
 #ifdef MOZ_WEBM_ENCODER
-  else if (MediaDecoder::IsWebMEnabled() &&
+  else if (MediaEncoder::IsWebMEncoderEnabled() &&
           (aMIMEType.EqualsLiteral(VIDEO_WEBM) ||
-          (aTrackTypes & ContainerWriter::HAS_VIDEO))) {
-    if (aTrackTypes & ContainerWriter::HAS_AUDIO) {
+          (aTrackTypes & ContainerWriter::CREATE_VIDEO_TRACK))) {
+    if (aTrackTypes & ContainerWriter::CREATE_AUDIO_TRACK) {
       audioEncoder = new VorbisTrackEncoder();
       NS_ENSURE_TRUE(audioEncoder, nullptr);
     }
@@ -114,9 +111,10 @@ MediaEncoder::CreateEncoder(const nsAString& aMIMEType, uint8_t aTrackTypes)
   }
 #endif //MOZ_WEBM_ENCODER
 #ifdef MOZ_OMX_ENCODER
-  else if (aMIMEType.EqualsLiteral(VIDEO_MP4) ||
-          (aTrackTypes & ContainerWriter::HAS_VIDEO)) {
-    if (aTrackTypes & ContainerWriter::HAS_AUDIO) {
+  else if (MediaEncoder::IsOMXEncoderEnabled() &&
+          (aMIMEType.EqualsLiteral(VIDEO_MP4) ||
+          (aTrackTypes & ContainerWriter::CREATE_VIDEO_TRACK))) {
+    if (aTrackTypes & ContainerWriter::CREATE_AUDIO_TRACK) {
       audioEncoder = new OmxAudioTrackEncoder();
       NS_ENSURE_TRUE(audioEncoder, nullptr);
     }
@@ -127,17 +125,15 @@ MediaEncoder::CreateEncoder(const nsAString& aMIMEType, uint8_t aTrackTypes)
     mimeType = NS_LITERAL_STRING(VIDEO_MP4);
   }
 #endif // MOZ_OMX_ENCODER
-#ifdef MOZ_OGG
   else if (MediaDecoder::IsOggEnabled() && MediaDecoder::IsOpusEnabled() &&
            (aMIMEType.EqualsLiteral(AUDIO_OGG) ||
-           (aTrackTypes & ContainerWriter::HAS_AUDIO))) {
+           (aTrackTypes & ContainerWriter::CREATE_AUDIO_TRACK))) {
     writer = new OggWriter();
     audioEncoder = new OpusTrackEncoder();
     NS_ENSURE_TRUE(writer, nullptr);
     NS_ENSURE_TRUE(audioEncoder, nullptr);
     mimeType = NS_LITERAL_STRING(AUDIO_OGG);
   }
-#endif  // MOZ_OGG
   else {
     LOG(PR_LOG_ERROR, ("Can not find any encoder to record this media stream"));
     return nullptr;
@@ -179,9 +175,7 @@ MediaEncoder::GetEncodedData(nsTArray<nsTArray<uint8_t> >* aOutputBufs,
                              nsAString& aMIMEType)
 {
   MOZ_ASSERT(!NS_IsMainThread());
-  if (!sEncoderThread) {
-    sEncoderThread = NS_GetCurrentThread();
-  }
+
   aMIMEType = mMIMEType;
 
   bool reloop = true;
@@ -304,5 +298,21 @@ MediaEncoder::CopyMetadataToMuxer(TrackEncoder *aTrackEncoder)
   }
   return rv;
 }
+
+#ifdef MOZ_WEBM_ENCODER
+bool
+MediaEncoder::IsWebMEncoderEnabled()
+{
+  return Preferences::GetBool("media.encoder.webm.enabled");
+}
+#endif
+
+#ifdef MOZ_OMX_ENCODER
+bool
+MediaEncoder::IsOMXEncoderEnabled()
+{
+  return Preferences::GetBool("media.encoder.omx.enabled");
+}
+#endif
 
 }

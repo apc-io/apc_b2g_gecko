@@ -1032,6 +1032,9 @@ let SocialStatusWidgetListener = {
 SocialStatus = {
   populateToolbarPalette: function() {
     this._toolbarHelper.populatePalette();
+
+    for (let provider of Social.providers)
+      this.updateButton(provider.origin);
   },
 
   removeProvider: function(origin) {
@@ -1171,7 +1174,7 @@ SocialStatus = {
     if (inMenuPanel) {
       panel = document.getElementById("PanelUI-socialapi");
       this._attachNotificatonPanel(panel, aToolbarButton, provider);
-      widget.node.setAttribute("noautoclose", "true");
+      widget.node.setAttribute("closemenu", "none");
       showingEvent = "ViewShowing";
       hidingEvent = "ViewHiding";
     } else {

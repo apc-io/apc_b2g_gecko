@@ -16,17 +16,15 @@
 #include "nsIAsyncInputStream.h"
 #include "nsIAsyncOutputStream.h"
 #include "nsIInterfaceRequestor.h"
+#include "nsITimer.h"
 
-class nsHttpRequestHead;
-class nsHttpResponseHead;
-class nsHttpHandler;
 class nsISocketTransport;
 
 namespace mozilla {
 namespace net {
+
+class nsHttpHandler;
 class ASpdySession;
-}
-}
 
 //-----------------------------------------------------------------------------
 // nsHttpConnection - represents a connection to a HTTP server (or proxy)
@@ -145,8 +143,16 @@ public:
     // authoritatively whether UsingSpdy() or not.
     bool ReportedNPN() { return mReportedSpdy; }
 
-    // When the connection is active this is called every 1 second
-    void  ReadTimeoutTick(PRIntervalTime now);
+    // When the connection is active this is called up to once every 1 second
+    // return the interval (in seconds) that the connection next wants to
+    // have this invoked. It might happen sooner depending on the needs of
+    // other connections.
+    uint32_t  ReadTimeoutTick(PRIntervalTime now);
+
+    // For Active and Idle connections, this will be called when
+    // mTCPKeepaliveTransitionTimer fires, to check if the TCP keepalive config
+    // should move from short-lived (fast-detect) to long-lived.
+    static void UpdateTCPKeepalive(nsITimer *aTimer, void *aClosure);
 
     nsAHttpTransaction::Classifier Classification() { return mClassification; }
     void Classify(nsAHttpTransaction::Classifier newclass)
@@ -169,6 +175,13 @@ public:
     bool    IsExperienced() { return mExperienced; }
 
 private:
+    // Value (set in mTCPKeepaliveConfig) indicates which set of prefs to use.
+    enum TCPKeepaliveConfig {
+      kTCPKeepaliveDisabled = 0,
+      kTCPKeepaliveShortLivedConfig,
+      kTCPKeepaliveLongLivedConfig
+    };
+
     // called to cause the underlying socket to start speaking SSL
     nsresult ProxyStartSSL();
 
@@ -193,8 +206,11 @@ private:
     // Directly Add a transaction to an active connection for SPDY
     nsresult AddTransaction(nsAHttpTransaction *, int32_t);
 
-    // used to inform nsIHttpDataUsage of transfer
-    void ReportDataUsage(bool);
+    // Used to set TCP keepalives for fast detection of dead connections during
+    // an initial period, and slower detection for long-lived connections.
+    nsresult StartShortLivedTCPKeepalives();
+    nsresult StartLongLivedTCPKeepalives();
+    nsresult DisableTCPKeepalives();
 
 private:
     nsCOMPtr<nsISocketTransport>    mSocketTransport;
@@ -213,7 +229,7 @@ private:
 
     nsRefPtr<nsHttpHandler>         mHttpHandler; // keep gHttpHandler alive
 
-    mozilla::Mutex                  mCallbacksLock;
+    Mutex                           mCallbacksLock;
     nsMainThreadPtrHandle<nsIInterfaceRequestor> mCallbacks;
 
     nsRefPtr<nsHttpConnectionInfo> mConnInfo;
@@ -228,10 +244,6 @@ private:
     int64_t                         mMaxBytesRead;       // max read in 1 activation
     int64_t                         mTotalBytesRead;     // total data read
     int64_t                         mTotalBytesWritten;  // does not include CONNECT tunnel
-
-    // for nsIHttpDataUsage
-    uint64_t                        mUnreportedBytesRead;     // subset of totalBytesRead
-    uint64_t                        mUnreportedBytesWritten;  // subset of totalBytesWritten
 
     nsRefPtr<nsIAsyncInputStream>   mInputOverflow;
 
@@ -266,7 +278,7 @@ private:
     // version level in use, 0 if unused
     uint8_t                         mUsingSpdyVersion;
 
-    nsRefPtr<mozilla::net::ASpdySession> mSpdySession;
+    nsRefPtr<ASpdySession>          mSpdySession;
     int32_t                         mPriority;
     bool                            mReportedSpdy;
 
@@ -278,6 +290,14 @@ private:
 
     // The capabailities associated with the most recent transaction
     uint32_t                        mTransactionCaps;
+
+    bool                            mResponseTimeoutEnabled;
+
+    // Flag to indicate connection is in inital keepalive period (fast detect).
+    uint32_t                        mTCPKeepaliveConfig;
+    nsCOMPtr<nsITimer>              mTCPKeepaliveTransitionTimer;
 };
+
+}} // namespace mozilla::net
 
 #endif // nsHttpConnection_h__

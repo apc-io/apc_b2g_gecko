@@ -7,6 +7,7 @@
 #include "LockedFile.h"
 
 #include "nsIAppShell.h"
+#include "nsIDOMEvent.h"
 #include "nsIDOMFile.h"
 #include "nsIFileStorage.h"
 #include "nsISeekableStream.h"
@@ -15,16 +16,15 @@
 #include "nsEventDispatcher.h"
 #include "nsNetUtil.h"
 #include "nsDOMClassInfoID.h"
-#include "nsDOMEvent.h"
 #include "nsJSUtils.h"
 #include "nsStringStream.h"
 #include "nsWidgetsCID.h"
 #include "xpcpublic.h"
 
 #include "AsyncHelper.h"
+#include "DOMFileRequest.h"
 #include "FileHandle.h"
 #include "FileHelper.h"
-#include "FileRequest.h"
 #include "FileService.h"
 #include "FileStreamWrappers.h"
 #include "MemoryStreams.h"
@@ -33,6 +33,7 @@
 #include "nsContentUtils.h"
 
 #include "mozilla/dom/EncodingUtils.h"
+#include "mozilla/dom/LockedFileBinding.h"
 
 #define STREAM_COPY_BLOCK_SIZE 32768
 
@@ -61,10 +62,11 @@ public:
   Init();
 
   nsresult
-  DoAsyncRun(nsISupports* aStream);
+  DoAsyncRun(nsISupports* aStream) MOZ_OVERRIDE;
 
   nsresult
-  GetSuccessResult(JSContext* aCx, JS::Value* aVal);
+  GetSuccessResult(JSContext* aCx,
+                   JS::MutableHandle<JS::Value> aVal) MOZ_OVERRIDE;
 
 protected:
   uint64_t mLocation;
@@ -86,7 +88,8 @@ public:
   { }
 
   nsresult
-  GetSuccessResult(JSContext* aCx, JS::Value* aVal);
+  GetSuccessResult(JSContext* aCx,
+                   JS::MutableHandle<JS::Value> aVal) MOZ_OVERRIDE;
 
 private:
   nsString mEncoding;
@@ -417,11 +420,11 @@ LockedFile::GetOrCreateStream(nsISupports** aStream)
   return NS_OK;
 }
 
-already_AddRefed<FileRequest>
+already_AddRefed<DOMFileRequest>
 LockedFile::GenerateFileRequest()
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
-  return FileRequest::Create(GetOwner(), this, true);
+  return DOMFileRequest::Create(GetOwner(), this);
 }
 
 bool
@@ -455,9 +458,9 @@ LockedFile::IsOpen() const
 }
 
 NS_IMETHODIMP
-LockedFile::GetFileHandle(nsIDOMFileHandle** aFileHandle)
+LockedFile::GetFileHandle(nsISupports** aFileHandle)
 {
-  nsCOMPtr<nsIDOMFileHandle> result(mFileHandle);
+  nsCOMPtr<nsISupports> result(mFileHandle);
   result.forget(aFileHandle);
   return NS_OK;
 }
@@ -491,34 +494,33 @@ LockedFile::GetActive(bool* aActive)
 
 NS_IMETHODIMP
 LockedFile::GetLocation(JSContext* aCx,
-                        JS::Value* aLocation)
+                        JS::MutableHandle<JS::Value> aLocation)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 
   if (mLocation == UINT64_MAX) {
-    *aLocation = JSVAL_NULL;
+    aLocation.setNull();
   }
   else {
-    *aLocation = JS_NumberValue(double(mLocation));
+    aLocation.setDouble(double(mLocation));
   }
   return NS_OK;
 }
 
 NS_IMETHODIMP
 LockedFile::SetLocation(JSContext* aCx,
-                        const JS::Value& aLocation)
+                        JS::Handle<JS::Value> aLocation)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 
   // Null means the end-of-file.
-  if (JSVAL_IS_NULL(aLocation)) {
+  if (aLocation.isNull()) {
     mLocation = UINT64_MAX;
     return NS_OK;
   }
 
   uint64_t location;
-  JS::Rooted<JS::Value> value(aCx, aLocation);
-  if (!JS::ToUint64(aCx, value, &location)) {
+  if (!JS::ToUint64(aCx, aLocation, &location)) {
     return NS_ERROR_TYPE_ERR;
   }
 
@@ -527,7 +529,7 @@ LockedFile::SetLocation(JSContext* aCx,
 }
 
 NS_IMETHODIMP
-LockedFile::GetMetadata(const JS::Value& aParameters,
+LockedFile::GetMetadata(JS::Handle<JS::Value> aParameters,
                         JSContext* aCx,
                         nsISupports** _retval)
 {
@@ -542,23 +544,19 @@ LockedFile::GetMetadata(const JS::Value& aParameters,
     return NS_OK;
   }
 
-  nsRefPtr<MetadataParameters> params = new MetadataParameters();
-
   // Get optional arguments.
-  if (!JSVAL_IS_VOID(aParameters) && !JSVAL_IS_NULL(aParameters)) {
-    nsresult rv = params->Init(aCx, &aParameters);
-    NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR);
+  DOMFileMetadataParameters config;
+  JS::Rooted<JS::Value> parameters(aCx, aParameters);
+  bool result = config.Init(aCx, parameters);
+  NS_ENSURE_TRUE(result, NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR);
 
-    if (!params->IsConfigured()) {
-      return NS_ERROR_TYPE_ERR;
-    }
-  }
-  else {
-    params->Init(true, true);
+  nsRefPtr<MetadataParameters> params =
+    new MetadataParameters(config.mSize, config.mLastModified);
+  if (!params->IsConfigured()) {
+    return NS_ERROR_TYPE_ERR;
   }
 
-  nsRefPtr<FileRequest> fileRequest = GenerateFileRequest();
-  NS_ENSURE_TRUE(fileRequest, NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR);
+  nsRefPtr<DOMFileRequest> fileRequest = GenerateFileRequest();
 
   nsRefPtr<MetadataHelper> helper =
     new MetadataHelper(this, fileRequest, params);
@@ -595,8 +593,7 @@ LockedFile::ReadAsArrayBuffer(uint64_t aSize,
     return NS_OK;
   }
 
-  nsRefPtr<FileRequest> fileRequest = GenerateFileRequest();
-  NS_ENSURE_TRUE(fileRequest, NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR);
+  nsRefPtr<DOMFileRequest> fileRequest = GenerateFileRequest();
 
   nsRefPtr<ReadHelper> helper =
     new ReadHelper(this, fileRequest, mLocation, aSize);
@@ -638,8 +635,7 @@ LockedFile::ReadAsText(uint64_t aSize,
     return NS_OK;
   }
 
-  nsRefPtr<FileRequest> fileRequest = GenerateFileRequest();
-  NS_ENSURE_TRUE(fileRequest, NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR);
+  nsRefPtr<DOMFileRequest> fileRequest = GenerateFileRequest();
 
   nsRefPtr<ReadTextHelper> helper =
     new ReadTextHelper(this, fileRequest, mLocation, aSize, aEncoding);
@@ -658,7 +654,7 @@ LockedFile::ReadAsText(uint64_t aSize,
 }
 
 NS_IMETHODIMP
-LockedFile::Write(const JS::Value& aValue,
+LockedFile::Write(JS::Handle<JS::Value> aValue,
                   JSContext* aCx,
                   nsISupports** _retval)
 {
@@ -668,7 +664,7 @@ LockedFile::Write(const JS::Value& aValue,
 }
 
 NS_IMETHODIMP
-LockedFile::Append(const JS::Value& aValue,
+LockedFile::Append(JS::Handle<JS::Value> aValue,
                    JSContext* aCx,
                    nsISupports** _retval)
 {
@@ -710,8 +706,7 @@ LockedFile::Truncate(uint64_t aSize,
     return NS_OK;
   }
 
-  nsRefPtr<FileRequest> fileRequest = GenerateFileRequest();
-  NS_ENSURE_TRUE(fileRequest, NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR);
+  nsRefPtr<DOMFileRequest> fileRequest = GenerateFileRequest();
 
   nsRefPtr<TruncateHelper> helper =
     new TruncateHelper(this, fileRequest, location);
@@ -746,8 +741,7 @@ LockedFile::Flush(nsISupports** _retval)
     return NS_OK;
   }
 
-  nsRefPtr<FileRequest> fileRequest = GenerateFileRequest();
-  NS_ENSURE_TRUE(fileRequest, NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR);
+  nsRefPtr<DOMFileRequest> fileRequest = GenerateFileRequest();
 
   nsRefPtr<FlushHelper> helper = new FlushHelper(this, fileRequest);
 
@@ -830,13 +824,13 @@ LockedFile::OpenInputStream(bool aWholeFile, uint64_t aStart, uint64_t aLength,
 
   nsCOMPtr<nsIInputStream>& result = helper->Result();
   NS_ENSURE_TRUE(result, NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR);
-  
+
   result.forget(aResult);
   return NS_OK;
 }
 
 nsresult
-LockedFile::WriteOrAppend(const JS::Value& aValue,
+LockedFile::WriteOrAppend(JS::Handle<JS::Value> aValue,
                           JSContext* aCx,
                           nsISupports** _retval,
                           bool aAppend)
@@ -858,11 +852,10 @@ LockedFile::WriteOrAppend(const JS::Value& aValue,
     return NS_OK;
   }
 
-  JS::Rooted<JS::Value> val(aCx, aValue);
   nsCOMPtr<nsIInputStream> inputStream;
   uint64_t inputLength;
   nsresult rv =
-    GetInputStreamForJSVal(val, aCx, getter_AddRefs(inputStream),
+    GetInputStreamForJSVal(aValue, aCx, getter_AddRefs(inputStream),
                            &inputLength);
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -870,8 +863,7 @@ LockedFile::WriteOrAppend(const JS::Value& aValue,
     return NS_OK;
   }
 
-  nsRefPtr<FileRequest> fileRequest = GenerateFileRequest();
-  NS_ENSURE_TRUE(fileRequest, NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR);
+  nsRefPtr<DOMFileRequest> fileRequest = GenerateFileRequest();
 
   uint64_t location = aAppend ? UINT64_MAX : mLocation;
 
@@ -1022,24 +1014,21 @@ ReadHelper::DoAsyncRun(nsISupports* aStream)
 
 nsresult
 ReadHelper::GetSuccessResult(JSContext* aCx,
-                             JS::Value* aVal)
+                             JS::MutableHandle<JS::Value> aVal)
 {
   JS::Rooted<JSObject*> arrayBuffer(aCx);
   nsresult rv =
     nsContentUtils::CreateArrayBuffer(aCx, mStream->Data(), arrayBuffer.address());
   NS_ENSURE_SUCCESS(rv, rv);
 
-  *aVal = OBJECT_TO_JSVAL(arrayBuffer);
-
+  aVal.setObject(*arrayBuffer);
   return NS_OK;
 }
 
 nsresult
 ReadTextHelper::GetSuccessResult(JSContext* aCx,
-                                 JS::Value* aVal)
+                                 JS::MutableHandle<JS::Value> aVal)
 {
-  nsresult rv;
-
   nsAutoCString encoding;
   const nsCString& data = mStream->Data();
   // The BOM sniffing is baked into the "decode" part of the Encoding
@@ -1058,17 +1047,14 @@ ReadTextHelper::GetSuccessResult(JSContext* aCx,
   }
 
   nsString tmpString;
-  rv = nsContentUtils::ConvertStringFromEncoding(encoding, data,
-                                                 tmpString);
+  nsresult rv = nsContentUtils::ConvertStringFromEncoding(encoding, data,
+                                                          tmpString);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  JS::Rooted<JS::Value> rval(aCx);
-  if (!xpc::StringToJsval(aCx, tmpString, &rval)) {
+  if (!xpc::StringToJsval(aCx, tmpString, aVal)) {
     NS_WARNING("Failed to convert string!");
     return NS_ERROR_FAILURE;
   }
-
-  *aVal = rval;
   return NS_OK;
 }
 
@@ -1110,7 +1096,7 @@ TruncateHelper::DoAsyncRun(nsISupports* aStream)
 
   nsresult rv = truncator->AsyncWork(this, nullptr);
   NS_ENSURE_SUCCESS(rv, rv);
-  
+
   return NS_OK;
 }
 

@@ -7,11 +7,9 @@
 # replaces 'EXTRA_TEST_ARGS=--test-path=...'.
 ifdef TEST_PATH
 TEST_PATH_ARG := --test-path='$(TEST_PATH)'
-PEPTEST_PATH_ARG := --test-path='$(TEST_PATH)'
 IPCPLUGINS_PATH_ARG := --test-path='$(TEST_PATH)'
 else
 TEST_PATH_ARG :=
-PEPTEST_PATH_ARG := --test-path=_tests/peptest/tests/firefox/firefox_all.ini
 IPCPLUGINS_PATH_ARG := --test-path=dom/plugins/test
 endif
 
@@ -205,10 +203,10 @@ RUN_REFTEST_B2G = rm -f ./$@.log && $(PYTHON) _tests/reftest/runreftestb2g.py \
 
 ifeq ($(OS_ARCH),WINNT) #{
 # GPU-rendered shadow layers are unsupported here
-OOP_CONTENT = --setpref=browser.tabs.remote=true --setpref=layers.acceleration.disabled=true
+OOP_CONTENT = --setpref=browser.tabs.remote=true --setpref=browser.tabs.remote.autostart=true --setpref=layers.acceleration.disabled=true
 GPU_RENDERING =
 else
-OOP_CONTENT = --setpref=browser.tabs.remote=true
+OOP_CONTENT = --setpref=browser.tabs.remote=true --setpref=browser.tabs.remote.autostart=true
 GPU_RENDERING = --setpref=layers.acceleration.force-enabled=true
 endif #}
 
@@ -282,7 +280,6 @@ crashtest-ipc-gpu:
 jstestbrowser: TESTS_PATH?=test-package-stage/jsreftest/tests/
 jstestbrowser:
 	$(MAKE) -C $(DEPTH)/config
-	$(MAKE) -C $(DEPTH)/js/src/config
 	$(MAKE) stage-jstests
 	$(call RUN_REFTEST,'$(DIST)/$(TESTS_PATH)/jstests.list' --extra-profile-file=$(DIST)/test-package-stage/jsreftest/tests/user.js)
 	$(CHECK_TEST_ERROR)
@@ -361,20 +358,6 @@ xpcshell-tests-remote:
           echo 'please prepare your host with environment variables for TEST_DEVICE'; \
         fi
 
-# Runs peptest, for usage see: https://developer.mozilla.org/en/Peptest#Running_Tests
-RUN_PEPTEST = \
-	rm -f ./$@.log && \
-	$(PYTHON) _tests/peptest/runtests.py --binary=$(browser_path) \
-          $(PEPTEST_PATH_ARG) \
-	  --proxy=_tests/peptest/tests/firefox/server-locations.txt \
-          --proxy-host-dirs \
-          --server-path=_tests/peptest/tests/firefox/server \
-          --log-file=./$@.log $(SYMBOLS_PATH) $(EXTRA_TEST_ARGS)
-
-peptest:
-	$(RUN_PEPTEST)
-	$(CHECK_TEST_ERROR)
-
 REMOTE_CPPUNITTESTS = \
 	$(PYTHON) -u $(topsrcdir)/testing/remotecppunittests.py \
 	  --xre-path=$(DEPTH)/dist/bin \
@@ -415,7 +398,6 @@ package-tests: \
   stage-xpcshell \
   stage-jstests \
   stage-jetpack \
-  stage-peptest \
   stage-mozbase \
   stage-tps \
   stage-modules \
@@ -455,7 +437,6 @@ make-stage-dir:
 	$(NSINSTALL) -D $(PKG_STAGE)/certs
 	$(NSINSTALL) -D $(PKG_STAGE)/config
 	$(NSINSTALL) -D $(PKG_STAGE)/jetpack
-	$(NSINSTALL) -D $(PKG_STAGE)/peptest
 	$(NSINSTALL) -D $(PKG_STAGE)/mozbase
 	$(NSINSTALL) -D $(PKG_STAGE)/modules
 
@@ -494,9 +475,6 @@ endif
 stage-jetpack: make-stage-dir
 	$(MAKE) -C $(DEPTH)/addon-sdk stage-tests-package
 
-stage-peptest: make-stage-dir
-	$(MAKE) -C $(DEPTH)/testing/peptest stage-package
-
 stage-tps: make-stage-dir
 	$(NSINSTALL) -D $(PKG_STAGE)/tps/tests
 	@(cd $(topsrcdir)/testing/tps && tar $(TAR_CREATE_FLAGS) - *) | (cd $(PKG_STAGE)/tps && tar -xf -)
@@ -518,7 +496,7 @@ endif
 stage-cppunittests:
 	$(NSINSTALL) -D $(PKG_STAGE)/cppunittests
 ifdef STRIP_CPP_TESTS
-	$(foreach bin,$(CPP_UNIT_TEST_BINS),$(OBJCOPY) $(STRIP_FLAGS) $(bin) $(bin:$(DIST)/%=$(PKG_STAGE)/%);)
+	$(foreach bin,$(CPP_UNIT_TEST_BINS),$(OBJCOPY) $(or $(STRIP_FLAGS),--strip-unneeded) $(bin) $(bin:$(DIST)/%=$(PKG_STAGE)/%);)
 else
 	cp -RL $(DIST)/cppunittests $(PKG_STAGE)
 endif
@@ -566,7 +544,6 @@ stage-mozbase: make-stage-dir
   crashtest \
   xpcshell-tests \
   jstestbrowser \
-  peptest \
   package-tests \
   make-stage-dir \
   stage-b2g \
@@ -577,7 +554,6 @@ stage-mozbase: make-stage-dir
   stage-jstests \
   stage-android \
   stage-jetpack \
-  stage-peptest \
   stage-mozbase \
   stage-tps \
   stage-modules \

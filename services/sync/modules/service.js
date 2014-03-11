@@ -30,7 +30,6 @@ Cu.import("resource://services-sync/policies.js");
 Cu.import("resource://services-sync/record.js");
 Cu.import("resource://services-sync/resource.js");
 Cu.import("resource://services-sync/rest.js");
-Cu.import("resource://services-sync/stages/cluster.js");
 Cu.import("resource://services-sync/stages/enginesync.js");
 Cu.import("resource://services-sync/status.js");
 Cu.import("resource://services-sync/userapi.js");
@@ -61,7 +60,6 @@ Sync11Service.prototype = {
   _locked: false,
   _loggedIn: false,
 
-  userBaseURL: null,
   infoURL: null,
   storageURL: null,
   metaURL: null,
@@ -157,13 +155,18 @@ Sync11Service.prototype = {
     return Utils.catch.call(this, func, lockExceptions);
   },
 
+  get userBaseURL() {
+    if (!this._clusterManager) {
+      return null;
+    }
+    return this._clusterManager.getUserBaseURL();
+  },
+
   _updateCachedURLs: function _updateCachedURLs() {
     // Nothing to cache yet if we don't have the building blocks
-    if (this.clusterURL == "" || this.identity.username == "")
+    if (!this.clusterURL || !this.identity.username)
       return;
 
-    let storageAPI = this.clusterURL + SYNC_API_VERSION + "/";
-    this.userBaseURL = storageAPI + this.identity.username + "/";
     this._log.debug("Caching URLs under storage user base: " + this.userBaseURL);
 
     // Generate and cache various URLs under the storage API for this user
@@ -323,7 +326,7 @@ Sync11Service.prototype = {
 
     this._log.info("Loading Weave " + WEAVE_VERSION);
 
-    this._clusterManager = new ClusterManager(this);
+    this._clusterManager = this.identity.createClusterManager(this);
     this.recordManager = new RecordManager(this);
 
     this.enabled = true;
@@ -649,6 +652,13 @@ Sync11Service.prototype = {
   },
 
   verifyLogin: function verifyLogin() {
+    // If the identity isn't ready it  might not know the username...
+    if (!this.identity.readyToAuthenticate) {
+      this._log.info("Not ready to authenticate in verifyLogin.");
+      this.status.login = LOGIN_FAILED_NOT_READY;
+      return false;
+    }
+
     if (!this.identity.username) {
       this._log.warn("No username in verifyLogin.");
       this.status.login = LOGIN_FAILED_NO_USERNAME;
@@ -765,20 +775,20 @@ Sync11Service.prototype = {
 
     info = info.obj;
     if (!(CRYPTO_COLLECTION in info)) {
-      this._log.error("Consistency failure: info/collections excludes " + 
+      this._log.error("Consistency failure: info/collections excludes " +
                       "crypto after successful upload.");
       throw new Error("Symmetric key upload failed.");
     }
 
     // Can't check against local modified: clock drift.
     if (info[CRYPTO_COLLECTION] < serverModified) {
-      this._log.error("Consistency failure: info/collections crypto entry " + 
+      this._log.error("Consistency failure: info/collections crypto entry " +
                       "is stale after successful upload.");
       throw new Error("Symmetric key upload failed.");
     }
-    
+
     // Doesn't matter if the timestamp is ahead.
-    
+
     // Download and install them.
     let cryptoKeys = new CryptoWrapper(CRYPTO_COLLECTION, KEYS_WBO);
     let cryptoResp = cryptoKeys.fetch(this.resource(this.cryptoKeysURL)).response;
@@ -842,14 +852,6 @@ Sync11Service.prototype = {
     Svc.Obs.notify("weave:engine:stop-tracking");
     this.status.resetSync();
 
-    // We want let UI consumers of the following notification know as soon as
-    // possible, so let's fake for the CLIENT_NOT_CONFIGURED status for now
-    // by emptying the passphrase (we still need the password).
-    this.identity.syncKey = null;
-    this.status.login = LOGIN_FAILED_NO_PASSPHRASE;
-    this.logout();
-    Svc.Obs.notify("weave:service:start-over");
-
     // Deletion doesn't make sense if we aren't set up yet!
     if (this.clusterURL != "") {
       // Clear client-specific data from the server, including disabled engines.
@@ -861,9 +863,19 @@ Sync11Service.prototype = {
                          + Utils.exceptionStr(ex));
         }
       }
+      this._log.debug("Finished deleting client data.");
     } else {
       this._log.debug("Skipping client data removal: no cluster URL.");
     }
+
+    // We want let UI consumers of the following notification know as soon as
+    // possible, so let's fake for the CLIENT_NOT_CONFIGURED status for now
+    // by emptying the passphrase (we still need the password).
+    this._log.info("Service.startOver dropping sync key and logging out.");
+    this.identity.resetSyncKey();
+    this.status.login = LOGIN_FAILED_NO_PASSPHRASE;
+    this.logout();
+    Svc.Obs.notify("weave:service:start-over");
 
     // Reset all engines and clear keys.
     this.resetClient();
@@ -879,7 +891,34 @@ Sync11Service.prototype = {
 
     this.identity.deleteSyncCredentials();
 
-    Svc.Obs.notify("weave:service:start-over:finish");
+    // If necessary, reset the identity manager, then re-initialize it so the
+    // FxA manager is used.  This is configurable via a pref - mainly for tests.
+    let keepIdentity = false;
+    try {
+      keepIdentity = Services.prefs.getBoolPref("services.sync-testing.startOverKeepIdentity");
+    } catch (_) { /* no such pref */ }
+    if (keepIdentity) {
+      Svc.Obs.notify("weave:service:start-over:finish");
+      return;
+    }
+
+    this.identity.finalize().then(
+      () => {
+        this.identity.username = "";
+        Services.prefs.clearUserPref("services.sync.fxaccounts.enabled");
+        this.status.__authManager = null;
+        this.identity = Status._authManager;
+        this._clusterManager = this.identity.createClusterManager(this);
+        Svc.Obs.notify("weave:service:start-over:finish");
+      }
+    ).then(null,
+      err => {
+        this._log.error("startOver failed to re-initialize the identity manager: " + err);
+        // Still send the observer notification so the current state is
+        // reflected in the UI.
+        Svc.Obs.notify("weave:service:start-over:finish");
+      }
+    );
   },
 
   persistLogin: function persistLogin() {
@@ -913,6 +952,13 @@ Sync11Service.prototype = {
         throw "Aborting login, client not configured.";
       }
 
+      // Ask the identity manager to explicitly login now.
+      let cb = Async.makeSpinningCallback();
+      this.identity.ensureLoggedIn().then(cb, cb);
+
+      // Just let any errors bubble up - they've more context than we do!
+      cb.wait();
+
       // Calling login() with parameters when the client was
       // previously not configured means setup was completed.
       if (initialStatus == CLIENT_NOT_CONFIGURED
@@ -943,6 +989,7 @@ Sync11Service.prototype = {
       return;
 
     this._log.info("Logging out");
+    this.identity.logout();
     this._loggedIn = false;
 
     Svc.Obs.notify("weave:service:logout:finish");

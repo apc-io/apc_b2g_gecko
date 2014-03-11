@@ -9,9 +9,6 @@
 #include <stdint.h>                     // for int32_t, uint32_t
 #include "GLDefs.h"                     // for GLenum
 #include "Layers.h"
-#include "gfx3DMatrix.h"                // for gfx3DMatrix
-#include "gfxMatrix.h"                  // for gfxMatrix
-#include "gfxPoint.h"                   // for gfxIntSize
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
 #include "mozilla/Attributes.h"         // for MOZ_OVERRIDE
 #include "mozilla/RefPtr.h"             // for RefPtr, TemporaryRef
@@ -53,7 +50,6 @@ namespace layers {
 
 class CanvasLayerComposite;
 class ColorLayerComposite;
-class Composer2D;
 class CompositableHost;
 class Compositor;
 class ContainerLayerComposite;
@@ -65,6 +61,7 @@ class RefLayerComposite;
 class SurfaceDescriptor;
 class ThebesLayerComposite;
 class TiledLayerComposer;
+struct FPSState;
 
 class LayerManagerComposite : public LayerManager
 {
@@ -119,7 +116,7 @@ public:
 
   // XXX[nrc]: never called, we should move this logic to ClientLayerManager
   // (bug 946926).
-  virtual bool CanUseCanvasLayerForSize(const gfxIntSize &aSize) MOZ_OVERRIDE;
+  virtual bool CanUseCanvasLayerForSize(const gfx::IntSize &aSize) MOZ_OVERRIDE;
 
   virtual int32_t GetMaxTextureSize() const MOZ_OVERRIDE
   {
@@ -150,7 +147,7 @@ public:
   }
 
   virtual already_AddRefed<gfxASurface>
-    CreateOptimalMaskSurface(const gfxIntSize &aSize) MOZ_OVERRIDE;
+    CreateOptimalMaskSurface(const gfx::IntSize &aSize) MOZ_OVERRIDE;
 
   virtual const char* Name() const MOZ_OVERRIDE { return ""; }
 
@@ -164,8 +161,8 @@ public:
    * Transform will be ignored if it is not PreservesAxisAlignedRectangles
    * or has non integer scale
    */
-  void SetWorldTransform(const gfxMatrix& aMatrix);
-  gfxMatrix& GetWorldTransform(void);
+  void SetWorldTransform(const gfx::Matrix& aMatrix);
+  gfx::Matrix& GetWorldTransform(void);
 
   /**
    * RAII helper class to add a mask effect with the compositable from aMaskLayer
@@ -228,6 +225,8 @@ public:
   void SetDebugOverlayWantsNextFrame(bool aVal)
   { mDebugOverlayWantsNextFrame = aVal; }
 
+  void NotifyShadowTreeTransaction();
+
 private:
   /** Region we're clipping our current drawing to. */
   nsIntRegion mClippingRegion;
@@ -260,16 +259,19 @@ private:
   void WorldTransformRect(nsIntRect& aRect);
 
   RefPtr<Compositor> mCompositor;
+  nsAutoPtr<LayerProperties> mClonedLayerTreeProperties;
 
-  /** Our more efficient but less powerful alter ego, if one is available. */
-  nsRefPtr<Composer2D> mComposer2D;
+  /** 
+   * Context target, nullptr when drawing directly to our swap chain.
+   */
+  RefPtr<gfx::DrawTarget> mTarget;
 
-  gfxMatrix mWorldMatrix;
+  gfx::Matrix mWorldMatrix;
+  nsIntRegion mInvalidRegion;
+  nsAutoPtr<FPSState> mFPS;
 
   bool mInTransaction;
   bool mIsCompositorReady;
-  nsIntRegion mInvalidRegion;
-  nsAutoPtr<LayerProperties> mClonedLayerTreeProperties;
   bool mDebugOverlayWantsNextFrame;
 };
 
@@ -312,9 +314,11 @@ public:
 
   virtual void RenderLayer(const nsIntRect& aClipRect) = 0;
 
-  virtual void SetCompositableHost(CompositableHost* aHost)
+  virtual bool SetCompositableHost(CompositableHost*)
   {
-    MOZ_ASSERT(false, "called SetCompositableHost for a layer without a compositable host");
+    // We must handle this gracefully, see bug 967824
+    NS_WARNING("called SetCompositableHost for a layer type not accepting a compositable");
+    return false;
   }
   virtual CompositableHost* GetCompositableHost() = 0;
 
@@ -350,7 +354,7 @@ public:
     }
   }
 
-  void SetShadowTransform(const gfx3DMatrix& aMatrix)
+  void SetShadowTransform(const gfx::Matrix4x4& aMatrix)
   {
     mShadowTransform = aMatrix;
   }
@@ -364,16 +368,22 @@ public:
     mLayerComposited = value;
   }
 
+  void SetClearRect(const nsIntRect& aRect)
+  {
+    mClearRect = aRect;
+  }
+
   // These getters can be used anytime.
   float GetShadowOpacity() { return mShadowOpacity; }
   const nsIntRect* GetShadowClipRect() { return mUseShadowClipRect ? &mShadowClipRect : nullptr; }
   const nsIntRegion& GetShadowVisibleRegion() { return mShadowVisibleRegion; }
-  const gfx3DMatrix& GetShadowTransform() { return mShadowTransform; }
+  const gfx::Matrix4x4& GetShadowTransform() { return mShadowTransform; }
   bool GetShadowTransformSetByAnimation() { return mShadowTransformSetByAnimation; }
   bool HasLayerBeenComposited() { return mLayerComposited; }
+  nsIntRect GetClearRect() { return mClearRect; }
 
 protected:
-  gfx3DMatrix mShadowTransform;
+  gfx::Matrix4x4 mShadowTransform;
   nsIntRegion mShadowVisibleRegion;
   nsIntRect mShadowClipRect;
   LayerManagerComposite* mCompositeManager;
@@ -383,6 +393,7 @@ protected:
   bool mShadowTransformSetByAnimation;
   bool mDestroyed;
   bool mLayerComposited;
+  nsIntRect mClearRect;
 };
 
 

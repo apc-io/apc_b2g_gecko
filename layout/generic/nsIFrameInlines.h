@@ -11,6 +11,14 @@
 #include "nsStyleStructInlines.h"
 
 bool
+nsIFrame::IsFlexItem() const
+{
+  return mParent &&
+    mParent->GetType() == nsGkAtoms::flexContainerFrame &&
+    !(GetStateBits() & NS_FRAME_OUT_OF_FLOW);
+}
+
+bool
 nsIFrame::IsFloating() const
 {
   return StyleDisplay()->IsFloating(this);

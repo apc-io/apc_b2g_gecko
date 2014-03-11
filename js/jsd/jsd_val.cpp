@@ -19,40 +19,40 @@ using mozilla::AutoSafeJSContext;
 #ifdef DEBUG
 void JSD_ASSERT_VALID_VALUE(JSDValue* jsdval)
 {
-    JS_ASSERT(jsdval);
-    JS_ASSERT(jsdval->nref > 0);
+    MOZ_ASSERT(jsdval);
+    MOZ_ASSERT(jsdval->nref > 0);
     if(!JS_CLIST_IS_EMPTY(&jsdval->props))
     {
-        JS_ASSERT(CHECK_BIT_FLAG(jsdval->flags, GOT_PROPS));
-        JS_ASSERT(!JSVAL_IS_PRIMITIVE(jsdval->val));
+        MOZ_ASSERT(CHECK_BIT_FLAG(jsdval->flags, GOT_PROPS));
+        MOZ_ASSERT(!JSVAL_IS_PRIMITIVE(jsdval->val));
     }
 
     if(jsdval->proto)
     {
-        JS_ASSERT(CHECK_BIT_FLAG(jsdval->flags, GOT_PROTO));
-        JS_ASSERT(jsdval->proto->nref > 0);
+        MOZ_ASSERT(CHECK_BIT_FLAG(jsdval->flags, GOT_PROTO));
+        MOZ_ASSERT(jsdval->proto->nref > 0);
     }
     if(jsdval->parent)
     {
-        JS_ASSERT(CHECK_BIT_FLAG(jsdval->flags, GOT_PARENT));
-        JS_ASSERT(jsdval->parent->nref > 0);
+        MOZ_ASSERT(CHECK_BIT_FLAG(jsdval->flags, GOT_PARENT));
+        MOZ_ASSERT(jsdval->parent->nref > 0);
     }
     if(jsdval->ctor)
     {
-        JS_ASSERT(CHECK_BIT_FLAG(jsdval->flags, GOT_CTOR));
-        JS_ASSERT(jsdval->ctor->nref > 0);
+        MOZ_ASSERT(CHECK_BIT_FLAG(jsdval->flags, GOT_CTOR));
+        MOZ_ASSERT(jsdval->ctor->nref > 0);
     }
 }
 
 void JSD_ASSERT_VALID_PROPERTY(JSDProperty* jsdprop)
 {
-    JS_ASSERT(jsdprop);
-    JS_ASSERT(jsdprop->name);
-    JS_ASSERT(jsdprop->name->nref > 0);
-    JS_ASSERT(jsdprop->val);
-    JS_ASSERT(jsdprop->val->nref > 0);
+    MOZ_ASSERT(jsdprop);
+    MOZ_ASSERT(jsdprop->name);
+    MOZ_ASSERT(jsdprop->name->nref > 0);
+    MOZ_ASSERT(jsdprop->val);
+    MOZ_ASSERT(jsdprop->val->nref > 0);
     if(jsdprop->alias)
-        JS_ASSERT(jsdprop->alias->nref > 0);
+        MOZ_ASSERT(jsdprop->alias->nref > 0);
 }
 #endif
 
@@ -133,7 +133,7 @@ jsd_IsValueNative(JSDContext* jsdc, JSDValue* jsdval)
         fun = JSD_GetValueFunction(jsdc, jsdval);
         if(fun)
             ok = JS_GetFunctionScript(cx, fun) ? false : true;
-        JS_ASSERT(fun);
+        MOZ_ASSERT(fun);
         return ok;
     }
     return !JSVAL_IS_PRIMITIVE(jsdval->val);
@@ -275,7 +275,7 @@ jsd_NewValue(JSDContext* jsdc, jsval value)
 void
 jsd_DropValue(JSDContext* jsdc, JSDValue* jsdval)
 {
-    JS_ASSERT(jsdval->nref > 0);
+    MOZ_ASSERT(jsdval->nref > 0);
     if(0 == --jsdval->nref)
     {
         jsd_RefreshValue(jsdc, jsdval);
@@ -293,20 +293,20 @@ jsval
 jsd_GetValueWrappedJSVal(JSDContext* jsdc, JSDValue* jsdval)
 {
     AutoSafeJSContext cx;
-    JS::RootedObject obj(cx);
     JS::RootedValue val(cx, jsdval->val);
-    if (!JSVAL_IS_PRIMITIVE(val)) {
-        JSAutoCompartment ac(cx, JSVAL_TO_OBJECT(val));
-        obj = JS_ObjectToOuterObject(cx, JSVAL_TO_OBJECT(val));
+    if (!val.isPrimitive()) {
+        JS::RootedObject obj(cx, &val.toObject());
+        JSAutoCompartment ac(cx, obj);
+        obj = JS_ObjectToOuterObject(cx, obj);
         if (!obj)
         {
             JS_ClearPendingException(cx);
             val = JSVAL_NULL;
         }
         else
-            val = OBJECT_TO_JSVAL(obj);
+            val = JS::ObjectValue(*obj);
     }
-    
+
     return val;
 }
 
@@ -349,7 +349,7 @@ static void _freeProps(JSDContext* jsdc, JSDValue* jsdval)
         JS_REMOVE_AND_INIT_LINK(&jsdprop->links);
         jsd_DropProperty(jsdc, jsdprop);
     }
-    JS_ASSERT(JS_CLIST_IS_EMPTY(&jsdval->props));
+    MOZ_ASSERT(JS_CLIST_IS_EMPTY(&jsdval->props));
     CLEAR_BIT_FLAG(jsdval->flags, GOT_PROPS);
 }
 
@@ -360,9 +360,9 @@ static bool _buildProps(JSDContext* jsdc, JSDValue* jsdval)
     JSPropertyDescArray pda;
     unsigned i;
 
-    JS_ASSERT(JS_CLIST_IS_EMPTY(&jsdval->props));
-    JS_ASSERT(!(CHECK_BIT_FLAG(jsdval->flags, GOT_PROPS)));
-    JS_ASSERT(!JSVAL_IS_PRIMITIVE(jsdval->val));
+    MOZ_ASSERT(JS_CLIST_IS_EMPTY(&jsdval->props));
+    MOZ_ASSERT(!(CHECK_BIT_FLAG(jsdval->flags, GOT_PROPS)));
+    MOZ_ASSERT(!JSVAL_IS_PRIMITIVE(jsdval->val));
 
     if(JSVAL_IS_PRIMITIVE(jsdval->val))
         return false;
@@ -453,7 +453,7 @@ jsd_IterateProperties(JSDContext* jsdc, JSDValue* jsdval, JSDProperty **iterp)
     JSDProperty* jsdprop = *iterp;
     if(!(CHECK_BIT_FLAG(jsdval->flags, GOT_PROPS)))
     {
-        JS_ASSERT(!jsdprop);
+        MOZ_ASSERT(!jsdprop);
         if(!_buildProps(jsdc, jsdval))
             return nullptr;
     }
@@ -464,7 +464,7 @@ jsd_IterateProperties(JSDContext* jsdc, JSDValue* jsdval, JSDProperty **iterp)
         return nullptr;
     *iterp = (JSDProperty*)jsdprop->links.next;
 
-    JS_ASSERT(jsdprop);
+    MOZ_ASSERT(jsdprop);
     jsdprop->nref++;
     return jsdprop;
 }
@@ -502,7 +502,7 @@ jsd_GetValueProperty(JSDContext* jsdc, JSDValue* jsdval, JSString* nameStr)
     /* Not found in property list, look it up explicitly */
 
     nameval = STRING_TO_JSVAL(name);
-    if(!JS_ValueToId(cx, nameval, nameid.address()))
+    if(!JS_ValueToId(cx, nameval, &nameid))
         return nullptr;
 
     if(!(obj = JSVAL_TO_OBJECT(jsdval->val)))
@@ -544,7 +544,7 @@ jsd_GetValueProperty(JSDContext* jsdc, JSDValue* jsdval, JSString* nameStr)
         }
     }
 
-    if (!JS_IdToValue(cx, nameid, propId.address()))
+    if (!JS_IdToValue(cx, nameid, &propId))
         return nullptr;
 
     propAlias = JSVAL_NULL;
@@ -586,7 +586,7 @@ jsd_GetValuePrototype(JSDContext* jsdc, JSDValue* jsdval)
     {
         JS::RootedObject obj(cx);
         JS::RootedObject proto(cx);
-        JS_ASSERT(!jsdval->proto);
+        MOZ_ASSERT(!jsdval->proto);
         SET_BIT_FLAG(jsdval->flags, GOT_PROTO);
         if(JSVAL_IS_PRIMITIVE(jsdval->val))
             return nullptr;
@@ -610,7 +610,7 @@ jsd_GetValueParent(JSDContext* jsdc, JSDValue* jsdval)
         AutoSafeJSContext cx;
         JS::RootedObject obj(cx);
         JS::RootedObject parent(cx);
-        JS_ASSERT(!jsdval->parent);
+        MOZ_ASSERT(!jsdval->parent);
         SET_BIT_FLAG(jsdval->flags, GOT_PARENT);
         if(JSVAL_IS_PRIMITIVE(jsdval->val))
             return nullptr;
@@ -637,7 +637,7 @@ jsd_GetValueConstructor(JSDContext* jsdc, JSDValue* jsdval)
         JS::RootedObject obj(cx);
         JS::RootedObject proto(cx);
         JS::RootedObject ctor(cx);
-        JS_ASSERT(!jsdval->ctor);
+        MOZ_ASSERT(!jsdval->ctor);
         SET_BIT_FLAG(jsdval->flags, GOT_CTOR);
         if(JSVAL_IS_PRIMITIVE(jsdval->val))
             return nullptr;
@@ -737,10 +737,10 @@ jsd_GetPropertyFlags(JSDContext* jsdc, JSDProperty* jsdprop)
 void
 jsd_DropProperty(JSDContext* jsdc, JSDProperty* jsdprop)
 {
-    JS_ASSERT(jsdprop->nref > 0);
+    MOZ_ASSERT(jsdprop->nref > 0);
     if(0 == --jsdprop->nref)
     {
-        JS_ASSERT(JS_CLIST_IS_EMPTY(&jsdprop->links));
+        MOZ_ASSERT(JS_CLIST_IS_EMPTY(&jsdprop->links));
         DROP_CLEAR_VALUE(jsdc, jsdprop->val);
         DROP_CLEAR_VALUE(jsdc, jsdprop->name);
         DROP_CLEAR_VALUE(jsdc, jsdprop->alias);

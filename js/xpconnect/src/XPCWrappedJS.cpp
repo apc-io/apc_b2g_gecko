@@ -320,7 +320,6 @@ nsXPCWrappedJS::GetJSObject()
 nsresult
 nsXPCWrappedJS::GetNewOrUsed(JS::HandleObject jsObj,
                              REFNSIID aIID,
-                             nsISupports* aOuter,
                              nsXPCWrappedJS** wrapperResult)
 {
     // Do a release-mode assert against accessing nsXPCWrappedJS off-main-thread.
@@ -328,107 +327,53 @@ nsXPCWrappedJS::GetNewOrUsed(JS::HandleObject jsObj,
         MOZ_CRASH();
 
     AutoJSContext cx;
-    JSObject2WrappedJSMap* map;
-    nsXPCWrappedJS* root = nullptr;
-    nsXPCWrappedJS* wrapper = nullptr;
-    nsXPCWrappedJSClass* clazz = nullptr;
     XPCJSRuntime* rt = nsXPConnect::GetRuntimeInstance();
-    bool release_root = false;
-
-    map = rt->GetWrappedJSMap();
+    JSObject2WrappedJSMap* map = rt->GetWrappedJSMap();
     if (!map) {
         MOZ_ASSERT(map,"bad map");
         return NS_ERROR_FAILURE;
     }
 
-    nsXPCWrappedJSClass::GetNewOrUsed(cx, aIID, &clazz);
-    if (!clazz)
+    nsRefPtr<nsXPCWrappedJSClass> clasp = nsXPCWrappedJSClass::GetNewOrUsed(cx, aIID);
+    if (!clasp)
         return NS_ERROR_FAILURE;
-    // from here on we need to return through 'return_wrapper'
 
-    // always find the root JSObject
-    JS::RootedObject rootJSObj(cx, clazz->GetRootJSObject(cx, jsObj));
+    JS::RootedObject rootJSObj(cx, clasp->GetRootJSObject(cx, jsObj));
     if (!rootJSObj)
-        goto return_wrapper;
-
-    root = map->Find(rootJSObj);
-    if (root) {
-        if ((nullptr != (wrapper = root->Find(aIID))) ||
-            (nullptr != (wrapper = root->FindInherited(aIID)))) {
-            NS_ADDREF(wrapper);
-            goto return_wrapper;
-        }
-    }
-
-    if (!root) {
-        // build the root wrapper
-        if (rootJSObj == jsObj) {
-            // the root will do double duty as the interface wrapper
-            wrapper = root = new nsXPCWrappedJS(cx, jsObj, clazz, nullptr,
-                                                aOuter);
-            if (!root)
-                goto return_wrapper;
-
-            map->Add(cx, root);
-
-            goto return_wrapper;
-        } else {
-            // just a root wrapper
-            nsXPCWrappedJSClass* rootClazz = nullptr;
-            nsXPCWrappedJSClass::GetNewOrUsed(cx, NS_GET_IID(nsISupports),
-                                              &rootClazz);
-            if (!rootClazz)
-                goto return_wrapper;
-
-            root = new nsXPCWrappedJS(cx, rootJSObj, rootClazz, nullptr, aOuter);
-            NS_RELEASE(rootClazz);
-
-            if (!root)
-                goto return_wrapper;
-
-            release_root = true;
-
-            map->Add(cx, root);
-        }
-    }
-
-    // at this point we have a root and may need to build the specific wrapper
-    MOZ_ASSERT(root,"bad root");
-    MOZ_ASSERT(clazz,"bad clazz");
-
-    if (!wrapper) {
-        wrapper = new nsXPCWrappedJS(cx, jsObj, clazz, root, aOuter);
-        if (!wrapper)
-            goto return_wrapper;
-    }
-
-    wrapper->mNext = root->mNext;
-    root->mNext = wrapper;
-
-return_wrapper:
-    if (clazz)
-        NS_RELEASE(clazz);
-
-    if (release_root)
-        NS_RELEASE(root);
-
-    if (!wrapper)
         return NS_ERROR_FAILURE;
 
-    *wrapperResult = wrapper;
+    nsRefPtr<nsXPCWrappedJS> root = map->Find(rootJSObj);
+    if (root) {
+        nsRefPtr<nsXPCWrappedJS> wrapper = root->FindOrFindInherited(aIID);
+        if (wrapper) {
+            wrapper.forget(wrapperResult);
+            return NS_OK;
+        }
+    } else if (rootJSObj != jsObj) {
+
+        // Make a new root wrapper, because there is no existing
+        // root wrapper, and the wrapper we are trying to make isn't
+        // a root.
+        nsRefPtr<nsXPCWrappedJSClass> rootClasp = nsXPCWrappedJSClass::GetNewOrUsed(cx, NS_GET_IID(nsISupports));
+        if (!rootClasp)
+            return NS_ERROR_FAILURE;
+
+        root = new nsXPCWrappedJS(cx, rootJSObj, rootClasp, nullptr);
+    }
+
+    nsRefPtr<nsXPCWrappedJS> wrapper = new nsXPCWrappedJS(cx, jsObj, clasp, root);
+    wrapper.forget(wrapperResult);
     return NS_OK;
 }
 
 nsXPCWrappedJS::nsXPCWrappedJS(JSContext* cx,
                                JSObject* aJSObj,
                                nsXPCWrappedJSClass* aClass,
-                               nsXPCWrappedJS* root,
-                               nsISupports* aOuter)
+                               nsXPCWrappedJS* root)
     : mJSObj(aJSObj),
       mClass(aClass),
       mRoot(root ? root : MOZ_THIS_IN_INITIALIZER_LIST()),
-      mNext(nullptr),
-      mOuter(root ? nullptr : aOuter)
+      mNext(nullptr)
 {
     InitStub(GetClass()->GetIID());
 
@@ -436,14 +381,14 @@ nsXPCWrappedJS::nsXPCWrappedJS(JSContext* cx,
     // that are subject to finalization. See the top of the file for more
     // details.
     NS_ADDREF_THIS();
-    NS_ADDREF_THIS();
 
-    NS_ADDREF(aClass);
-    NS_IF_ADDREF(mOuter);
-
-    if (!IsRootWrapper())
+    if (IsRootWrapper()) {
+        nsXPConnect::GetRuntimeInstance()->GetWrappedJSMap()->Add(cx, this);
+    } else {
         NS_ADDREF(mRoot);
-
+        mNext = mRoot->mNext;
+        mRoot->mNext = this;
+    }
 }
 
 nsXPCWrappedJS::~nsXPCWrappedJS()
@@ -501,14 +446,13 @@ nsXPCWrappedJS::Unlink()
         NS_RELEASE(mRoot);
     }
 
-    NS_IF_RELEASE(mClass);
+    mClass = nullptr;
     if (mOuter) {
         XPCJSRuntime* rt = nsXPConnect::GetRuntimeInstance();
         if (rt->GCIsRunning()) {
-            nsContentUtils::DeferredFinalize(mOuter);
-            mOuter = nullptr;
+            nsContentUtils::DeferredFinalize(mOuter.forget().get());
         } else {
-            NS_RELEASE(mOuter);
+            mOuter = nullptr;
         }
     }
 }
@@ -544,7 +488,7 @@ nsXPCWrappedJS::FindInherited(REFNSIID aIID)
 }
 
 NS_IMETHODIMP
-nsXPCWrappedJS::GetInterfaceInfo(nsIInterfaceInfo** info)
+nsXPCWrappedJS::GetInterfaceInfo(nsIInterfaceInfo** infoResult)
 {
     MOZ_ASSERT(GetClass(), "wrapper without class");
     MOZ_ASSERT(GetClass()->GetInterfaceInfo(), "wrapper class without interface");
@@ -552,9 +496,10 @@ nsXPCWrappedJS::GetInterfaceInfo(nsIInterfaceInfo** info)
     // Since failing to get this info will crash some platforms(!), we keep
     // mClass valid at shutdown time.
 
-    if (!(*info = GetClass()->GetInterfaceInfo()))
+    nsCOMPtr<nsIInterfaceInfo> info = GetClass()->GetInterfaceInfo();
+    if (!info)
         return NS_ERROR_UNEXPECTED;
-    NS_ADDREF(*info);
+    info.forget(infoResult);
     return NS_OK;
 }
 
@@ -611,7 +556,8 @@ nsXPCWrappedJS::SystemIsBeingShutDown()
 NS_IMETHODIMP
 nsXPCWrappedJS::GetEnumerator(nsISimpleEnumerator * *aEnumerate)
 {
-    XPCCallContext ccx(NATIVE_CALLER);
+    AutoJSContext cx;
+    XPCCallContext ccx(NATIVE_CALLER, cx);
     if (!ccx.IsValid())
         return NS_ERROR_UNEXPECTED;
 
@@ -623,7 +569,8 @@ nsXPCWrappedJS::GetEnumerator(nsISimpleEnumerator * *aEnumerate)
 NS_IMETHODIMP
 nsXPCWrappedJS::GetProperty(const nsAString & name, nsIVariant **_retval)
 {
-    XPCCallContext ccx(NATIVE_CALLER);
+    AutoJSContext cx;
+    XPCCallContext ccx(NATIVE_CALLER, cx);
     if (!ccx.IsValid())
         return NS_ERROR_UNEXPECTED;
 
@@ -651,7 +598,7 @@ nsXPCWrappedJS::DebugDump(int16_t depth)
         XPC_LOG_ALWAYS(("IID number is %s", iid ? iid : "invalid"));
         if (iid)
             NS_Free(iid);
-        XPC_LOG_ALWAYS(("nsXPCWrappedJSClass @ %x", mClass));
+        XPC_LOG_ALWAYS(("nsXPCWrappedJSClass @ %x", mClass.get()));
 
         if (!IsRootWrapper())
             XPC_LOG_OUTDENT();

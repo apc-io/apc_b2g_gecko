@@ -5,6 +5,8 @@
 
 package org.mozilla.gecko;
 
+import org.mozilla.gecko.GeckoProfileDirectories.NoMozillaDirectoryException;
+import org.mozilla.gecko.GeckoProfileDirectories.NoSuchProfileException;
 import org.mozilla.gecko.util.INIParser;
 import org.mozilla.gecko.util.INISection;
 
@@ -24,15 +26,18 @@ import java.util.Hashtable;
 
 public final class GeckoProfile {
     private static final String LOGTAG = "GeckoProfile";
+
     // Used to "lock" the guest profile, so that we'll always restart in it
     private static final String LOCK_FILE_NAME = ".active_lock";
+    public static final String DEFAULT_PROFILE = "default";
 
     private static HashMap<String, GeckoProfile> sProfileCache = new HashMap<String, GeckoProfile>();
     private static String sDefaultProfileName = null;
 
-    private final String mName;
-    private File mProfileDir;
     public static boolean sIsUsingCustomProfile = false;
+    private final String mName;
+    private final File mMozillaDir;
+    private File mProfileDir;             // Not final because this is lazily computed.
 
     // Constants to cache whether or not a profile is "locked".
     private enum LockState {
@@ -40,36 +45,30 @@ public final class GeckoProfile {
         UNLOCKED,
         UNDEFINED
     };
+
     // Caches whether or not a profile is "locked". Only used by the guest profile to determine if it should
     // be reused or deleted on startup
     private LockState mLocked = LockState.UNDEFINED;
 
-    // Caches the guest profile dir
-    private static File mGuestDir = null;
+    // Caches the guest profile dir.
+    private static File sGuestDir = null;
+    private static GeckoProfile sGuestProfile = null;
 
     private boolean mInGuestMode = false;
-    private static GeckoProfile mGuestProfile = null;
 
-    private static final String MOZILLA_DIR_NAME = "mozilla";
-    private static File sMozillaDir;
-
-    private static INIParser getProfilesINI(File mozillaDir) {
-        File profilesIni = new File(mozillaDir, "profiles.ini");
-        return new INIParser(profilesIni);
-    }
 
     public static GeckoProfile get(Context context) {
         boolean isGeckoApp = false;
         try {
             isGeckoApp = context instanceof GeckoApp;
         } catch (NoClassDefFoundError ex) {}
-        
 
         if (isGeckoApp) {
             // Check for a cached profile on this context already
             // TODO: We should not be caching profile information on the Activity context
-            if (((GeckoApp)context).mProfile != null) {
-                return ((GeckoApp)context).mProfile;
+            final GeckoApp geckoApp = (GeckoApp) context;
+            if (geckoApp.mProfile != null) {
+                return geckoApp.mProfile;
             }
         }
 
@@ -80,8 +79,18 @@ public final class GeckoProfile {
         }
 
         if (isGeckoApp) {
-            // Otherwise, get the default profile for the Activity
-            return get(context, ((GeckoApp)context).getDefaultProfileName());
+            final GeckoApp geckoApp = (GeckoApp) context;
+            String defaultProfileName;
+            try {
+                defaultProfileName = geckoApp.getDefaultProfileName();
+            } catch (NoMozillaDirectoryException e) {
+                // If this failed, we're screwed. But there are so many callers that
+                // we'll just throw a RuntimeException.
+                Log.wtf(LOGTAG, "Unable to get default profile name.", e);
+                throw new RuntimeException(e);
+            }
+            // Otherwise, get the default profile for the Activity.
+            return get(context, defaultProfileName);
         }
 
         return get(context, "");
@@ -111,16 +120,24 @@ public final class GeckoProfile {
         // if no profile was passed in, look for the default profile listed in profiles.ini
         // if that doesn't exist, look for a profile called 'default'
         if (TextUtils.isEmpty(profileName) && profileDir == null) {
-            profileName = GeckoProfile.findDefaultProfile(context);
-            if (profileName == null)
-                profileName = "default";
+            try {
+                profileName = GeckoProfile.getDefaultProfileName(context);
+            } catch (NoMozillaDirectoryException e) {
+                // We're unable to do anything sane here.
+                throw new RuntimeException(e);
+            }
         }
 
         // actually try to look up the profile
         synchronized (sProfileCache) {
             GeckoProfile profile = sProfileCache.get(profileName);
             if (profile == null) {
-                profile = new GeckoProfile(context, profileName);
+                try {
+                    profile = new GeckoProfile(context, profileName);
+                } catch (NoMozillaDirectoryException e) {
+                    // We're unable to do anything sane here.
+                    throw new RuntimeException(e);
+                }
                 profile.setDir(profileDir);
                 sProfileCache.put(profileName, profile);
             } else {
@@ -130,19 +147,13 @@ public final class GeckoProfile {
         }
     }
 
-    private static File getMozillaDirectory(Context context) {
-        return new File(context.getFilesDir(), MOZILLA_DIR_NAME);
-    }
-
-    private synchronized File ensureMozillaDirectory() throws IOException {
-        if (sMozillaDir.exists() || sMozillaDir.mkdirs()) {
-            return sMozillaDir;
-        }
-        throw new IOException("Unable to create mozilla directory at " + sMozillaDir.getAbsolutePath());
-    }
-
     public static boolean removeProfile(Context context, String profileName) {
-        return new GeckoProfile(context, profileName).remove();
+        try {
+            return new GeckoProfile(context, profileName).remove();
+        } catch (NoMozillaDirectoryException e) {
+            Log.w(LOGTAG, "Unable to remove profile: no Mozilla directory.", e);
+            return true;
+        }
     }
 
     public static GeckoProfile createGuestProfile(Context context) {
@@ -168,22 +179,22 @@ public final class GeckoProfile {
     }
 
     private static File getGuestDir(Context context) {
-        if (mGuestDir == null) {
-            mGuestDir = context.getFileStreamPath("guest");
+        if (sGuestDir == null) {
+            sGuestDir = context.getFileStreamPath("guest");
         }
-        return mGuestDir;
+        return sGuestDir;
     }
 
     private static GeckoProfile getGuestProfile(Context context) {
-        if (mGuestProfile == null) {
+        if (sGuestProfile == null) {
             File guestDir = getGuestDir(context);
             if (guestDir.exists()) {
-                mGuestProfile = get(context, "guest", guestDir);
-                mGuestProfile.mInGuestMode = true;
+                sGuestProfile = get(context, "guest", guestDir);
+                sGuestProfile.mInGuestMode = true;
             }
         }
 
-        return mGuestProfile;
+        return sGuestProfile;
     }
 
     public static boolean maybeCleanupGuestProfile(final Context context) {
@@ -229,6 +240,11 @@ public final class GeckoProfile {
 
         // Even if this is a dir, it should now be empty and delete should work
         return file.delete();
+    }
+
+    private GeckoProfile(Context context, String profileName) throws NoMozillaDirectoryException {
+        mName = profileName;
+        mMozillaDir = GeckoProfileDirectories.getMozillaDirectory(context);
     }
 
     // Warning, Changing the lock file state from outside apis will cause this to become out of sync
@@ -289,13 +305,6 @@ public final class GeckoProfile {
         return false;
     }
 
-    private GeckoProfile(Context context, String profileName) {
-        mName = profileName;
-        if (sMozillaDir == null) {
-            sMozillaDir = getMozillaDirectory(context);
-        }
-    }
-
     public boolean inGuestMode() {
         return mInGuestMode;
     }
@@ -304,7 +313,7 @@ public final class GeckoProfile {
         if (dir != null && dir.exists() && dir.isDirectory()) {
             mProfileDir = dir;
         } else {
-            Log.w(LOGTAG, "requested profile directory missing: " + dir);
+            Log.w(LOGTAG, "Requested profile directory missing.");
         }
     }
 
@@ -324,13 +333,12 @@ public final class GeckoProfile {
 
         try {
             // Check if a profile with this name already exists.
-            File mozillaDir = ensureMozillaDirectory();
-            mProfileDir = findProfileDir(mozillaDir);
-            if (mProfileDir == null) {
-                // otherwise create it
-                mProfileDir = createProfileDir(mozillaDir);
-            } else {
-                Log.d(LOGTAG, "Found profile dir: " + mProfileDir.getAbsolutePath());
+            try {
+                mProfileDir = findProfileDir();
+                Log.d(LOGTAG, "Found profile dir.");
+            } catch (NoSuchProfileException noSuchProfile) {
+                // If it doesn't exist, create it.
+                mProfileDir = createProfileDir();
             }
         } catch (IOException ioe) {
             Log.e(LOGTAG, "Error getting profile dir", ioe);
@@ -416,25 +424,27 @@ public final class GeckoProfile {
 
     private boolean remove() {
         try {
-            File dir = getDir();
-            if (dir.exists())
+            final File dir = getDir();
+            if (dir.exists()) {
                 delete(dir);
+            }
 
-            File mozillaDir = ensureMozillaDirectory();
-            mProfileDir = findProfileDir(mozillaDir);
-            if (mProfileDir == null) {
+            try {
+                mProfileDir = findProfileDir();
+            } catch (NoSuchProfileException noSuchProfile) {
+                // If the profile doesn't exist, there's nothing left for us to do.
                 return false;
             }
 
-            INIParser parser = getProfilesINI(mozillaDir);
-
-            Hashtable<String, INISection> sections = parser.getSections();
+            final INIParser parser = GeckoProfileDirectories.getProfilesINI(mMozillaDir);
+            final Hashtable<String, INISection> sections = parser.getSections();
             for (Enumeration<INISection> e = sections.elements(); e.hasMoreElements();) {
-                INISection section = e.nextElement();
+                final INISection section = e.nextElement();
                 String name = section.getStringProperty("Name");
 
-                if (name == null || !name.equals(mName))
+                if (name == null || !name.equals(mName)) {
                     continue;
+                }
 
                 if (section.getName().startsWith("Profile")) {
                     // ok, we have stupid Profile#-named things.  Rename backwards.
@@ -448,7 +458,7 @@ public final class GeckoProfile {
                         while (sections.containsKey(nextSection)) {
                             parser.renameSection(nextSection, curSection);
                             sectionNumber++;
-                            
+
                             curSection = nextSection;
                             nextSection = "Profile" + (sectionNumber+1);
                         }
@@ -467,12 +477,20 @@ public final class GeckoProfile {
             parser.write();
             return true;
         } catch (IOException ex) {
-            Log.w(LOGTAG, "Failed to remove profile " + mName + ":\n" + ex);
+            Log.w(LOGTAG, "Failed to remove profile.", ex);
             return false;
         }
     }
 
-    public static String findDefaultProfile(Context context) {
+    /**
+     * @return the default profile name for this application, or
+     *         {@link GeckoProfile#DEFAULT_PROFILE} if none could be found.
+     *
+     * @throws NoMozillaDirectoryException
+     *             if the Mozilla directory did not exist and could not be
+     *             created.
+     */
+    public static String getDefaultProfileName(final Context context) throws NoMozillaDirectoryException {
         // Have we read the default profile from the INI already?
         // Changing the default profile requires a restart, so we don't
         // need to worry about runtime changes.
@@ -480,75 +498,52 @@ public final class GeckoProfile {
             return sDefaultProfileName;
         }
 
-        // Open profiles.ini to find the correct path
-        INIParser parser = getProfilesINI(getMozillaDirectory(context));
-
-        for (Enumeration<INISection> e = parser.getSections().elements(); e.hasMoreElements();) {
-            INISection section = e.nextElement();
-            if (section.getIntProperty("Default") == 1) {
-                sDefaultProfileName = section.getStringProperty("Name");
-                return sDefaultProfileName;
-            }
+        final String profileName = GeckoProfileDirectories.findDefaultProfileName(context);
+        if (profileName == null) {
+            // Note that we don't persist this back to profiles.ini.
+            sDefaultProfileName = DEFAULT_PROFILE;
+            return DEFAULT_PROFILE;
         }
 
-        return null;
+        sDefaultProfileName = profileName;
+        return sDefaultProfileName;
     }
 
-    private File findProfileDir(File mozillaDir) {
-        // Open profiles.ini to find the correct path
-        INIParser parser = getProfilesINI(mozillaDir);
-
-        for (Enumeration<INISection> e = parser.getSections().elements(); e.hasMoreElements();) {
-            INISection section = e.nextElement();
-            String name = section.getStringProperty("Name");
-            if (name != null && name.equals(mName)) {
-                if (section.getIntProperty("IsRelative") == 1) {
-                    return new File(mozillaDir, section.getStringProperty("Path"));
-                }
-                return new File(section.getStringProperty("Path"));
-            }
-        }
-
-        return null;
+    private File findProfileDir() throws NoSuchProfileException {
+        return GeckoProfileDirectories.findProfileDir(mMozillaDir, mName);
     }
 
-    private static String saltProfileName(String name) {
-        String allowedChars = "abcdefghijklmnopqrstuvwxyz0123456789";
-        StringBuilder salt = new StringBuilder(16);
-        for (int i = 0; i < 8; i++) {
-            salt.append(allowedChars.charAt((int)(Math.random() * allowedChars.length())));
-        }
-        salt.append('.');
-        salt.append(name);
-        return salt.toString();
-    }
-
-    private File createProfileDir(File mozillaDir) throws IOException {
-        INIParser parser = getProfilesINI(mozillaDir);
+    private File createProfileDir() throws IOException {
+        INIParser parser = GeckoProfileDirectories.getProfilesINI(mMozillaDir);
 
         // Salt the name of our requested profile
-        String saltedName = saltProfileName(mName);
-        File profileDir = new File(mozillaDir, saltedName);
+        String saltedName = GeckoProfileDirectories.saltProfileName(mName);
+        File profileDir = new File(mMozillaDir, saltedName);
         while (profileDir.exists()) {
-            saltedName = saltProfileName(mName);
-            profileDir = new File(mozillaDir, saltedName);
+            saltedName = GeckoProfileDirectories.saltProfileName(mName);
+            profileDir = new File(mMozillaDir, saltedName);
         }
 
         // Attempt to create the salted profile dir
-        if (! profileDir.mkdirs()) {
-            throw new IOException("Unable to create profile at " + profileDir.getAbsolutePath());
+        if (!profileDir.mkdirs()) {
+            throw new IOException("Unable to create profile.");
         }
-        Log.d(LOGTAG, "Created new profile dir at " + profileDir.getAbsolutePath());
+        Log.d(LOGTAG, "Created new profile dir.");
 
         // Now update profiles.ini
         // If this is the first time its created, we also add a General section
         // look for the first profile number that isn't taken yet
         int profileNum = 0;
-        while (parser.getSection("Profile" + profileNum) != null) {
+        boolean isDefaultSet = false;
+        INISection profileSection;
+        while ((profileSection = parser.getSection("Profile" + profileNum)) != null) {
             profileNum++;
+            if (profileSection.getProperty("Default") != null) {
+                isDefaultSet = true;
+            }
         }
 
-        INISection profileSection = new INISection("Profile" + profileNum);
+        profileSection = new INISection("Profile" + profileNum);
         profileSection.setProperty("Name", mName);
         profileSection.setProperty("IsRelative", 1);
         profileSection.setProperty("Path", saltedName);
@@ -557,8 +552,11 @@ public final class GeckoProfile {
             INISection generalSection = new INISection("General");
             generalSection.setProperty("StartWithLastProfile", 1);
             parser.addSection(generalSection);
+        }
 
-            // only set as default if this is the first profile we're creating
+        if (!isDefaultSet && !mName.startsWith("webapp")) {
+            // only set as default if this is the first non-webapp
+            // profile we're creating
             profileSection.setProperty("Default", 1);
         }
 

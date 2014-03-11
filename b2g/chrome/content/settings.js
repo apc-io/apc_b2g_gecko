@@ -21,6 +21,10 @@ XPCOMUtils.defineLazyGetter(this, "libcutils", function () {
 });
 #endif
 
+XPCOMUtils.defineLazyServiceGetter(this, "uuidgen",
+                                   "@mozilla.org/uuid-generator;1",
+                                   "nsIUUIDGenerator");
+
 // Once Bug 731746 - Allow chrome JS object to implement nsIDOMEventTarget
 // is resolved this helper could be removed.
 var SettingsListener = {
@@ -118,51 +122,6 @@ SettingsListener.observe('language.current', 'en-US', function(value) {
     });
   });
 
-  SettingsListener.observe('ril.mms.retrieval_mode', 'manual',
-    function(value) {
-      Services.prefs.setCharPref('dom.mms.retrieval_mode', value);
-  });
-
-  SettingsListener.observe('ril.sms.strict7BitEncoding.enabled', false,
-    function(value) {
-      Services.prefs.setBoolPref('dom.sms.strict7BitEncoding', value);
-  });
-
-  SettingsListener.observe('ril.sms.requestStatusReport.enabled', false,
-    function(value) {
-      Services.prefs.setBoolPref('dom.sms.requestStatusReport', value);
-  });
-
-  SettingsListener.observe('ril.mms.requestStatusReport.enabled', false,
-    function(value) {
-      Services.prefs.setBoolPref('dom.mms.requestStatusReport', value);
-  });
-
-  SettingsListener.observe('ril.mms.requestReadReport.enabled', true,
-    function(value) {
-      Services.prefs.setBoolPref('dom.mms.requestReadReport', value);
-  });
-
-  SettingsListener.observe('ril.cellbroadcast.disabled', false,
-    function(value) {
-      Services.prefs.setBoolPref('ril.cellbroadcast.disabled', value);
-  });
-
-  SettingsListener.observe('ril.radio.disabled', false,
-    function(value) {
-      Services.prefs.setBoolPref('ril.radio.disabled', value);
-  });
-
-  SettingsListener.observe('wap.UAProf.url', '',
-    function(value) {
-      Services.prefs.setCharPref('wap.UAProf.url', value);
-  });
-
-  SettingsListener.observe('wap.UAProf.tagname', 'x-wap-profile',
-    function(value) {
-      Services.prefs.setCharPref('wap.UAProf.tagname', value);
-  });
-
   // DSDS default service IDs
   ['mms', 'sms', 'telephony', 'voicemail'].forEach(function(key) {
     SettingsListener.observe('ril.' + key + '.defaultServiceId', 0,
@@ -212,6 +171,24 @@ Components.utils.import('resource://gre/modules/ctypes.jsm');
   }
   window.navigator.mozSettings.createLock().set(setting);
 })();
+
+// =================== DevTools ====================
+
+let developerHUD;
+SettingsListener.observe('devtools.overlay', false, (value) => {
+  if (value) {
+    if (!developerHUD) {
+      let scope = {};
+      Services.scriptloader.loadSubScript('chrome://b2g/content/devtools.js', scope);
+      developerHUD = scope.developerHUD;
+    }
+    developerHUD.init();
+  } else {
+    if (developerHUD) {
+      developerHUD.uninit();
+    }
+  }
+});
 
 // =================== Debugger / ADB ====================
 
@@ -378,8 +355,7 @@ let AdbController = {
 
     // Check if we have a remote debugging session going on. If so, we won't
     // disable adb even if the screen is locked.
-    let isDebugging = DebuggerServer._connections &&
-                      Object.keys(DebuggerServer._connections).length > 0;
+    let isDebugging = RemoteDebugger.isDebugging;
     if (this.DEBUG) {
       this.debug("isDebugging=" + isDebugging);
     }
@@ -460,6 +436,8 @@ SettingsListener.observe("lockscreen.enabled", false,
                          AdbController.setLockscreenEnabled.bind(AdbController));
 #endif
 
+// Keep the old setting to not break people that won't have updated
+// gaia and gecko.
 SettingsListener.observe('devtools.debugger.remote-enabled', false, function(value) {
   Services.prefs.setBoolPref('devtools.debugger.remote-enabled', value);
   // This preference is consulted during startup
@@ -475,8 +453,27 @@ SettingsListener.observe('devtools.debugger.remote-enabled', false, function(val
 #endif
 });
 
-SettingsListener.observe('debug.log-animations.enabled', false, function(value) {
-  Services.prefs.setBoolPref('layers.offmainthreadcomposition.log-animations', value);
+SettingsListener.observe('debugger.remote-mode', false, function(value) {
+  if (['disabled', 'adb-only', 'adb-devtools'].indexOf(value) == -1) {
+    dump('Illegal value for debugger.remote-mode: ' + value + '\n');
+    return;
+  }
+
+  Services.prefs.setBoolPref('devtools.debugger.remote-enabled',
+                             value == 'adb-devtools');
+  // This preference is consulted during startup
+  Services.prefs.savePrefFile(null);
+
+  try {
+    (value == 'adb-devtools') ? RemoteDebugger.start()
+                              : RemoteDebugger.stop();
+  } catch(e) {
+    dump("Error while initializing devtools: " + e + "\n" + e.stack + "\n");
+  }
+
+#ifdef MOZ_WIDGET_GONK
+  AdbController.setRemoteDebuggerState(value != 'disabled');
+#endif
 });
 
 // =================== Device Storage ====================
@@ -490,12 +487,16 @@ SettingsListener.observe('device.storage.writable.name', 'sdcard', function(valu
 });
 
 // =================== Privacy ====================
-SettingsListener.observe('privacy.donottrackheader.enabled', false, function(value) {
-  Services.prefs.setBoolPref('privacy.donottrackheader.enabled', value);
-});
-
 SettingsListener.observe('privacy.donottrackheader.value', 1, function(value) {
   Services.prefs.setIntPref('privacy.donottrackheader.value', value);
+  // If the user specifically disallows tracking, we set the value of
+  // app.update.custom (update tracking ID) to an empty string.
+  if (value == 1) {
+    Services.prefs.setCharPref('app.update.custom', '');
+    return;
+  }
+  // Otherwise, we assure that the update tracking ID exists.
+  setUpdateTrackingId();
 });
 
 // =================== Crash Reporting ====================
@@ -512,21 +513,71 @@ SettingsListener.observe('app.reportCrashes', 'ask', function(value) {
 });
 
 // ================ Updates ================
-SettingsListener.observe('app.update.interval', 86400, function(value) {
-  Services.prefs.setIntPref('app.update.interval', value);
-});
+/**
+ * For tracking purposes some partners require us to add an UUID to the
+ * update URL. The update tracking ID will be an empty string if the
+ * do-not-track feature specifically disallows tracking and it is reseted
+ * to a different ID if the do-not-track value changes from disallow to allow.
+ */
+function setUpdateTrackingId() {
+  try {
+    let dntEnabled = Services.prefs.getBoolPref('privacy.donottrackheader.enabled');
+    let dntValue =  Services.prefs.getIntPref('privacy.donottrackheader.value');
+    // If the user specifically decides to disallow tracking (1), we just bail out.
+    if (dntEnabled && (dntValue == 1)) {
+      return;
+    }
+
+    let trackingId =
+      Services.prefs.getPrefType('app.update.custom') ==
+      Ci.nsIPrefBranch.PREF_STRING &&
+      Services.prefs.getCharPref('app.update.custom');
+
+    // If there is no previous registered tracking ID, we generate a new one.
+    // This should only happen on first usage or after changing the
+    // do-not-track value from disallow to allow.
+    if (!trackingId) {
+      trackingId = uuidgen.generateUUID().toString().replace(/[{}]/g, "");
+      Services.prefs.setCharPref('app.update.custom', trackingId);
+    }
+  } catch(e) {
+    dump('Error getting tracking ID ' + e + '\n');
+  }
+}
+setUpdateTrackingId();
 
 // ================ Debug ================
-// XXX could factor out into a settings->pref map.
-SettingsListener.observe("debug.fps.enabled", false, function(value) {
-  Services.prefs.setBoolPref("layers.acceleration.draw-fps", value);
-});
-SettingsListener.observe("debug.paint-flashing.enabled", false, function(value) {
-  Services.prefs.setBoolPref("nglayout.debug.paint_flashing", value);
-});
-SettingsListener.observe("layers.draw-borders", false, function(value) {
-  Services.prefs.setBoolPref("layers.draw-borders", value);
-});
+(function Composer2DSettingToPref() {
+  //layers.composer.enabled can be enabled in three ways
+  //In order of precedence they are:
+  //
+  //1. mozSettings "layers.composer.enabled"
+  //2. a gecko pref "layers.composer.enabled"
+  //3. presence of ro.display.colorfill at the Gonk level
+
+  var req = navigator.mozSettings.createLock().get('layers.composer2d.enabled');
+  req.onsuccess = function() {
+    if (typeof(req.result['layers.composer2d.enabled']) === 'undefined') {
+      var enabled = false;
+      if (Services.prefs.getPrefType('layers.composer2d.enabled') == Ci.nsIPrefBranch.PREF_BOOL) {
+        enabled = Services.prefs.getBoolPref('layers.composer2d.enabled');
+      } else {
+#ifdef MOZ_WIDGET_GONK
+        enabled = (libcutils.property_get('ro.display.colorfill') === '1');
+#endif
+      }
+      navigator.mozSettings.createLock().set({'layers.composer2d.enabled': enabled });
+    }
+
+    SettingsListener.observe("layers.composer2d.enabled", true, function(value) {
+      Services.prefs.setBoolPref("layers.composer2d.enabled", value);
+    });
+  };
+  req.onerror = function() {
+    dump("Error configuring layers.composer2d.enabled setting");
+  };
+
+})();
 
 // ================ Accessibility ============
 SettingsListener.observe("accessibility.screenreader", false, function(value) {
@@ -535,3 +586,136 @@ SettingsListener.observe("accessibility.screenreader", false, function(value) {
     AccessFu.attach(window);
   }
 });
+
+// ================ Theming ============
+(function themingSettingsListener() {
+  let themingPrefs = ['ui.menu', 'ui.menutext', 'ui.infobackground', 'ui.infotext',
+                      'ui.window', 'ui.windowtext', 'ui.highlight'];
+
+  themingPrefs.forEach(function(pref) {
+    SettingsListener.observe('gaia.' + pref, null, function(value) {
+      if (value) {
+        Services.prefs.setCharPref(pref, value);
+      }
+    });
+  });
+})();
+
+// =================== AsyncPanZoom ======================
+SettingsListener.observe('apz.displayport.heuristics', 'default', function(value) {
+  // first reset everything to default
+  Services.prefs.clearUserPref('apz.velocity_bias');
+  Services.prefs.clearUserPref('apz.use_paint_duration');
+  Services.prefs.clearUserPref('apz.x_skate_size_multiplier');
+  Services.prefs.clearUserPref('apz.y_skate_size_multiplier');
+  Services.prefs.clearUserPref('apz.allow-checkerboarding');
+  // and then set the things that we want to change
+  switch (value) {
+  case 'default':
+    break;
+  case 'center-displayport':
+    Services.prefs.setCharPref('apz.velocity_bias', '0.0');
+    break;
+  case 'perfect-paint-times':
+    Services.prefs.setBoolPref('apz.use_paint_duration', false);
+    Services.prefs.setCharPref('apz.velocity_bias', '0.32'); // 16/50 (assumes 16ms paint times instead of 50ms)
+    break;
+  case 'taller-displayport':
+    Services.prefs.setCharPref('apz.y_skate_size_multiplier', '3.5');
+    break;
+  case 'faster-paint':
+    Services.prefs.setCharPref('apz.x_skate_size_multiplier', '1.0');
+    Services.prefs.setCharPref('apz.y_skate_size_multiplier', '1.5');
+    break;
+  case 'no-checkerboard':
+    Services.prefs.setBoolPref('apz.allow-checkerboarding', false);
+    break;
+  }
+});
+
+// =================== Various simple mapping  ======================
+let settingsToObserve = {
+  'ril.mms.retrieval_mode': {
+    prefName: 'dom.mms.retrieval_mode',
+    defaultValue: 'manual'
+  },
+  'ril.sms.strict7BitEncoding.enabled': {
+    prefName: 'dom.sms.strict7BitEncoding',
+    defaultValue: false
+  },
+  'ril.sms.requestStatusReport.enabled': {
+    prefName: 'dom.sms.requestStatusReport',
+    defaultValue: false
+  },
+  'ril.mms.requestStatusReport.enabled': {
+    prefName: 'dom.mms.requestStatusReport',
+    defaultValue: false
+  },
+  'ril.mms.requestReadReport.enabled': {
+    prefName: 'dom.mms.requestReadReport',
+    defaultValue: true
+  },
+  'ril.cellbroadcast.disabled': false,
+  'ril.radio.disabled': false,
+  'wap.UAProf.url': '',
+  'wap.UAProf.tagname': 'x-wap-profile',
+  'devtools.eventlooplag.threshold': 100,
+  'privacy.donottrackheader.enabled': false,
+  'apz.force-enable': {
+    prefName: 'dom.browser_frames.useAsyncPanZoom',
+    defaultValue: false
+  },
+  'layers.enable-tiles': false,
+  'layers.progressive-paint': false,
+  'layers.draw-tile-borders': false,
+  'layers.dump': false,
+  'debug.fps.enabled': {
+    prefName: 'layers.acceleration.draw-fps',
+    defaultValue: false
+  },
+  'debug.paint-flashing.enabled': {
+    prefName: 'nglayout.debug.paint_flashing',
+    defaultValue: false
+  },
+  'layers.draw-borders': false,
+  'app.update.interval': 86400,
+  'debug.log-animations.enabled': {
+    prefName: 'layers.offmainthreadcomposition.log-animations',
+    defaultValue: false
+  }
+};
+
+for (let key in settingsToObserve) {
+  let setting = settingsToObserve[key];
+
+  // By default, assume the setting name and the pref name are the same.
+  let prefName = key;
+  let defaultValue = setting;
+
+  // Check if the pref name has been overidden.
+  if (typeof setting == 'object') {
+    prefName = setting.prefName;
+    defaultValue = setting.defaultValue;
+  }
+
+  switch (typeof defaultValue) {
+    case 'boolean':
+      SettingsListener.observe(key, defaultValue, function(value) {
+        Services.prefs.setBoolPref(prefName, value);
+      });
+      break;
+
+    case 'string':
+      SettingsListener.observe(key, defaultValue, function(value) {
+        Services.prefs.setCharPref(prefName, value);
+      });
+      break;
+
+    case 'number':
+      SettingsListener.observe(key, defaultValue, function(value) {
+        Services.prefs.setIntPref(prefName, value);
+      });
+      break;
+  }
+};
+

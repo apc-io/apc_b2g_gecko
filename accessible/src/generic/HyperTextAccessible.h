@@ -16,6 +16,8 @@
 namespace mozilla {
 namespace a11y {
 
+class TextRange;
+
 struct DOMPoint {
   DOMPoint() : node(nullptr), idx(0) { }
   DOMPoint(nsINode* aNode, int32_t aIdx) : node(aNode), idx(aIdx) { }
@@ -26,9 +28,9 @@ struct DOMPoint {
 
 // This character marks where in the text returned via nsIAccessibleText(),
 // that embedded object characters exist
-const PRUnichar kEmbeddedObjectChar = 0xfffc;
-const PRUnichar kImaginaryEmbeddedObjectChar = ' ';
-const PRUnichar kForcedNewLineChar = '\n';
+const char16_t kEmbeddedObjectChar = 0xfffc;
+const char16_t kImaginaryEmbeddedObjectChar = ' ';
+const char16_t kForcedNewLineChar = '\n';
 
 /**
   * Special Accessible that knows how contain both text and embedded objects
@@ -99,34 +101,32 @@ public:
   // HyperTextAccessible: DOM point to text offset conversions.
 
   /**
-    * Turn a DOM Node and offset into a character offset into this hypertext.
-    * Will look for closest match when the DOM node does not have an accessible
-    * object associated with it. Will return an offset for the end of
-    * the string if the node is not found.
-    *
-    * @param aNode - the node to look for
-    * @param aNodeOffset - the offset to look for
-    *                      if -1 just look directly for the node
-    *                      if >=0 and aNode is text, this represents a char offset
-    *                      if >=0 and aNode is not text, this represents a child node offset
-    * @param aResultOffset - the character offset into the current
-    *                        HyperTextAccessible
-    * @param aIsEndOffset - if true, then then this offset is not inclusive. The character
-    *                       indicated by the offset returned is at [offset - 1]. This means
-    *                       if the passed-in offset is really in a descendant, then the offset returned
-    *                       will come just after the relevant embedded object characer.
-    *                       If false, then the offset is inclusive. The character indicated
-    *                       by the offset returned is at [offset]. If the passed-in offset in inside a
-    *                       descendant, then the returned offset will be on the relevant embedded object char.
-    *
-    * @return               the accessible child which contained the offset, if
-    *                       it is within the current HyperTextAccessible,
-    *                       otherwise nullptr
-    */
-  Accessible* DOMPointToHypertextOffset(nsINode *aNode,
-                                        int32_t aNodeOffset,
-                                        int32_t* aHypertextOffset,
-                                        bool aIsEndOffset = false) const;
+   * Turn a DOM point (node and offset) into a character offset of this
+   * hypertext. Will look for closest match when the DOM node does not have
+   * an accessible object associated with it. Will return an offset for the end
+   * of the string if the node is not found.
+   *
+   * @param aNode         [in] the node to look for
+   * @param aNodeOffset   [in] the offset to look for
+   *                       if -1 just look directly for the node
+   *                       if >=0 and aNode is text, this represents a char offset
+   *                       if >=0 and aNode is not text, this represents a child node offset
+   * @param aIsEndOffset  [in] if true, then then this offset is not inclusive. The character
+   *                       indicated by the offset returned is at [offset - 1]. This means
+   *                       if the passed-in offset is really in a descendant, then the offset returned
+   *                       will come just after the relevant embedded object characer.
+   *                       If false, then the offset is inclusive. The character indicated
+   *                       by the offset returned is at [offset]. If the passed-in offset in inside a
+   *                       descendant, then the returned offset will be on the relevant embedded object char.
+   */
+  int32_t DOMPointToOffset(nsINode* aNode, int32_t aNodeOffset,
+                           bool aIsEndOffset = false) const;
+
+  /**
+   * Transform the given a11y point into the offset relative this hypertext.
+   */
+  int32_t TransformOffset(Accessible* aDescendant, int32_t aOffset,
+                          bool aIsEndOffset) const;
 
   /**
    * Convert start and end hypertext offsets into DOM range.
@@ -160,10 +160,8 @@ public:
   /**
    * Return character count within the hypertext accessible.
    */
-  uint32_t CharacterCount()
-  {
-    return GetChildOffset(ChildCount());
-  }
+  uint32_t CharacterCount() const
+    { return GetChildOffset(ChildCount()); }
 
   /**
    * Get a character at the given offset (don't support magic offsets).
@@ -188,7 +186,7 @@ public:
     return true;
   }
 
-  PRUnichar CharAt(int32_t aOffset)
+  char16_t CharAt(int32_t aOffset)
   {
     nsAutoString charAtOffset;
     CharAt(aOffset, charAtOffset);
@@ -198,7 +196,7 @@ public:
   /**
    * Return true if char at the given offset equals to given char.
    */
-  bool IsCharAt(int32_t aOffset, PRUnichar aChar)
+  bool IsCharAt(int32_t aOffset, char16_t aChar)
     { return CharAt(aOffset) == aChar; }
 
   /**
@@ -247,7 +245,7 @@ public:
    *                           cached offsets for next siblings of the child
    */
   int32_t GetChildOffset(Accessible* aChild,
-                         bool aInvalidateAfter = false)
+                         bool aInvalidateAfter = false) const
   {
     int32_t index = GetIndexOf(aChild);
     return index == -1 ? -1 : GetChildOffset(index, aInvalidateAfter);
@@ -257,21 +255,21 @@ public:
    * Return text offset for the child accessible index.
    */
   int32_t GetChildOffset(uint32_t aChildIndex,
-                         bool aInvalidateAfter = false);
+                         bool aInvalidateAfter = false) const;
 
   /**
    * Return child accessible at the given text offset.
    *
    * @param  aOffset  [in] the given text offset
    */
-  int32_t GetChildIndexAtOffset(uint32_t aOffset);
+  int32_t GetChildIndexAtOffset(uint32_t aOffset) const;
 
   /**
    * Return child accessible at the given text offset.
    *
    * @param  aOffset  [in] the given text offset
    */
-  Accessible* GetChildAtOffset(uint32_t aOffset)
+  Accessible* GetChildAtOffset(uint32_t aOffset) const
   {
     return GetChildAt(GetChildIndexAtOffset(aOffset));
   }
@@ -365,6 +363,34 @@ public:
                               uint32_t aCoordinateType,
                               int32_t aX, int32_t aY);
 
+  /**
+   * Return a range that encloses the text control or the document this
+   * accessible belongs to.
+   */
+  void EnclosingRange(TextRange& aRange) const;
+
+  /**
+   * Return an array of disjoint ranges for selected text within the text control
+   * or the document this accessible belongs to.
+   */
+  void SelectionRanges(nsTArray<TextRange>* aRanges) const;
+
+  /**
+   * Return an array of disjoint ranges of visible text within the text control
+   * or the document this accessible belongs to.
+   */
+  void VisibleRanges(nsTArray<TextRange>* aRanges) const;
+
+  /**
+   * Return a range containing the given accessible.
+   */
+  void RangeByChild(Accessible* aChild, TextRange& aRange) const;
+
+  /**
+   * Return a range containing an accessible at the given point.
+   */
+  void RangeAtPoint(int32_t aX, int32_t aY, TextRange& aRange) const;
+
   //////////////////////////////////////////////////////////////////////////////
   // EditableTextAccessible
 
@@ -396,6 +422,11 @@ protected:
    * Adjust an offset the caret stays at to get a text by line boundary.
    */
   int32_t AdjustCaretOffset(int32_t aOffset) const;
+
+  /**
+   * Return true if caret is at end of line.
+   */
+  bool IsCaretAtEndOfLine() const;
 
   /**
    * Return true if the given offset points to terminal empty line if any.
@@ -440,9 +471,9 @@ protected:
    * Return an offset corresponding to the given direction and selection amount
    * relative the given offset. A helper used to find word or line boundaries.
    */
-  virtual int32_t FindOffset(int32_t aOffset, nsDirection aDirection,
-                             nsSelectionAmount aAmount,
-                             EWordMovementType aWordMovementType = eDefaultBehavior);
+  int32_t FindOffset(int32_t aOffset, nsDirection aDirection,
+                     nsSelectionAmount aAmount,
+                     EWordMovementType aWordMovementType = eDefaultBehavior);
 
   /**
    * Return the boundaries of the substring in case of textual frame or
@@ -457,7 +488,7 @@ protected:
   /**
    * Return frame/DOM selection object for the accessible.
    */
-  virtual already_AddRefed<nsFrameSelection> FrameSelection() const;
+  already_AddRefed<nsFrameSelection> FrameSelection() const;
   Selection* DOMSelection() const;
 
   /**
@@ -471,25 +502,6 @@ protected:
   nsresult GetDOMPointByFrameOffset(nsIFrame* aFrame, int32_t aOffset,
                                     Accessible* aAccessible,
                                     mozilla::a11y::DOMPoint* aPoint);
-
-
-  /**
-   * Return hyper text offset for the specified bound of the given DOM range.
-   * If the bound is outside of the hyper text then offset value is either
-   * 0 or number of characters of hyper text, it depends on type of requested
-   * offset. The method is a wrapper for DOMPointToHypertextOffset.
-   *
-   * @param aRange          [in] the given range
-   * @param aIsStartBound   [in] specifies whether the required range bound is
-   *                        start bound
-   * @param aIsStartOffset  [in] the offset type, used when the range bound is
-   *                        outside of hyper text
-   * @param aHTOffset       [out] the result offset
-   */
-  nsresult RangeBoundToHypertextOffset(nsRange *aRange,
-                                       bool aIsStartBound,
-                                       bool aIsStartOffset,
-                                       int32_t *aHTOffset);
 
   /**
    * Set 'misspelled' text attribute and return range offsets where the
@@ -513,7 +525,7 @@ private:
   /**
    * End text offsets array.
    */
-  nsTArray<uint32_t> mOffsets;
+  mutable nsTArray<uint32_t> mOffsets;
 };
 
 

@@ -135,14 +135,14 @@ public:
   virtual uint32_t GetAttrCount() const MOZ_OVERRIDE;
   virtual const nsTextFragment *GetText() MOZ_OVERRIDE;
   virtual uint32_t TextLength() const MOZ_OVERRIDE;
-  virtual nsresult SetText(const PRUnichar* aBuffer, uint32_t aLength,
+  virtual nsresult SetText(const char16_t* aBuffer, uint32_t aLength,
                            bool aNotify) MOZ_OVERRIDE;
   // Need to implement this here too to avoid hiding.
   nsresult SetText(const nsAString& aStr, bool aNotify)
   {
     return SetText(aStr.BeginReading(), aStr.Length(), aNotify);
   }
-  virtual nsresult AppendText(const PRUnichar* aBuffer, uint32_t aLength,
+  virtual nsresult AppendText(const char16_t* aBuffer, uint32_t aLength,
                               bool aNotify) MOZ_OVERRIDE;
   virtual bool TextIsOnlyWhitespace() MOZ_OVERRIDE;
   virtual void AppendTextTo(nsAString& aResult) MOZ_OVERRIDE;
@@ -161,10 +161,13 @@ public:
   virtual mozilla::dom::ShadowRoot *GetContainingShadow() const MOZ_OVERRIDE;
   virtual mozilla::dom::ShadowRoot *GetShadowRoot() const MOZ_OVERRIDE;
   virtual void SetShadowRoot(mozilla::dom::ShadowRoot* aShadowRoot) MOZ_OVERRIDE;
-  virtual nsIContent *GetXBLInsertionParent() const;
-  virtual void SetXBLInsertionParent(nsIContent* aContent);
+  virtual nsIContent *GetXBLInsertionParent() const MOZ_OVERRIDE;
+  virtual void SetXBLInsertionParent(nsIContent* aContent) MOZ_OVERRIDE;
   virtual bool IsNodeOfType(uint32_t aFlags) const MOZ_OVERRIDE;
   virtual bool IsLink(nsIURI** aURI) const MOZ_OVERRIDE;
+
+  virtual mozilla::dom::CustomElementData* GetCustomElementData() const MOZ_OVERRIDE;
+  virtual void SetCustomElementData(mozilla::dom::CustomElementData* aData) MOZ_OVERRIDE;
 
   virtual nsIAtom* DoGetID() const MOZ_OVERRIDE;
   virtual const nsAttrValue* DoGetClasses() const MOZ_OVERRIDE;
@@ -291,7 +294,7 @@ protected:
                                                uint32_t aCount);
 
   nsresult SetTextInternal(uint32_t aOffset, uint32_t aCount,
-                           const PRUnichar* aBuffer, uint32_t aLength,
+                           const char16_t* aBuffer, uint32_t aLength,
                            bool aNotify,
                            CharacterDataChangeInfo::Details* aDetails = nullptr);
 

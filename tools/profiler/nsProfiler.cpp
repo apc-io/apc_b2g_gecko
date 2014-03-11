@@ -52,7 +52,7 @@ nsProfiler::Init() {
 NS_IMETHODIMP
 nsProfiler::Observe(nsISupports *aSubject,
                     const char *aTopic,
-                    const PRUnichar *aData)
+                    const char16_t *aData)
 {
   if (strcmp(aTopic, "chrome-document-global-created") == 0) {
     nsCOMPtr<nsIInterfaceRequestor> requestor = do_QueryInterface(aSubject);
@@ -92,6 +92,27 @@ NS_IMETHODIMP
 nsProfiler::StopProfiler()
 {
   profiler_stop();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsProfiler::IsPaused(bool *aIsPaused)
+{
+  *aIsPaused = profiler_is_paused();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsProfiler::PauseSampling()
+{
+  profiler_pause();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsProfiler::ResumeSampling()
+{
+  profiler_resume();
   return NS_OK;
 }
 
@@ -180,13 +201,14 @@ nsProfiler::GetSharedLibraryInformation(nsAString& aOutString)
   return NS_OK;
 }
 
-NS_IMETHODIMP nsProfiler::GetProfileData(JSContext* aCx, JS::Value* aResult)
+NS_IMETHODIMP nsProfiler::GetProfileData(JSContext* aCx,
+                                         JS::MutableHandle<JS::Value> aResult)
 {
   JSObject *obj = profiler_get_profile_jsobject(aCx);
   if (!obj)
     return NS_ERROR_FAILURE;
 
-  *aResult = OBJECT_TO_JSVAL(obj);
+  aResult.setObject(*obj);
   return NS_OK;
 }
 

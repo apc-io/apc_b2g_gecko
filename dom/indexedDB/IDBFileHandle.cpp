@@ -35,11 +35,9 @@ GetFileFor(FileInfo* aFileInfo)
 
 } // anonymous namespace
 
-// virtual
-JSObject*
-IDBFileHandle::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aScope)
+IDBFileHandle::IDBFileHandle(IDBDatabase* aOwner)
+  : FileHandle(aOwner)
 {
-  return IDBFileHandleBinding::Wrap(aCx, aScope, this);
 }
 
 // static
@@ -54,9 +52,7 @@ IDBFileHandle::Create(IDBDatabase* aDatabase,
   nsRefPtr<FileInfo> fileInfo(aFileInfo);
   NS_ASSERTION(fileInfo, "Null pointer!");
 
-  nsRefPtr<IDBFileHandle> newFile = new IDBFileHandle();
-
-  newFile->BindToOwner(aDatabase);
+  nsRefPtr<IDBFileHandle> newFile = new IDBFileHandle(aDatabase);
 
   newFile->mFileStorage = aDatabase;
   newFile->mName = aName;
@@ -108,6 +104,13 @@ IDBFileHandle::CreateFileObject(mozilla::dom::file::LockedFile* aLockedFile,
     mName, mType, aFileSize, mFile, aLockedFile, mFileInfo);
 
   return file.forget();
+}
+
+// virtual
+JSObject*
+IDBFileHandle::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aScope)
+{
+  return IDBFileHandleBinding::Wrap(aCx, aScope, this);
 }
 
 IDBDatabase*

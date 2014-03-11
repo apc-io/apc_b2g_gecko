@@ -33,8 +33,11 @@ public:
     }
 
     virtual already_AddRefed<gfxASurface>
-    CreateOffscreenSurface(const gfxIntSize& size,
+    CreateOffscreenSurface(const IntSize& size,
                            gfxContentType contentType);
+    virtual already_AddRefed<gfxASurface>
+    OptimizeImage(gfxImageSurface *aSurface,
+                  gfxImageFormat format) MOZ_OVERRIDE;
     
     virtual gfxImageFormat GetOffscreenFormat() { return mOffscreenFormat; }
     
@@ -77,6 +80,8 @@ public:
     FT_Library GetFTLibrary();
 
     virtual int GetScreenDepth() const;
+
+    virtual bool UseAcceleratedSkiaCanvas() MOZ_OVERRIDE;
 
 private:
     int mScreenDepth;

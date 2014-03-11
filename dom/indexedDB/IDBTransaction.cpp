@@ -14,7 +14,7 @@
 #include "mozilla/dom/quota/QuotaManager.h"
 #include "mozilla/storage.h"
 #include "nsDOMClassInfoID.h"
-#include "nsDOMLists.h"
+#include "mozilla/dom/DOMStringList.h"
 #include "nsEventDispatcher.h"
 #include "nsPIDOMWindow.h"
 #include "nsProxyRelease.h"
@@ -29,6 +29,7 @@
 #include "IDBObjectStore.h"
 #include "IndexedDatabaseManager.h"
 #include "ProfilerHelpers.h"
+#include "ReportInternalError.h"
 #include "TransactionThreadPool.h"
 
 #include "ipc/IndexedDBChild.h"
@@ -105,9 +106,8 @@ IDBTransaction::CreateInternal(IDBDatabase* aDatabase,
                 aMode == IDBTransaction::VERSION_CHANGE),
                "Busted logic!");
 
-  nsRefPtr<IDBTransaction> transaction = new IDBTransaction();
+  nsRefPtr<IDBTransaction> transaction = new IDBTransaction(aDatabase);
 
-  transaction->BindToOwner(aDatabase);
   transaction->SetScriptOwner(aDatabase->GetScriptOwner());
   transaction->mDatabase = aDatabase;
   transaction->mMode = aMode;
@@ -157,8 +157,9 @@ IDBTransaction::CreateInternal(IDBDatabase* aDatabase,
   return transaction.forget();
 }
 
-IDBTransaction::IDBTransaction()
-: mReadyState(IDBTransaction::INITIAL),
+IDBTransaction::IDBTransaction(IDBDatabase* aDatabase)
+: IDBWrapperCache(aDatabase),
+  mReadyState(IDBTransaction::INITIAL),
   mMode(IDBTransaction::READ_ONLY),
   mPendingRequests(0),
   mSavepointCount(0),
@@ -174,8 +175,6 @@ IDBTransaction::IDBTransaction()
 #endif
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
-
-  SetIsDOMBinding();
 }
 
 IDBTransaction::~IDBTransaction()
@@ -299,6 +298,10 @@ IDBTransaction::StartSavepoint()
   nsresult rv = stmt->Execute();
   NS_ENSURE_SUCCESS(rv, false);
 
+  if (IsWriteAllowed()) {
+    mUpdateFileRefcountFunction->StartSavepoint();
+  }
+
   ++mSavepointCount;
 
   return true;
@@ -321,6 +324,10 @@ IDBTransaction::ReleaseSavepoint()
 
   nsresult rv = stmt->Execute();
   NS_ENSURE_SUCCESS(rv, NS_OK);
+
+  if (IsWriteAllowed()) {
+    mUpdateFileRefcountFunction->ReleaseSavepoint();
+  }
 
   --mSavepointCount;
 
@@ -345,6 +352,10 @@ IDBTransaction::RollbackSavepoint()
 
   nsresult rv = stmt->Execute();
   NS_ENSURE_SUCCESS_VOID(rv);
+
+  if (IsWriteAllowed()) {
+    mUpdateFileRefcountFunction->RollbackSavepoint();
+  }
 }
 
 nsresult
@@ -660,32 +671,18 @@ IDBTransaction::GetError(ErrorResult& aRv)
   return mError;
 }
 
-already_AddRefed<nsIDOMDOMStringList>
+already_AddRefed<DOMStringList>
 IDBTransaction::GetObjectStoreNames(ErrorResult& aRv)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 
-  nsRefPtr<nsDOMStringList> list(new nsDOMStringList());
-
-  nsAutoTArray<nsString, 10> stackArray;
-  nsTArray<nsString>* arrayOfNames;
+  nsRefPtr<DOMStringList> list(new DOMStringList());
 
   if (mMode == IDBTransaction::VERSION_CHANGE) {
-    mDatabaseInfo->GetObjectStoreNames(stackArray);
-
-    arrayOfNames = &stackArray;
+    mDatabaseInfo->GetObjectStoreNames(list->StringArray());
   }
   else {
-    arrayOfNames = &mObjectStoreNames;
-  }
-
-  uint32_t count = arrayOfNames->Length();
-  for (uint32_t index = 0; index < count; index++) {
-    if (!list->Add(arrayOfNames->ElementAt(index))) {
-      NS_WARNING("Failed to add element!");
-      aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
-      return nullptr;
-    }
+    list->StringArray() = mObjectStoreNames;
   }
 
   return list.forget();
@@ -716,7 +713,7 @@ IDBTransaction::ObjectStore(const nsAString& aName, ErrorResult& aRv)
   nsRefPtr<IDBObjectStore> objectStore =
     GetOrCreateObjectStore(aName, info, false);
   if (!objectStore) {
-    NS_WARNING("Failed to get or create object store!");
+    IDB_WARNING("Failed to get or create object store!");
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
     return nullptr;
   }
@@ -831,7 +828,7 @@ CommitHelper::Run()
                                  NS_LITERAL_STRING(COMPLETE_EVT_STR),
                                  eDoesNotBubble, eNotCancelable);
     }
-    NS_ENSURE_TRUE(event, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+    IDB_ENSURE_TRUE(event, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
     if (mListener) {
       mListener->NotifyTransactionPreComplete(mTransaction);
@@ -863,6 +860,7 @@ CommitHelper::Run()
 
   IDBDatabase* database = mTransaction->Database();
   if (database->IsInvalidated()) {
+    IDB_REPORT_INTERNAL_ERR();
     mAbortCode = NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
   }
 
@@ -871,10 +869,12 @@ CommitHelper::Run()
 
     if (NS_SUCCEEDED(mAbortCode) && mUpdateFileRefcountFunction &&
         NS_FAILED(mUpdateFileRefcountFunction->WillCommit(mConnection))) {
+      IDB_REPORT_INTERNAL_ERR();
       mAbortCode = NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
     }
 
     if (NS_SUCCEEDED(mAbortCode) && NS_FAILED(WriteAutoIncrementCounts())) {
+      IDB_REPORT_INTERNAL_ERR();
       mAbortCode = NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
     }
 
@@ -893,6 +893,7 @@ CommitHelper::Run()
         mAbortCode = NS_ERROR_DOM_INDEXEDDB_QUOTA_ERR;
       }
       else {
+        IDB_REPORT_INTERNAL_ERR();
         mAbortCode = NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
       }
     }
@@ -1075,12 +1076,22 @@ UpdateRefcountFunction::ProcessValue(mozIStorageValueArray* aValues,
       entry = newEntry.forget();
     }
 
+    if (mInSavepoint) {
+      mSavepointEntriesIndex.Put(id, entry);
+    }
+
     switch (aUpdateType) {
       case eIncrement:
         entry->mDelta++;
+        if (mInSavepoint) {
+          entry->mSavepointDelta++;
+        }
         break;
       case eDecrement:
         entry->mDelta--;
+        if (mInSavepoint) {
+          entry->mSavepointDelta--;
+        }
         break;
       default:
         NS_NOTREACHED("Unknown update type!");
@@ -1158,6 +1169,16 @@ UpdateRefcountFunction::FileInfoUpdateCallback(const uint64_t& aKey,
   if (aValue->mDelta) {
     aValue->mFileInfo->UpdateDBRefs(aValue->mDelta);
   }
+
+  return PL_DHASH_NEXT;
+}
+
+PLDHashOperator
+UpdateRefcountFunction::RollbackSavepointCallback(const uint64_t& aKey,
+                                                  FileInfoEntry* aValue,
+                                                  void* aUserArg)
+{
+  aValue->mDelta -= aValue->mSavepointDelta;
 
   return PL_DHASH_NEXT;
 }

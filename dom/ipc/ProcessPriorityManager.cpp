@@ -430,7 +430,7 @@ NS_IMETHODIMP
 ProcessPriorityManagerImpl::Observe(
   nsISupports* aSubject,
   const char* aTopic,
-  const PRUnichar* aData)
+  const char16_t* aData)
 {
   nsDependentCString topic(aTopic);
   if (topic.EqualsLiteral("ipc:content-created")) {
@@ -600,7 +600,7 @@ ParticularProcessPriorityManager::Init()
   nsCOMPtr<nsIObserverService> os = services::GetObserverService();
   if (os) {
     os->AddObserver(this, "audio-channel-process-changed", /* ownsWeak */ true);
-    os->AddObserver(this, "remote-browser-frame-shown", /* ownsWeak */ true);
+    os->AddObserver(this, "remote-browser-shown", /* ownsWeak */ true);
     os->AddObserver(this, "ipc:browser-destroyed", /* ownsWeak */ true);
     os->AddObserver(this, "frameloader-visible-changed", /* ownsWeak */ true);
   }
@@ -661,7 +661,7 @@ ParticularProcessPriorityManager::Notify(const WakeLockInformation& aInfo)
 NS_IMETHODIMP
 ParticularProcessPriorityManager::Observe(nsISupports* aSubject,
                                           const char* aTopic,
-                                          const PRUnichar* aData)
+                                          const char16_t* aData)
 {
   if (!mContentParent) {
     // We've been shut down.
@@ -672,7 +672,7 @@ ParticularProcessPriorityManager::Observe(nsISupports* aSubject,
 
   if (topic.EqualsLiteral("audio-channel-process-changed")) {
     OnAudioChannelProcessChanged(aSubject);
-  } else if (topic.EqualsLiteral("remote-browser-frame-shown")) {
+  } else if (topic.EqualsLiteral("remote-browser-shown")) {
     OnRemoteBrowserFrameShown(aSubject);
   } else if (topic.EqualsLiteral("ipc:browser-destroyed")) {
     OnTabParentDestroyed(aSubject);
@@ -745,6 +745,13 @@ ParticularProcessPriorityManager::OnRemoteBrowserFrameShown(nsISupports* aSubjec
   nsCOMPtr<nsIFrameLoader> fl = do_QueryInterface(aSubject);
   NS_ENSURE_TRUE_VOID(fl);
 
+  // Ignore notifications that aren't from a BrowserOrApp
+  bool isBrowserOrApp;
+  fl->GetOwnerIsBrowserOrAppFrame(&isBrowserOrApp);
+  if (!isBrowserOrApp) {
+    return;
+  }
+
   nsCOMPtr<nsITabParent> tp;
   fl->GetTabParent(getter_AddRefs(tp));
   NS_ENSURE_TRUE_VOID(tp);
@@ -807,7 +814,16 @@ ParticularProcessPriorityManager::ResetPriority()
   ProcessPriority processPriority = ComputePriority();
   if (mPriority == PROCESS_PRIORITY_UNKNOWN ||
       mPriority > processPriority) {
-    ScheduleResetPriority("backgroundGracePeriodMS");
+    // Apps set at a perceivable background priority are often playing media.
+    // Most media will have short gaps while changing tracks between songs,
+    // switching videos, etc.  Give these apps a longer grace period so they
+    // can get their next track started, if there is one, before getting
+    // downgraded.
+    if (mPriority == PROCESS_PRIORITY_BACKGROUND_PERCEIVABLE) {
+      ScheduleResetPriority("backgroundPerceivableGracePeriodMS");
+    } else {
+      ScheduleResetPriority("backgroundGracePeriodMS");
+    }
     return;
   }
 
@@ -962,6 +978,13 @@ ParticularProcessPriorityManager::SetPriorityNow(ProcessPriority aPriority,
     return;
   }
 
+#ifdef MOZ_NUWA_PROCESS
+  // Do not attempt to change the priority of the Nuwa process
+  if (mContentParent->IsNuwaProcess()) {
+    return;
+  }
+#endif
+
   if (aBackgroundLRU > 0 &&
       aPriority == PROCESS_PRIORITY_BACKGROUND &&
       mPriority == PROCESS_PRIORITY_BACKGROUND) {
@@ -1015,10 +1038,8 @@ ParticularProcessPriorityManager::SetPriorityNow(ProcessPriority aPriority,
     unused << mContentParent->SendNotifyProcessPriorityChanged(mPriority);
   }
 
-  if (aPriority >= PROCESS_PRIORITY_FOREGROUND) {
-    unused << mContentParent->SendCancelMinimizeMemoryUsage();
-  } else {
-    unused << mContentParent->SendMinimizeMemoryUsage();
+  if (aPriority < PROCESS_PRIORITY_FOREGROUND) {
+    unused << mContentParent->SendFlushMemory(NS_LITERAL_STRING("low-memory"));
   }
 
   FireTestOnlyObserverNotification("process-priority-set",
@@ -1156,7 +1177,7 @@ NS_IMETHODIMP
 ProcessPriorityManagerChild::Observe(
   nsISupports* aSubject,
   const char* aTopic,
-  const PRUnichar* aData)
+  const char16_t* aData)
 {
   MOZ_ASSERT(!strcmp(aTopic, "ipc:process-priority-changed"));
 

@@ -148,6 +148,23 @@ public:
                                 uint32_t aTrackEvents,
                                 const MediaSegment& aQueuedMedia) MOZ_OVERRIDE;
 
+  /**
+   * Interleaves the track data and stores the result into aOutput. Might need
+   * to up-mix or down-mix the channel data if the channels number of this chunk
+   * is different from aOutputChannels. The channel data from aChunk might be
+   * modified by up-mixing.
+   */
+  static void InterleaveTrackData(AudioChunk& aChunk, int32_t aDuration,
+                                  uint32_t aOutputChannels,
+                                  AudioDataValue* aOutput);
+
+  /**
+   * De-interleaves the aInput data and stores the result into aOutput.
+   * No up-mix or down-mix operations inside.
+   */
+  static void DeInterleaveTrackData(AudioDataValue* aInput, int32_t aDuration,
+                                    int32_t aChannels, AudioDataValue* aOutput);
+
 protected:
   /**
    * Number of samples per channel in a pcm buffer. This is also the value of
@@ -180,15 +197,6 @@ protected:
   virtual void NotifyEndOfStream() MOZ_OVERRIDE;
 
   /**
-   * Interleaves the track data and stores the result into aOutput. Might need
-   * to up-mix or down-mix the channel data if the channels number of this chunk
-   * is different from mChannels. The channel data from aChunk might be modified
-   * by up-mixing.
-   */
-  void InterleaveTrackData(AudioChunk& aChunk, int32_t aDuration,
-                           uint32_t aOutputChannels, AudioDataValue* aOutput);
-
-  /**
    * The number of channels are used for processing PCM data in the audio encoder.
    * This value comes from the first valid audio chunk. If encoder can't support
    * the channels in the chunk, downmix PCM stream can be performed.
@@ -214,6 +222,8 @@ public:
     : TrackEncoder()
     , mFrameWidth(0)
     , mFrameHeight(0)
+    , mDisplayWidth(0)
+    , mDisplayHeight(0)
     , mTrackRate(0)
     , mTotalFrameDuration(0)
   {}
@@ -236,7 +246,8 @@ protected:
    * mReentrantMonitor will be notified after it has successfully initialized,
    * and this method is called on the MediaStramGraph thread.
    */
-  virtual nsresult Init(int aWidth, int aHeight, TrackRate aTrackRate) = 0;
+  virtual nsresult Init(int aWidth, int aHeight, int aDisplayWidth,
+                        int aDisplayHeight, TrackRate aTrackRate) = 0;
 
   /**
    * Appends source video frames to mRawSegment. We only append the source chunk
@@ -266,6 +277,16 @@ protected:
    * The height of source video frame, ceiled if the source height is odd.
    */
   int mFrameHeight;
+
+  /**
+   * The display width of source video frame.
+   */
+  int mDisplayWidth;
+
+  /**
+   * The display height of source video frame.
+   */
+  int mDisplayHeight;
 
   /**
    * The track rate of source video.

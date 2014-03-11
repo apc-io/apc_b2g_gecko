@@ -5,6 +5,7 @@
 
 /* a presentation of a document, part 1 */
 
+#include "mozilla/ArrayUtils.h"
 #include "mozilla/DebugOnly.h"
 
 #include "base/basictypes.h"
@@ -52,6 +53,7 @@
 #include "nsRefreshDriver.h"
 #include "Layers.h"
 #include "nsIDOMEvent.h"
+#include "gfxPrefs.h"
 
 #include "nsContentUtils.h"
 #include "nsCxPusher.h"
@@ -66,9 +68,24 @@
 #include "nsBidiUtils.h"
 #include "nsServiceManagerUtils.h"
 
+#include "URL.h"
+
 using namespace mozilla;
 using namespace mozilla::dom;
 using namespace mozilla::layers;
+
+// BEGIN temporary diagnostic stuff for bug 946929
+struct PCLink;
+static PCLink* sTopPCLink;
+struct PCLink {
+  PCLink(const char* w, nsPresContext* aPC)
+    : prev(sTopPCLink), pc(aPC), where(w) { sTopPCLink = this; }
+  ~PCLink() { sTopPCLink = prev; }
+  PCLink* prev;
+  nsPresContext* pc;
+  const char* where;
+};
+// END temporary diagnostic stuff for bug 946929
 
 uint8_t gNotifySubDocInvalidationData;
 
@@ -125,7 +142,7 @@ nsPresContext::MakeColorPref(const nsString& aColor)
 
 static void DumpPresContextState(nsPresContext* aPC)
 {
-  printf_stderr("PresContext(%p) ", aPC);
+  printf_stderr("PresContext(%p) %s", aPC, aPC->IsRoot()?"ROOT ":"");
   nsIURI* uri = aPC->Document()->GetDocumentURI();
   if (uri) {
     nsAutoCString uriSpec;
@@ -136,7 +153,7 @@ static void DumpPresContextState(nsPresContext* aPC)
   }
   nsIPresShell* shell = aPC->GetPresShell();
   if (shell) {
-    printf_stderr("PresShell(%p) - IsDestroying(%i) IsFrozen(%i) IsActive(%i) IsVisible(%i) IsNeverPainting(%i) GetRootFrame(%p)",
+    printf_stderr("PresShell - IsDestroying(%i) IsFrozen(%i) IsActive(%i) IsVisible(%i) IsNeverPainting(%i) GetRootFrame(%p)",
                   shell->IsDestroying(),
                   shell->IsFrozen(),
                   shell->IsActive(),
@@ -156,11 +173,27 @@ nsPresContext::IsDOMPaintEventPending()
   if (!GetDisplayRootPresContext() ||
       !GetDisplayRootPresContext()->GetRootPresContext()) {
     printf_stderr("Failed to find root pres context, dumping pres context and ancestors\n");
+    for (PCLink* p = sTopPCLink; p; p = p->prev) {
+      printf_stderr("%s %p ", p->where, p->pc);
+    }
+    if (sTopPCLink) printf_stderr("\n");
     nsPresContext* pc = this;
     for (;;) {
       DumpPresContextState(pc);
       nsPresContext* parent = pc->GetParentPresContext();
-      if (!parent)
+      if (!parent) {
+        nsIDocument* doc = pc->Document();
+        if (doc) {
+          doc = doc->GetParentDocument();
+          if (doc) {
+            nsIPresShell* shell = doc->GetShell();
+            if (shell) {
+              parent = shell->GetPresContext();
+            }
+          }
+        }
+      }
+      if (!parent || parent == pc)
         break;
       pc = parent;
     }
@@ -216,7 +249,7 @@ IsVisualCharset(const nsCString& aCharset)
   // bother initializing members to 0.
 
 nsPresContext::nsPresContext(nsIDocument* aDocument, nsPresContextType aType)
-  : mType(aType), mDocument(aDocument), mMinFontSize(0),
+  : mType(aType), mDocument(aDocument), mBaseMinFontSize(0),
     mTextZoom(1.0), mFullZoom(1.0), mLastFontInflationScreenWidth(-1.0),
     mPageSize(-1, -1), mPPScale(1.0f),
     mViewportStyleOverflow(NS_STYLE_OVERFLOW_AUTO, NS_STYLE_OVERFLOW_AUTO),
@@ -272,7 +305,7 @@ nsPresContext::nsPresContext(nsIDocument* aDocument, nsPresContextType aType)
 
   // if text perf logging enabled, init stats struct
   PRLogModuleInfo *log = gfxPlatform::GetLog(eGfxLog_textperf);
-  if (log && PR_LOG_TEST(log, PR_LOG_WARNING)) {
+  if (log && log->level >= PR_LOG_WARNING) {
     mTextPerf = new gfxTextPerfMetrics();
   }
 
@@ -281,6 +314,9 @@ nsPresContext::nsPresContext(nsIDocument* aDocument, nsPresContextType aType)
 
 nsPresContext::~nsPresContext()
 {
+  if (sTopPCLink) {
+    printf_stderr("~nsPresContext %p %p\n", this, mShell);
+  }
   NS_PRECONDITION(!mShell, "Presshell forgot to clear our mShell pointer");
   SetShell(nullptr);
 
@@ -568,7 +604,7 @@ nsPresContext::GetFontPrefsForLang(nsIAtom *aLanguage) const
     &prefs->mDefaultCursiveFont,
     &prefs->mDefaultFantasyFont
   };
-  static_assert(NS_ARRAY_LENGTH(fontTypes) == eDefaultFont_COUNT,
+  static_assert(MOZ_ARRAY_LENGTH(fontTypes) == eDefaultFont_COUNT,
                 "FontTypes array count is not correct");
 
   // Get attributes specific to each generic font. We do not get the user's
@@ -655,21 +691,35 @@ nsPresContext::GetFontPrefsForLang(nsIAtom *aLanguage) const
 void
 nsPresContext::GetDocumentColorPreferences()
 {
+  // Make sure the preferences are initialized.  In the normal run,
+  // they would already be, because gfxPlatform would have been created,
+  // but in some reference tests, that is not the case.
+  gfxPrefs::GetSingleton();
+
   int32_t useAccessibilityTheme = 0;
   bool usePrefColors = true;
-  nsCOMPtr<nsIDocShellTreeItem> docShell(mContainer);
-  if (docShell) {
-    int32_t docShellType;
-    docShell->GetItemType(&docShellType);
-    if (nsIDocShellTreeItem::typeChrome == docShellType) {
-      usePrefColors = false;
-    }
-    else {
-      useAccessibilityTheme =
-        LookAndFeel::GetInt(LookAndFeel::eIntID_UseAccessibilityTheme, 0);
-      usePrefColors = !useAccessibilityTheme;
-    }
+  bool isChromeDocShell = false;
 
+  nsIDocument* doc = mDocument->GetDisplayDocument();
+  if (doc && doc->GetDocShell()) {
+    isChromeDocShell = nsIDocShellTreeItem::typeChrome ==
+                       doc->GetDocShell()->ItemType();
+  } else {
+    nsCOMPtr<nsIDocShellTreeItem> docShell(mContainer);
+    if (docShell) {
+      isChromeDocShell = nsIDocShellTreeItem::typeChrome == docShell->ItemType();
+    }
+  }
+
+  mIsChromeOriginImage = mDocument->IsBeingUsedAsImage() &&
+                         IsChromeURI(mDocument->GetDocumentURI());
+
+  if (isChromeDocShell || mIsChromeOriginImage) {
+    usePrefColors = false;
+  } else {
+    useAccessibilityTheme =
+      LookAndFeel::GetInt(LookAndFeel::eIntID_UseAccessibilityTheme, 0);
+    usePrefColors = !useAccessibilityTheme;
   }
   if (usePrefColors) {
     usePrefColors =
@@ -931,11 +981,8 @@ nsPresContext::UpdateAfterPreferencesChanged()
   mPrefChangedTimer = nullptr;
 
   nsCOMPtr<nsIDocShellTreeItem> docShell(mContainer);
-  if (docShell) {
-    int32_t docShellType;
-    docShell->GetItemType(&docShellType);
-    if (nsIDocShellTreeItem::typeChrome == docShellType)
-      return;
+  if (docShell && nsIDocShellTreeItem::typeChrome == docShell->ItemType()) {
+    return;
   }
 
   // Initialize our state from the user preferences
@@ -1023,7 +1070,8 @@ nsPresContext::Init(nsDeviceContext* aDeviceContext)
 
   // Initialise refresh tick counters for OMTA
   mLastStyleUpdateForAllAnimations =
-    mLastUpdateThrottledStyle = mRefreshDriver->MostRecentRefresh();
+    mLastUpdateThrottledAnimationStyle =
+    mLastUpdateThrottledTransitionStyle = mRefreshDriver->MostRecentRefresh();
 
   mLangService = do_GetService(NS_LANGUAGEATOMSERVICE_CONTRACTID);
 
@@ -1208,7 +1256,7 @@ nsPresContext::UpdateCharSet(const nsCString& aCharSet)
 NS_IMETHODIMP
 nsPresContext::Observe(nsISupports* aSubject, 
                         const char* aTopic,
-                        const PRUnichar* aData)
+                        const char16_t* aData)
 {
   if (!nsCRT::strcmp(aTopic, "charset")) {
     nsRefPtr<CharSetChangingRunnable> runnable =
@@ -1522,7 +1570,7 @@ nsPresContext::SetContainer(nsIDocShell* aDocShell)
   } else {
     mContainer = WeakPtr<nsDocShell>();
   }
-  InvalidateIsChromeCache();
+  UpdateIsChrome();
   if (mContainer) {
     GetDocumentColorPreferences();
   }
@@ -1546,16 +1594,40 @@ nsPresContext::GetDocShell() const
   return mContainer;
 }
 
-bool
-nsPresContext::ThrottledStyleIsUpToDate() const
+/* virtual */ void
+nsPresContext::Detach()
 {
-  return mLastUpdateThrottledStyle == mRefreshDriver->MostRecentRefresh();
+  SetContainer(nullptr);
+  SetLinkHandler(nullptr);
+  if (mShell) {
+    mShell->CancelInvalidatePresShellIfHidden();
+  }
+}
+
+bool
+nsPresContext::ThrottledTransitionStyleIsUpToDate() const
+{
+  return
+    mLastUpdateThrottledTransitionStyle == mRefreshDriver->MostRecentRefresh();
 }
 
 void
-nsPresContext::TickLastUpdateThrottledStyle()
+nsPresContext::TickLastUpdateThrottledTransitionStyle()
 {
-  mLastUpdateThrottledStyle = mRefreshDriver->MostRecentRefresh();
+  mLastUpdateThrottledTransitionStyle = mRefreshDriver->MostRecentRefresh();
+}
+
+bool
+nsPresContext::ThrottledAnimationStyleIsUpToDate() const
+{
+  return
+    mLastUpdateThrottledAnimationStyle == mRefreshDriver->MostRecentRefresh();
+}
+
+void
+nsPresContext::TickLastUpdateThrottledAnimationStyle()
+{
+  mLastUpdateThrottledAnimationStyle = mRefreshDriver->MostRecentRefresh();
 }
 
 bool
@@ -1994,27 +2066,11 @@ nsPresContext::CountReflows(const char * aName, nsIFrame * aFrame)
 }
 #endif
 
-bool
-nsPresContext::IsChromeSlow() const
-{
-  bool isChrome = false;
-  nsCOMPtr<nsIDocShellTreeItem> docShell(mContainer);
-  if (docShell) {
-    int32_t docShellType;
-    nsresult result = docShell->GetItemType(&docShellType);
-    if (NS_SUCCEEDED(result)) {
-      isChrome = nsIDocShellTreeItem::typeChrome == docShellType;
-    }
-  }
-  mIsChrome = isChrome;
-  mIsChromeIsCached = true;
-  return mIsChrome;
-}
-
 void
-nsPresContext::InvalidateIsChromeCacheExternal()
+nsPresContext::UpdateIsChrome()
 {
-  InvalidateIsChromeCacheInternal();
+  mIsChrome = mContainer &&
+              nsIDocShellTreeItem::typeChrome == mContainer->ItemType();
 }
 
 /* virtual */ bool
@@ -2321,6 +2377,8 @@ nsPresContext::NotifyInvalidation(const nsIntRect& aRect, uint32_t aFlags)
 void
 nsPresContext::NotifyInvalidation(const nsRect& aRect, uint32_t aFlags)
 {
+  MOZ_ASSERT(GetContainerWeak(), "Invalidation in detached pres context");
+
   // If there is no paint event listener, then we don't need to fire
   // the asynchronous event. We don't even need to record invalidation.
   // MayHavePaintEventListener is pretty cheap and we could make it
@@ -2404,6 +2462,7 @@ NotifyDidPaintSubdocumentCallback(nsIDocument* aDocument, void* aData)
   if (shell) {
     nsPresContext* pc = shell->GetPresContext();
     if (pc) {
+      PCLink pcl("NotifyDidPaintSubdocumentCallback", pc);
       pc->NotifyDidPaintForSubtree(closure->mFlags);
       if (pc->IsDOMPaintEventPending()) {
         closure->mNeedsAnotherDidPaintNotification = true;
@@ -2419,11 +2478,17 @@ public:
                            nsInvalidateRequestList* aList)
     : mPresContext(aPresContext)
   {
+    MOZ_ASSERT(mPresContext->GetContainerWeak(),
+               "DOMPaintEvent requested for a detached pres context");
     mList.TakeFrom(aList);
   }
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() MOZ_OVERRIDE
   {
-    mPresContext->FireDOMPaintEvent(&mList);
+    // The pres context might have been detached during the delay -
+    // that's fine, just don't fire the event.
+    if (mPresContext->GetContainerWeak()) {
+      mPresContext->FireDOMPaintEvent(&mList);
+    }
     return NS_OK;
   }
 
@@ -2760,6 +2825,14 @@ nsRootPresContext::~nsRootPresContext()
   CancelApplyPluginGeometryTimer();
 }
 
+/* virtual */ void
+nsRootPresContext::Detach()
+{
+  CancelDidPaintTimer();
+  // XXXmats maybe also CancelApplyPluginGeometryTimer(); ?
+  nsPresContext::Detach();
+}
+
 void
 nsRootPresContext::RegisterPluginForGeometryUpdates(nsIContent* aPlugin)
 {
@@ -2986,6 +3059,7 @@ NotifyDidPaintForSubtreeCallback(nsITimer *aTimer, void *aClosure)
   nsAutoScriptBlocker blockScripts;
   // This is a fallback if we don't get paint events for some reason
   // so we'll just pretend both layer painting and compositing happened.
+  PCLink pcl("NotifyDidPaintForSubtreeCallback", presContext);
   presContext->NotifyDidPaintForSubtree(
       nsIPresShell::PAINT_LAYERS | nsIPresShell::PAINT_COMPOSITE);
 }

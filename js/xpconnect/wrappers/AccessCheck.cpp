@@ -42,18 +42,7 @@ AccessCheck::subsumes(JSCompartment *a, JSCompartment *b)
 {
     nsIPrincipal *aprin = GetCompartmentPrincipal(a);
     nsIPrincipal *bprin = GetCompartmentPrincipal(b);
-
-    // If either a or b doesn't have principals, we don't have enough
-    // information to tell. Seeing as how this is Gecko, we are default-unsafe
-    // in this case.
-    if (!aprin || !bprin)
-        return true;
-
-    bool subsumes;
-    nsresult rv = aprin->Subsumes(bprin, &subsumes);
-    NS_ENSURE_SUCCESS(rv, false);
-
-    return subsumes;
+    return aprin->Subsumes(bprin);
 }
 
 bool
@@ -62,21 +51,13 @@ AccessCheck::subsumes(JSObject *a, JSObject *b)
     return subsumes(js::GetObjectCompartment(a), js::GetObjectCompartment(b));
 }
 
-// Same as above, but ignoring document.domain.
+// Same as above, but considering document.domain.
 bool
-AccessCheck::subsumesIgnoringDomain(JSCompartment *a, JSCompartment *b)
+AccessCheck::subsumesConsideringDomain(JSCompartment *a, JSCompartment *b)
 {
     nsIPrincipal *aprin = GetCompartmentPrincipal(a);
     nsIPrincipal *bprin = GetCompartmentPrincipal(b);
-
-    if (!aprin || !bprin)
-        return false;
-
-    bool subsumes;
-    nsresult rv = aprin->SubsumesIgnoringDomain(bprin, &subsumes);
-    NS_ENSURE_SUCCESS(rv, false);
-
-    return subsumes;
+    return aprin->SubsumesConsideringDomain(bprin);
 }
 
 // Does the compartment of the wrapper subsumes the compartment of the wrappee?
@@ -217,17 +198,14 @@ AccessCheck::isCrossOriginAccessPermitted(JSContext *cx, JSObject *wrapperArg, j
     RootedObject wrapper(cx, wrapperArg);
     RootedObject obj(cx, Wrapper::wrappedObject(wrapper));
 
-    // Enumerate-like operations pass JSID_VOID to |enter|, since there isn't
-    // another sane value to pass. For XOWs, we generally want to deny such
-    // operations but fail silently (see CrossOriginAccessiblePropertiesOnly::
-    // deny). We could just fall through here and rely on the fact that none
-    // of the whitelisted properties below will match JSID_VOID, but EIBTI.
-    if (id == JSID_VOID)
+    // For XOWs, we generally want to deny enumerate-like operations, but fail
+    // silently (see CrossOriginAccessiblePropertiesOnly::deny).
+    if (act == Wrapper::ENUMERATE)
         return false;
 
     const char *name;
     const js::Class *clasp = js::GetObjectClass(obj);
-    MOZ_ASSERT(Jsvalify(clasp) != &XrayUtils::HolderClass, "shouldn't have a holder here");
+    MOZ_ASSERT(!XrayUtils::IsXPCWNHolderClass(Jsvalify(clasp)), "shouldn't have a holder here");
     if (clasp->ext.innerObject)
         name = "Window";
     else
@@ -263,12 +241,7 @@ AccessCheck::needsSystemOnlyWrapper(JSObject *obj)
     JSObject* wrapper = obj;
     if (dom::GetSameCompartmentWrapperForDOMBinding(wrapper))
         return wrapper != obj;
-
-    if (!IS_WN_REFLECTOR(obj))
-        return false;
-
-    XPCWrappedNative *wn = XPCWrappedNative::Get(obj);
-    return wn->NeedsSOW();
+    return false;
 }
 
 enum Access { READ = (1<<0), WRITE = (1<<1), NO_ACCESS = 0 };
@@ -399,35 +372,6 @@ ExposedPropertiesOnly::allowNativeCall(JSContext *cx, JS::IsAcceptableThis test,
                                        JS::NativeImpl impl)
 {
     return js::IsReadOnlyDateMethod(test, impl) || js::IsTypedArrayThisCheck(test);
-}
-
-bool
-ComponentsObjectPolicy::check(JSContext *cx, JSObject *wrapperArg, jsid idArg, Wrapper::Action act)
-{
-    RootedObject wrapper(cx, wrapperArg);
-    RootedId id(cx, idArg);
-    JSAutoCompartment ac(cx, wrapper);
-
-    if (JSID_IS_STRING(id) && act == Wrapper::GET) {
-        JSFlatString *flatId = JSID_TO_FLAT_STRING(id);
-        if (JS_FlatStringEqualsAscii(flatId, "isSuccessCode") ||
-            JS_FlatStringEqualsAscii(flatId, "lookupMethod") ||
-            JS_FlatStringEqualsAscii(flatId, "interfaces") ||
-            JS_FlatStringEqualsAscii(flatId, "interfacesByID") ||
-            JS_FlatStringEqualsAscii(flatId, "results"))
-        {
-            return true;
-        }
-    }
-
-    // We don't have any way to recompute same-compartment Components wrappers,
-    // so we need this dynamic check. This can go away when we expose Components
-    // as SpecialPowers.wrap(Components) during automation.
-    if (xpc::IsUniversalXPConnectEnabled(cx)) {
-        return true;
-    }
-
-    return false;
 }
 
 }

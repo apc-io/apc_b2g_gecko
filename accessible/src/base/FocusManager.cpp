@@ -37,7 +37,7 @@ FocusManager::FocusedAccessible() const
   if (focusedNode) {
     DocAccessible* doc = 
       GetAccService()->GetDocAccessible(focusedNode->OwnerDoc());
-    return doc ? doc->GetAccessibleOrContainer(focusedNode) : nullptr;
+    return doc ? doc->GetAccessibleEvenIfNotInMapOrContainer(focusedNode) : nullptr;
   }
 
   return nullptr;
@@ -61,7 +61,7 @@ FocusManager::IsFocused(const Accessible* aAccessible) const
       DocAccessible* doc = 
         GetAccService()->GetDocAccessible(focusedNode->OwnerDoc());
       return aAccessible ==
-        (doc ? doc->GetAccessibleOrContainer(focusedNode) : nullptr);
+        (doc ? doc->GetAccessibleEvenIfNotInMapOrContainer(focusedNode) : nullptr);
     }
   }
   return false;
@@ -241,12 +241,16 @@ FocusManager::ProcessDOMFocus(nsINode* aTarget)
   DocAccessible* document =
     GetAccService()->GetDocAccessible(aTarget->OwnerDoc());
 
-  Accessible* target = document->GetAccessibleOrContainer(aTarget);
+  Accessible* target = document->GetAccessibleEvenIfNotInMapOrContainer(aTarget);
   if (target && document) {
     // Check if still focused. Otherwise we can end up with storing the active
     // item for control that isn't focused anymore.
+    nsINode* focusedNode = FocusedDOMNode();
+    if (!focusedNode)
+      return;
+
     Accessible* DOMFocus =
-      document->GetAccessibleOrContainer(FocusedDOMNode());
+      document->GetAccessibleEvenIfNotInMapOrContainer(focusedNode);
     if (target != DOMFocus)
       return;
 
@@ -274,8 +278,12 @@ FocusManager::ProcessFocusEvent(AccEvent* aEvent)
     // Check if still focused. Otherwise we can end up with storing the active
     // item for control that isn't focused anymore.
     DocAccessible* document = aEvent->GetDocAccessible();
-    Accessible* DOMFocus = document->GetAccessibleOrContainer(FocusedDOMNode());
+    nsINode* focusedNode = FocusedDOMNode();
+    if (!focusedNode)
+      return;
 
+    Accessible* DOMFocus =
+      document->GetAccessibleEvenIfNotInMapOrContainer(focusedNode);
     if (target != DOMFocus)
       return;
 
@@ -289,6 +297,7 @@ FocusManager::ProcessFocusEvent(AccEvent* aEvent)
   // Fire menu start/end events for ARIA menus.
   if (target->IsARIARole(nsGkAtoms::menuitem)) {
     // The focus was moved into menu.
+    bool tryOwnsParent = true;
     Accessible* ARIAMenubar = nullptr;
     Accessible* child = target;
     Accessible* parent = child->Parent();
@@ -304,14 +313,19 @@ FocusManager::ProcessFocusEvent(AccEvent* aEvent)
         if (roleMap->Is(nsGkAtoms::menuitem) || roleMap->Is(nsGkAtoms::menu)) {
           child = parent;
           parent = child->Parent();
+          tryOwnsParent = true;
           continue;
         }
       }
 
       // If no required context role then check aria-owns relation.
+      if (!tryOwnsParent)
+        break;
+
       RelatedAccIterator iter(child->Document(), child->GetContent(),
                               nsGkAtoms::aria_owns);
       parent = iter.Next();
+      tryOwnsParent = false;
     }
 
     if (ARIAMenubar != mActiveARIAMenubar) {

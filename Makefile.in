@@ -17,15 +17,11 @@ export TOPLEVEL_BUILD := 1
 
 default::
 
+ifdef MOZ_BUILD_APP
 include $(topsrcdir)/$(MOZ_BUILD_APP)/build.mk
+endif
 
 include $(topsrcdir)/config/config.mk
-
-ifndef LIBXUL_SDK
-ifdef COMPILE_ENVIRONMENT
-BUILD_JS = 1
-endif
-endif
 
 GARBAGE_DIRS += dist _javagen _profile staticlib
 DIST_GARBAGE = config.cache config.log config.status* config-defs.h \
@@ -34,32 +30,47 @@ DIST_GARBAGE = config.cache config.log config.status* config-defs.h \
    netwerk/necko-config.h xpcom/xpcom-config.h xpcom/xpcom-private.h \
    .mozconfig.mk
 
+ifdef JS_STANDALONE
+configure_dir = $(topsrcdir)/js/src
+else
+configure_dir = $(topsrcdir)
+endif
+
 ifndef MOZ_PROFILE_USE
 # We need to explicitly put backend.RecursiveMakeBackend here
 # otherwise the rule in rules.mk doesn't run early enough.
-libs binaries export tools:: CLOBBER $(topsrcdir)/configure config.status backend.RecursiveMakeBackend
-ifdef BUILD_JS
-libs binaries export tools:: js-config-status
+libs binaries export tools:: CLOBBER $(configure_dir)/configure config.status backend.RecursiveMakeBackend
+ifndef JS_STANDALONE
+libs binaries export tools:: $(topsrcdir)/js/src/configure js/src/config.status
 endif
 endif
 
+ifdef JS_STANDALONE
+.PHONY: CLOBBER
+CLOBBER:
+else
 CLOBBER: $(topsrcdir)/CLOBBER
 	@echo 'STOP!  The CLOBBER file has changed.'
 	@echo 'Please run the build through a sanctioned build wrapper, such as'
 	@echo '"mach build" or client.mk.'
 	@exit 1
+endif
 
 $(topsrcdir)/configure: $(topsrcdir)/configure.in
-	@echo 'STOP!  configure.in has changed, and your configure is out of date.'
+$(topsrcdir)/js/src/configure: $(topsrcdir)/js/src/configure.in
+$(topsrcdir)/configure $(topsrcdir)/js/src/configure:
+	@echo 'STOP!  $^ has changed, and your configure is out of date.'
 	@echo 'Please rerun autoconf and re-configure your build directory.'
-	@echo 'To ignore this message, touch "configure" in the source directory,'
+	@echo 'To ignore this message, touch "$@",'
 	@echo 'but your build might not succeed.'
 	@exit 1
 
-config.status: $(topsrcdir)/configure
-	@echo 'STOP!  configure has changed and needs to be run in this build directory.'
-	@echo 'Please rerun configure.'
-	@echo 'To ignore this message, touch "config.status" in the build directory,'
+config.status: $(configure_dir)/configure
+js/src/config.status: $(topsrcdir)/js/src/configure
+config.status js/src/config.status:
+	@echo 'STOP!  $^ has changed and needs to be run again.'
+	@echo 'Please rerun it.'
+	@echo 'To ignore this message, touch "$(CURDIR)/$@",'
 	@echo 'but your build might not succeed.'
 	@exit 1
 
@@ -81,35 +92,41 @@ include backend.RecursiveMakeBackend.pp
 
 default:: backend.RecursiveMakeBackend
 
-ifdef BUILD_JS
-.PHONY: js-config-status
-js-config-status:
-	$(call SUBMAKE,backend.RecursiveMakeBackend,js/src,1)
-endif
-
 install_manifests := bin idl include public private sdk
 install_manifest_depends = \
   CLOBBER \
-  $(topsrcdir)/configure \
+  $(configure_dir)/configure \
   config.status \
   backend.RecursiveMakeBackend \
   $(NULL)
 
-ifdef BUILD_JS
-install_manifest_depends += js-config-status
+ifndef JS_STANDALONE
+install_manifest_depends += \
+  $(topsrcdir)/js/src/configure \
+  js/src/config.status \
+  $(NULL)
 endif
 
 .PHONY: install-manifests
 install-manifests: $(addprefix install-dist-,$(install_manifests))
 
+# process_install_manifest needs to be invoked with --no-remove when building
+# js as standalone because automated builds are building nspr separately and
+# that would remove the resulting files.
+# Eventually, a standalone js build would just be able to build nspr itself,
+# removing the need for the former.
+ifdef JS_STANDALONE
+NO_REMOVE=1
+endif
+
 .PHONY: $(addprefix install-dist-,$(install_manifests))
 $(addprefix install-dist-,$(install_manifests)): install-dist-%: $(install_manifest_depends)
-	$(call py_action,process_install_manifest,$(if $(NO_REMOVE),--no-remove )$(DIST)/$* _build_manifests/install/dist_$* $(if $(BUILD_JS),js/src/_build_manifests/install/dist_$*))
+	$(call py_action,process_install_manifest,$(if $(NO_REMOVE),--no-remove )$(DIST)/$* _build_manifests/install/dist_$*)
 
 .PHONY: install-tests
 install-manifests: install-tests
 install-tests: $(install_manifest_depends)
-	$(call py_action,process_install_manifest,$(if $(NO_REMOVE),--no-remove )_tests _build_manifests/install/tests $(if $(BUILD_JS),js/src/_build_manifests/install/tests))
+	$(call py_action,process_install_manifest,$(if $(NO_REMOVE),--no-remove )_tests _build_manifests/install/tests)
 
 
 # _tests should be purged during cleaning. However, we don't want it purged
@@ -139,9 +156,11 @@ endif
 # with no regard for PGO passes. This decision could probably be revisited.
 export:: install-dist-sdk
 
+ifndef JS_STANDALONE
 ifdef ENABLE_TESTS
 # Additional makefile targets to call automated test suites
 include $(topsrcdir)/testing/testsuite-targets.mk
+endif
 endif
 
 default all::
@@ -181,6 +200,7 @@ endif
 
 SYM_STORE_SOURCE_DIRS := $(topsrcdir)
 
+ifndef JS_STANDALONE
 include $(topsrcdir)/toolkit/mozapps/installer/package-name.mk
 
 ifdef MOZ_SYMBOLS_EXTRA_BUILDID
@@ -225,6 +245,7 @@ endif
 # so transform it to an immediate assignment.
 MOZ_SOURCE_STAMP := $(MOZ_SOURCE_STAMP)
 export MOZ_SOURCE_STAMP
+endif
 
 #XXX: this is a hack, since we don't want to clobber for MSVC
 # PGO support, but we can't do this test in client.mk
@@ -250,8 +271,20 @@ check::
 	@relcount=`find $(DIST)/bin -name '*.so' | xargs objdump -R | grep R_386_PC32 | wc -l` && if test $$relcount -gt 0; then echo 'FAILED: R_386_PC32 relocations detected in a shared library.  Did you use a system header without adding it to config/system-headers?'; exit 1; else echo 'PASSED'; fi
 endif
 
-ifdef BUILD_JS
-js/src/Makefile: subsrcdir := js/src
+ifdef JS_STANDALONE
+# Delegate js-specific rules to js
+check-%:
+	$(MAKE) -C js/src $@
+
+source-package install:
+	$(MAKE) -C js/src $@
+
+# Every export rule depends on config/export, but the rule for config/export
+# doesn't exist when building js non-standalone.
+.PHONY: config/export
+config/export:
+
+endif
 
 ifdef MOZ_PSEUDO_DERECURSE
 # Interdependencies for parallel export.
@@ -260,6 +293,5 @@ accessible/src/xpcom/export: xpcom/xpidl/export
 js/src/export: mfbt/export
 ifdef ENABLE_CLANG_PLUGIN
 js/src/export config/export: build/clang-plugin/export
-endif
 endif
 endif

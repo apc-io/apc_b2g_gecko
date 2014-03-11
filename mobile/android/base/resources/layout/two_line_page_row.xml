@@ -6,7 +6,7 @@
 <merge xmlns:android="http://schemas.android.com/apk/res/android"
        xmlns:gecko="http://schemas.android.com/apk/res-auto">
 
-    <org.mozilla.gecko.widget.FaviconView android:id="@+id/favicon"
+    <org.mozilla.gecko.widget.FaviconView android:id="@+id/icon"
                                           android:layout_width="@dimen/favicon_bg"
                                           android:layout_height="@dimen/favicon_bg"
                                           android:layout_marginLeft="10dip"
@@ -28,7 +28,8 @@
                   style="@style/Widget.TwoLinePageRow.Url"
                   android:layout_width="fill_parent"
                   android:layout_height="wrap_content"
-                  android:drawablePadding="5dp"/>
+                  android:drawablePadding="5dp"
+                  android:maxLength="1024"/>
 
     </LinearLayout>
 

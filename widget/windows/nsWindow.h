@@ -29,10 +29,6 @@
 #include "mozilla/TimeStamp.h"
 #include "nsMargin.h"
 
-#ifdef CAIRO_HAS_D2D_SURFACE
-#include "gfxD2DSurface.h"
-#endif
-
 #include "nsWinGesture.h"
 
 #include "WindowHook.h"
@@ -152,7 +148,7 @@ public:
   NS_IMETHOD              GetAttention(int32_t aCycleCount);
   virtual bool            HasPendingInputEvent();
   virtual LayerManager*   GetLayerManager(PLayerTransactionChild* aShadowManager = nullptr,
-                                          LayersBackend aBackendHint = mozilla::layers::LAYERS_NONE,
+                                          LayersBackend aBackendHint = mozilla::layers::LayersBackend::LAYERS_NONE,
                                           LayerManagerPersistence aPersistence = LAYER_MANAGER_CURRENT,
                                           bool* aAllowRetaining = nullptr);
   gfxASurface             *GetThebesSurface();
@@ -181,7 +177,7 @@ public:
                                                            double aDeltaZ,
                                                            uint32_t aModifierFlags,
                                                            uint32_t aAdditionalFlags);
-  NS_IMETHOD              NotifyIME(NotificationToIME aNotification) MOZ_OVERRIDE;
+  NS_IMETHOD              NotifyIME(const IMENotification& aIMENotification) MOZ_OVERRIDE;
   NS_IMETHOD_(void)       SetInputContext(const InputContext& aContext,
                                           const InputContextAction& aAction);
   NS_IMETHOD_(InputContext) GetInputContext();
@@ -193,9 +189,6 @@ public:
   virtual nsTransparencyMode GetTransparencyMode();
   virtual void            UpdateOpaqueRegion(const nsIntRegion& aOpaqueRegion);
 #endif // MOZ_XUL
-  NS_IMETHOD              NotifyIMEOfTextChange(uint32_t aStart,
-                                                uint32_t aOldEnd,
-                                                uint32_t aNewEnd) MOZ_OVERRIDE;
   virtual nsIMEUpdatePreference GetIMEUpdatePreference();
   NS_IMETHOD              GetNonClientMargins(nsIntMargin &margins);
   NS_IMETHOD              SetNonClientMargins(nsIntMargin &margins);
@@ -291,6 +284,8 @@ public:
 
   virtual void GetPreferredCompositorBackends(nsTArray<mozilla::layers::LayersBackend>& aHints);
 
+  virtual bool ShouldUseOffMainThreadCompositing();
+
 protected:
 
   virtual void WindowUsesOMTC() MOZ_OVERRIDE;
@@ -337,13 +332,26 @@ protected:
     return mTransparencyMode == eTransparencyGlass ||
            mTransparencyMode == eTransparencyBorderlessGlass;
   }
+  HWND                    GetOwnerWnd() const
+  {
+    return ::GetWindow(mWnd, GW_OWNER);
+  }
+  bool                    IsOwnerForegroundWindow() const
+  {
+    HWND owner = GetOwnerWnd();
+    return owner && owner == ::GetForegroundWindow();
+  }
+  bool                    IsPopup() const
+  {
+    return mWindowType == eWindowType_popup;
+  }
+
 
   /**
    * Event processing helpers
    */
   void                    DispatchFocusToTopLevelWindow(bool aIsActivate);
   bool                    DispatchStandardEvent(uint32_t aMsg);
-  bool                    DispatchCommandEvent(uint32_t aEventCommand);
   void                    RelayMouseEvent(UINT aMsg, WPARAM wParam, LPARAM lParam);
   virtual bool            ProcessMessage(UINT msg, WPARAM &wParam,
                                          LPARAM &lParam, LRESULT *aRetValue);
@@ -358,7 +366,7 @@ protected:
                                               bool *aEventDispatched);
   LRESULT                 ProcessKeyDownMessage(const MSG &aMsg,
                                                 bool *aEventDispatched);
-  static bool             EventIsInsideWindow(UINT Msg, nsWindow* aWindow);
+  static bool             EventIsInsideWindow(nsWindow* aWindow);
   // Convert nsEventStatus value to a windows boolean
   static bool             ConvertStatus(nsEventStatus aStatus);
   static void             PostSleepWakeNotification(const bool aIsSleepMode);
@@ -405,6 +413,9 @@ protected:
   static void             ScheduleHookTimer(HWND aWnd, UINT aMsgId);
   static void             RegisterSpecialDropdownHooks();
   static void             UnregisterSpecialDropdownHooks();
+  static bool             GetPopupsToRollup(nsIRollupListener* aRollupListener,
+                                            uint32_t* aPopupsToRollup);
+  static bool             NeedsToHandleNCActivateDelayed(HWND aWnd);
   static bool             DealWithPopups(HWND inWnd, UINT inMsg, WPARAM inWParam, LPARAM inLParam, LRESULT* outResult);
 
   /**
@@ -532,10 +543,6 @@ protected:
 
   nsIntRect             mLastPaintBounds;
 
-#ifdef CAIRO_HAS_D2D_SURFACE
-  nsRefPtr<gfxD2DSurface>    mD2DWindowSurface; // Surface for this window.
-#endif
-
   // Transparency
 #ifdef MOZ_XUL
   // Use layered windows to support full 256 level alpha translucency
@@ -554,6 +561,10 @@ protected:
   // True if the taskbar (possibly through the tab preview) tells us that the
   // icon has been created on the taskbar.
   bool                  mHasTaskbarIconBeenCreated;
+
+  // Indicates that mouse events should be ignored and pass through to the
+  // window below. This is currently only used for popups.
+  bool                  mMouseTransparent;
 
   // The point in time at which the last paint completed. We use this to avoid
   //  painting too rapidly in response to frequent input events.

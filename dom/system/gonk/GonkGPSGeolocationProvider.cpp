@@ -383,7 +383,7 @@ GonkGPSGeolocationProvider::RequestSettingValue(char* aKey)
     return;
   }
   nsCOMPtr<nsISettingsServiceLock> lock;
-  ss->CreateLock(getter_AddRefs(lock));
+  ss->CreateLock(nullptr, getter_AddRefs(lock));
   lock->Get(aKey, this);
 }
 
@@ -723,7 +723,7 @@ GonkGPSGeolocationProvider::ReceiveDataCallList(nsIRILDataCallInfo** aDataCalls,
 
 NS_IMETHODIMP
 GonkGPSGeolocationProvider::Handle(const nsAString& aName,
-                                   const JS::Value& aResult)
+                                   JS::Handle<JS::Value> aResult)
 {
   if (aName.EqualsLiteral("ril.supl.apn")) {
     JSContext *cx = nsContentUtils::GetCurrentJSContext();

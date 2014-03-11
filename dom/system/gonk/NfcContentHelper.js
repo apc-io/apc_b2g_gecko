@@ -52,7 +52,9 @@ const NFC_IPC_MSG_NAMES = [
   "NFC:ConnectResponse",
   "NFC:CloseResponse",
   "NFC:CheckP2PRegistrationResponse",
-  "NFC:PeerEvent"
+  "NFC:PeerEvent",
+  "NFC:NotifySendFileStatusResponse",
+  "NFC:SendFileResponse"
 ];
 
 XPCOMUtils.defineLazyServiceGetter(this, "cpmm",
@@ -90,7 +92,7 @@ NfcContentHelper.prototype = {
    *       Strings such as 'type', 'id' 'payload' will not be acccessible to NfcWorker.
    *       Therefore this function exists till the bug is addressed.
    */
-  encodeNdefRecords: function encodeNdefRecords(records) {
+  encodeNDEFRecords: function encodeNDEFRecords(records) {
     let encodedRecords = [];
     for (let i = 0; i < records.length; i++) {
       let record = records[i];
@@ -159,7 +161,7 @@ NfcContentHelper.prototype = {
     let requestId = btoa(this.getRequestId(request));
     this._requestMap[requestId] = window;
 
-    let encodedRecords = this.encodeNdefRecords(records);
+    let encodedRecords = this.encodeNDEFRecords(records);
     cpmm.sendAsyncMessage("NFC:WriteNDEF", {
       requestId: requestId,
       sessionToken: sessionToken,
@@ -216,6 +218,36 @@ NfcContentHelper.prototype = {
       sessionToken: sessionToken
     });
     return request;
+  },
+
+  sendFile: function sendFile(window, data, sessionToken) {
+    if (window == null) {
+      throw Components.Exception("Can't get window object",
+                                  Cr.NS_ERROR_UNEXPECTED);
+    }
+    let request = Services.DOMRequest.createRequest(window);
+    let requestId = btoa(this.getRequestId(request));
+    this._requestMap[requestId] = window;
+
+    cpmm.sendAsyncMessage("NFC:SendFile", {
+      requestId: requestId,
+      sessionToken: sessionToken,
+      blob: data.blob
+    });
+    return request;
+  },
+
+  notifySendFileStatus: function notifySendFileStatus(window, status,
+                                                      requestId) {
+    if (window == null) {
+      throw Components.Exception("Can't get window object",
+                                  Cr.NS_ERROR_UNEXPECTED);
+    }
+
+    cpmm.sendAsyncMessage("NFC:NotifySendFileStatus", {
+      status: status,
+      requestId: requestId
+    });
   },
 
   registerTargetForPeerEvent: function registerTargetForPeerEvent(window,
@@ -276,7 +308,6 @@ NfcContentHelper.prototype = {
   },
 
   // nsIObserver
-
   observe: function observe(subject, topic, data) {
     if (topic == "xpcom-shutdown") {
       this.removeMessageListener();
@@ -325,6 +356,7 @@ NfcContentHelper.prototype = {
       case "NFC:MakeReadOnlyNDEFResponse":
       case "NFC:GetDetailsNDEFResponse":
       case "NFC:CheckP2PRegistrationResponse":
+      case "NFC:NotifySendFileStatusResponse":
         this.handleResponse(message.json);
         break;
       case "NFC:PeerEvent":
@@ -358,7 +390,7 @@ NfcContentHelper.prototype = {
       let ndefMsg = [];
       for (let i = 0; i < records.length; i++) {
         let record = records[i];
-        ndefMsg.push(new requester.MozNdefRecord(record.tnf,
+        ndefMsg.push(new requester.MozNDEFRecord(record.tnf,
                                                  record.type,
                                                  record.id,
                                                  record.payload));

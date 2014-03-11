@@ -49,6 +49,7 @@ ContainsVarOrConst(ParseNode *pn)
             return pnt;
         return ContainsVarOrConst(pn->pn_kid3);
       case PN_BINARY:
+      case PN_BINARY_OBJ:
         /*
          * Limit recursion if pn is a binary expression, which can't contain a
          * var statement.
@@ -158,9 +159,9 @@ FoldBinaryNumeric(ExclusiveContext *cx, JSOp op, ParseNode *pn1, ParseNode *pn2,
             if (d == 0 || IsNaN(d))
                 d = GenericNaN();
             else if (IsNegative(d) != IsNegative(d2))
-                d = NegativeInfinity();
+                d = NegativeInfinity<double>();
             else
-                d = PositiveInfinity();
+                d = PositiveInfinity<double>();
         } else {
             d /= d2;
         }
@@ -327,6 +328,7 @@ Fold(ExclusiveContext *cx, ParseNode **pnp,
         break;
 
       case PN_BINARY:
+      case PN_BINARY_OBJ:
         if (pn->isKind(PNK_OR) || pn->isKind(PNK_AND)) {
             // Propagate Condition context through logical connectives.
             SyntacticContext kidsc = SyntacticContext::Other;

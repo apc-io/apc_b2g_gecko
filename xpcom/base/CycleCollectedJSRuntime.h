@@ -100,7 +100,8 @@ class CycleCollectedJSRuntime
   friend class JSZoneParticipant;
   friend class IncrementalFinalizeRunnable;
 protected:
-  CycleCollectedJSRuntime(uint32_t aMaxbytes,
+  CycleCollectedJSRuntime(JSRuntime* aParentRuntime,
+                          uint32_t aMaxbytes,
                           JSUseHelperThreads aUseHelperThreads);
   virtual ~CycleCollectedJSRuntime();
 
@@ -194,7 +195,7 @@ public:
   nsCycleCollectionParticipant* GCThingParticipant();
   nsCycleCollectionParticipant* ZoneParticipant();
 
-  nsresult BeginCycleCollection(nsCycleCollectionNoteRootCallback &aCb);
+  nsresult TraverseRoots(nsCycleCollectionNoteRootCallback &aCb);
   bool UsefulToMergeZones() const;
   void FixWeakMappingGrayBits() const;
   bool NeedCollect() const;

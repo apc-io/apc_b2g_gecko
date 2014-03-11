@@ -37,18 +37,18 @@ class Blob
 
 public:
   static JSObject*
-  InitClass(JSContext* aCx, JSObject* aObj)
+  InitClass(JSContext* aCx, JS::Handle<JSObject*> aObj)
   {
-    return JS_InitClass(aCx, aObj, nullptr, &sClass, Construct, 0,
+    return JS_InitClass(aCx, aObj, JS::NullPtr(), &sClass, Construct, 0,
                         sProperties, sFunctions, nullptr, nullptr);
   }
 
   static JSObject*
   Create(JSContext* aCx, nsIDOMBlob* aBlob)
   {
-    JS_ASSERT(SameCOMIdentity(static_cast<nsISupports*>(aBlob), aBlob));
+    MOZ_ASSERT(SameCOMIdentity(static_cast<nsISupports*>(aBlob), aBlob));
 
-    JSObject* obj = JS_NewObject(aCx, &sClass, nullptr, nullptr);
+    JSObject* obj = JS_NewObject(aCx, &sClass, JS::NullPtr(), JS::NullPtr());
     if (obj) {
       JS_SetPrivate(obj, aBlob);
       NS_ADDREF(aBlob);
@@ -101,7 +101,7 @@ private:
   static void
   Finalize(JSFreeOp* aFop, JSObject* aObj)
   {
-    JS_ASSERT(JS_GetClass(aObj) == &sClass);
+    MOZ_ASSERT(JS_GetClass(aObj) == &sClass);
 
     nsIDOMBlob* blob = GetPrivate(aObj);
     NS_IF_RELEASE(blob);
@@ -167,7 +167,9 @@ private:
   static bool
   Slice(JSContext* aCx, unsigned aArgc, jsval* aVp)
   {
-    JS::Rooted<JSObject*> obj(aCx, JS_THIS_OBJECT(aCx, aVp));
+    JS::CallArgs args = JS::CallArgsFromVp(aArgc, aVp);
+
+    JS::Rooted<JSObject*> obj(aCx, args.thisv().toObjectOrNull());
     if (!obj) {
       return false;
     }
@@ -179,7 +181,7 @@ private:
 
     double start = 0, end = 0;
     JS::Rooted<JSString*> jsContentType(aCx, JS_GetEmptyString(JS_GetRuntime(aCx)));
-    if (!JS_ConvertArguments(aCx, aArgc, JS_ARGV(aCx, aVp), "/IIS", &start,
+    if (!JS_ConvertArguments(aCx, args, "/IIS", &start,
                              &end, jsContentType.address())) {
       return false;
     }
@@ -203,7 +205,7 @@ private:
       return false;
     }
 
-    JS_SET_RVAL(aCx, aVp, OBJECT_TO_JSVAL(rtnObj));
+    args.rval().setObject(*rtnObj);
     return true;
   }
 };
@@ -237,7 +239,7 @@ class File : public Blob
 
 public:
   static JSObject*
-  InitClass(JSContext* aCx, JSObject* aObj, JSObject* aParentProto)
+  InitClass(JSContext* aCx, JS::Handle<JSObject*> aObj, JS::Handle<JSObject*> aParentProto)
   {
     return JS_InitClass(aCx, aObj, aParentProto, &sClass, Construct, 0,
                         sProperties, nullptr, nullptr, nullptr);
@@ -246,9 +248,9 @@ public:
   static JSObject*
   Create(JSContext* aCx, nsIDOMFile* aFile)
   {
-    JS_ASSERT(SameCOMIdentity(static_cast<nsISupports*>(aFile), aFile));
+    MOZ_ASSERT(SameCOMIdentity(static_cast<nsISupports*>(aFile), aFile));
 
-    JSObject* obj = JS_NewObject(aCx, &sClass, nullptr, nullptr);
+    JSObject* obj = JS_NewObject(aCx, &sClass, JS::NullPtr(), JS::NullPtr());
     if (obj) {
       JS_SetPrivate(obj, aFile);
       NS_ADDREF(aFile);
@@ -264,7 +266,7 @@ public:
       if (classPtr == &sClass) {
         nsISupports* priv = static_cast<nsISupports*>(JS_GetPrivate(aObj));
         nsCOMPtr<nsIDOMFile> file = do_QueryInterface(priv);
-        JS_ASSERT_IF(priv, file);
+        MOZ_ASSERT_IF(priv, file);
         return file;
       }
     }
@@ -304,7 +306,7 @@ private:
   static void
   Finalize(JSFreeOp* aFop, JSObject* aObj)
   {
-    JS_ASSERT(JS_GetClass(aObj) == &sClass);
+    MOZ_ASSERT(JS_GetClass(aObj) == &sClass);
 
     nsIDOMFile* file = GetPrivate(aObj);
     NS_IF_RELEASE(file);
@@ -410,12 +412,9 @@ private:
     nsIDOMFile* file = GetInstancePrivate(aCx, obj, "lastModifiedDate");
     MOZ_ASSERT(file);
 
-    JS::Rooted<JS::Value> value(aCx);
-    if (NS_FAILED(file->GetLastModifiedDate(aCx, value.address()))) {
+    if (NS_FAILED(file->GetLastModifiedDate(aCx, aArgs.rval()))) {
       return false;
     }
-
-    aArgs.rval().set(value);
     return true;
   }
 
@@ -451,7 +450,7 @@ Blob::GetPrivate(JSObject* aObj)
     if (classPtr == &sClass || classPtr == File::Class()) {
       nsISupports* priv = static_cast<nsISupports*>(JS_GetPrivate(aObj));
       nsCOMPtr<nsIDOMBlob> blob = do_QueryInterface(priv);
-      JS_ASSERT_IF(priv, blob);
+      MOZ_ASSERT_IF(priv, blob);
       return blob;
     }
   }
@@ -473,7 +472,7 @@ CreateBlob(JSContext* aCx, nsIDOMBlob* aBlob)
 bool
 InitClasses(JSContext* aCx, JS::Handle<JSObject*> aGlobal)
 {
-  JSObject* blobProto = Blob::InitClass(aCx, aGlobal);
+  JS::Rooted<JSObject*> blobProto(aCx, Blob::InitClass(aCx, aGlobal));
   return blobProto && File::InitClass(aCx, aGlobal, blobProto);
 }
 

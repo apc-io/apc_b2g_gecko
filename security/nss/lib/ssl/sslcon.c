@@ -627,8 +627,9 @@ ssl2_SendServerFinishedMessage(sslSocket *ss)
 		(*ss->sec.uncache)(sid);
 	    rv = (SECStatus)sent;
 	} else if (!ss->opt.noCache) {
-	    /* Put the sid in session-id cache, (may already be there) */
-	    (*ss->sec.cache)(sid);
+	    if (sid->cached == never_cached) {
+		(*ss->sec.cache)(sid);
+	    }
 	    rv = SECSuccess;
 	}
 	ssl_FreeSID(sid);
@@ -2170,7 +2171,7 @@ ssl2_ClientRegSessionID(sslSocket *ss, PRUint8 *s)
 	sid->peerCert = CERT_DupCertificate(ss->sec.peerCert);
 
     }
-    if (!ss->opt.noCache)
+    if (!ss->opt.noCache && sid->cached == never_cached)
 	(*ss->sec.cache)(sid);
 }
 
@@ -3100,7 +3101,7 @@ ssl2_BeginClientHandshake(sslSocket *ss)
 
 	return rv;
     }
-#if defined(NSS_ENABLE_ECC)
+#ifndef NSS_DISABLE_ECC
     /* ensure we don't neogtiate ECC cipher suites with SSL2 hello */
     ssl3_DisableECCSuites(ss, NULL); /* disable all ECC suites */
     if (ss->cipherSpecs != NULL) {
@@ -3108,7 +3109,7 @@ ssl2_BeginClientHandshake(sslSocket *ss)
 	ss->cipherSpecs     = NULL;
 	ss->sizeCipherSpecs = 0;
     }
-#endif
+#endif /* NSS_DISABLE_ECC */
 
     if (!ss->cipherSpecs) {
         rv = ssl2_ConstructCipherSpecs(ss);

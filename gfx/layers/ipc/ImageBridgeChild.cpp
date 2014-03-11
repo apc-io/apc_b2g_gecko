@@ -22,6 +22,7 @@
 #include "mozilla/ReentrantMonitor.h"   // for ReentrantMonitor, etc
 #include "mozilla/ipc/MessageChannel.h" // for MessageChannel, etc
 #include "mozilla/ipc/Transport.h"      // for Transport
+#include "mozilla/gfx/Point.h"          // for IntSize
 #include "mozilla/layers/CompositableClient.h"  // for CompositableChild, etc
 #include "mozilla/layers/ISurfaceAllocator.h"  // for ISurfaceAllocator
 #include "mozilla/layers/ImageClient.h"  // for ImageClient
@@ -42,6 +43,7 @@ struct nsIntRect;
  
 using namespace base;
 using namespace mozilla::ipc;
+using namespace mozilla::gfx;
 
 namespace mozilla {
 namespace ipc {
@@ -110,6 +112,16 @@ ImageBridgeChild::UseTexture(CompositableClient* aCompositable,
 {
   mTxn->AddNoSwapEdit(OpUseTexture(nullptr, aCompositable->GetIPDLActor(),
                                    nullptr, aTexture->GetIPDLActor()));
+}
+
+void
+ImageBridgeChild::UseComponentAlphaTextures(CompositableClient* aCompositable,
+                                            TextureClient* aTextureOnBlack,
+                                            TextureClient* aTextureOnWhite)
+{
+  mTxn->AddNoSwapEdit(OpUseComponentAlphaTextures(nullptr, aCompositable->GetIPDLActor(),
+                                                  nullptr, aTextureOnBlack->GetIPDLActor(),
+                                                  nullptr, aTextureOnWhite->GetIPDLActor()));
 }
 
 void
@@ -212,12 +224,12 @@ static void CreateImageClientSync(RefPtr<ImageClient>* result,
 
 
 struct GrallocParam {
-  gfxIntSize size;
+  IntSize size;
   uint32_t format;
   uint32_t usage;
   SurfaceDescriptor* buffer;
 
-  GrallocParam(const gfxIntSize& aSize,
+  GrallocParam(const IntSize& aSize,
                const uint32_t& aFormat,
                const uint32_t& aUsage,
                SurfaceDescriptor* aBuffer)
@@ -441,12 +453,27 @@ ImageBridgeChild::BeginTransaction()
   mTxn->Begin();
 }
 
+class MOZ_STACK_CLASS AutoRemoveTextures
+{
+public:
+  AutoRemoveTextures(ImageBridgeChild* aImageBridge)
+    : mImageBridge(aImageBridge) {}
+
+  ~AutoRemoveTextures()
+  {
+    mImageBridge->RemoveTexturesIfNecessary();
+  }
+private:
+  ImageBridgeChild* mImageBridge;
+};
+
 void
 ImageBridgeChild::EndTransaction()
 {
   MOZ_ASSERT(!mTxn->Finished(), "forgot BeginTransaction?");
 
   AutoEndTransaction _(mTxn);
+  AutoRemoveTextures autoRemoveTextures(this);
 
   if (mTxn->IsEmpty()) {
     return;
@@ -487,6 +514,20 @@ ImageBridgeChild::EndTransaction()
 
       compositableChild->GetCompositableClient()
         ->SetDescriptorFromReply(ots.textureId(), ots.image());
+      break;
+    }
+    case EditReply::TReturnReleaseFence: {
+      const ReturnReleaseFence& rep = reply.get_ReturnReleaseFence();
+      FenceHandle fence = rep.fence();
+      PTextureChild* child = rep.textureChild();
+
+      if (!fence.IsValid() || !child) {
+        break;
+      }
+      RefPtr<TextureClient> texture = TextureClient::AsTextureClient(child);
+      if (texture) {
+        texture->SetReleaseFenceHandle(fence);
+      }
       break;
     }
     default:
@@ -647,7 +688,7 @@ ImageBridgeChild::CreateImageClientNow(CompositableType aType)
 }
 
 PGrallocBufferChild*
-ImageBridgeChild::AllocPGrallocBufferChild(const gfxIntSize&, const uint32_t&, const uint32_t&,
+ImageBridgeChild::AllocPGrallocBufferChild(const IntSize&, const uint32_t&, const uint32_t&,
                                            MaybeMagicGrallocBufferHandle*)
 {
 #ifdef MOZ_HAVE_SURFACEDESCRIPTORGRALLOC
@@ -671,7 +712,7 @@ ImageBridgeChild::DeallocPGrallocBufferChild(PGrallocBufferChild* actor)
 }
 
 bool
-ImageBridgeChild::AllocSurfaceDescriptorGralloc(const gfxIntSize& aSize,
+ImageBridgeChild::AllocSurfaceDescriptorGralloc(const IntSize& aSize,
                                                 const uint32_t& aFormat,
                                                 const uint32_t& aUsage,
                                                 SurfaceDescriptor* aBuffer)
@@ -696,7 +737,7 @@ ImageBridgeChild::AllocSurfaceDescriptorGralloc(const gfxIntSize& aSize,
 }
 
 bool
-ImageBridgeChild::AllocSurfaceDescriptorGrallocNow(const gfxIntSize& aSize,
+ImageBridgeChild::AllocSurfaceDescriptorGrallocNow(const IntSize& aSize,
                                                    const uint32_t& aFormat,
                                                    const uint32_t& aUsage,
                                                    SurfaceDescriptor* aBuffer)
@@ -878,7 +919,7 @@ ImageBridgeChild::DeallocShmem(ipc::Shmem& aShmem)
 }
 
 PGrallocBufferChild*
-ImageBridgeChild::AllocGrallocBuffer(const gfxIntSize& aSize,
+ImageBridgeChild::AllocGrallocBuffer(const IntSize& aSize,
                                      uint32_t aFormat,
                                      uint32_t aUsage,
                                      MaybeMagicGrallocBufferHandle* aHandle)
@@ -895,7 +936,8 @@ ImageBridgeChild::AllocGrallocBuffer(const gfxIntSize& aSize,
 }
 
 PTextureChild*
-ImageBridgeChild::AllocPTextureChild()
+ImageBridgeChild::AllocPTextureChild(const SurfaceDescriptor&,
+                                     const TextureFlags&)
 {
   return TextureClient::CreateIPDLActor();
 }
@@ -907,9 +949,25 @@ ImageBridgeChild::DeallocPTextureChild(PTextureChild* actor)
 }
 
 PTextureChild*
-ImageBridgeChild::CreateEmptyTextureChild()
+ImageBridgeChild::CreateTexture(const SurfaceDescriptor& aSharedData,
+                                TextureFlags aFlags)
 {
-  return SendPTextureConstructor();
+  return SendPTextureConstructor(aSharedData, aFlags);
+}
+
+void
+ImageBridgeChild::RemoveTextureFromCompositable(CompositableClient* aCompositable,
+                                                TextureClient* aTexture)
+{
+  if (aTexture->GetFlags() & TEXTURE_DEALLOCATE_CLIENT) {
+    mTxn->AddEdit(OpRemoveTexture(nullptr, aCompositable->GetIPDLActor(),
+                                  nullptr, aTexture->GetIPDLActor()));
+  } else {
+    mTxn->AddNoSwapEdit(OpRemoveTexture(nullptr, aCompositable->GetIPDLActor(),
+                                        nullptr, aTexture->GetIPDLActor()));
+  }
+  // Hold texture until transaction complete.
+  HoldUntilTransaction(aTexture);
 }
 
 static void RemoveTextureSync(TextureClient* aTexture, ReentrantMonitor* aBarrier, bool* aDone)
@@ -941,6 +999,11 @@ void ImageBridgeChild::RemoveTexture(TextureClient* aTexture)
   while (!done) {
     barrier.Wait();
   }
+}
+
+bool ImageBridgeChild::IsSameProcess() const
+{
+  return OtherProcess() == ipc::kInvalidProcessHandle;
 }
 
 } // layers

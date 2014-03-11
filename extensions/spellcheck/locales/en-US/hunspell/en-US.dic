@@ -1,4 +1,4 @@
-57454
+57465
 0/nm
 0th/pt
 1/n1
@@ -22722,6 +22722,7 @@ cinnabar/M
 cinnamon/M
 cipher's
 cipher/CGDS
+ciphertext/S
 cir
 circa
 circadian
@@ -25073,7 +25074,9 @@ cryptographer/MS
 cryptographic
 cryptographically
 cryptography/M
+cryptologist/MS
 cryptology
+cryptosystem/S
 crystal/SM
 crystalline
 crystallization/M
@@ -26015,6 +26018,7 @@ deputation/SM
 depute/DSG
 deputize/DSG
 deputy/SM
+dequeue/DSG
 derailleur/MS
 derailment/MS
 derangement/M
@@ -28285,6 +28289,7 @@ enormous/YP
 enormousness/M
 enough/M
 enplane/DSG
+enqueue/DSG
 enquirer/S
 enquiringly
 enrage/GDS
@@ -37147,7 +37152,7 @@ linguine/M
 linguini/M
 linguist/SM
 linguistic/S
-linguistically
+linguistical/Y
 linguistics/M
 liniment/SM
 lining/M
@@ -43768,6 +43773,7 @@ plainsmen
 plainsong/M
 plainspoken
 plaint/SMV
+plaintext
 plaintiff/SM
 plaintive/Y
 plait/MDGS
@@ -45243,6 +45249,7 @@ pseudonym/SM
 pseudonymous
 pseudopod
 pseudopodia
+pseudorandom/Y
 pseudoscience/MS
 pseudy
 pshaw/MS
@@ -46022,6 +46029,8 @@ rasp/GMDRS
 raspberry/SM
 raspy/RT
 raster
+rasterization/M
+rasterize/SGDR
 rat/SM
 ratatouille/M
 ratbag/S
@@ -49934,6 +49943,8 @@ snapshot/SM
 snare/DSMG
 snarf/SDG
 snark/S
+snarkily
+snarky/TR
 snarl's
 snarl/USDG
 snarling/Y

@@ -110,6 +110,13 @@
         findbar.browser.finder.enableSelection();
       ]]></handler>
 
+#ifdef XP_MACOSX
+      <handler event="focus"><![CDATA[
+        let findbar = this.findbar;
+        findbar._onFindFieldFocus();
+      ]]></handler>
+#endif
+
       <handler event="compositionstart"><![CDATA[
         // Don't close the find toolbar while IME is composing.
         let findbar = this.findbar;
@@ -123,8 +130,7 @@
       <handler event="compositionend"><![CDATA[
         let findbar = this.findbar;
         findbar._isIMEComposing = false;
-        if (findbar._findMode != findbar.FIND_NORMAL &&
-            !findbar.hidden)
+        if (findbar._findMode != findbar.FIND_NORMAL)
           findbar._setFindCloseTimeout();
       ]]></handler>
 
@@ -367,15 +373,6 @@
             return;
           this._destroyed = true;
 
-          // It is possible that the findbar may be destroyed before any
-          // documents it is listening to (see nsIEditActionListener code below).
-          // Thus, to avoid leaking, if we are listening to any editors, unhook
-          // ourselves now, and remove our cached copies
-          if (this._editors) {
-            for (let x = this._editors.length - 1; x >= 0; --x)
-              this._unhookListenersAtIndex(x);
-          }
-
           this.browser = null;
 
           let prefsvc =
@@ -419,17 +416,18 @@
           if (this._quickFindTimeout)
             clearTimeout(this._quickFindTimeout);
 
-          // Don't close the find toolbar while IME is composing.
-          if (this._isIMEComposing) {
+          // Don't close the find toolbar while IME is composing OR when the
+          // findbar is already hidden.
+          if (this._isIMEComposing || this.hidden) {
             this._quickFindTimeout = null;
             return;
           }
 
-          this._quickFindTimeout =
-            setTimeout(function(aSelf) {
-                         if (aSelf._findMode != aSelf.FIND_NORMAL)
-                           aSelf.close();
-                       }, this._quickFindTimeoutLength, this);
+          this._quickFindTimeout = setTimeout(() => {
+             if (this._findMode != this.FIND_NORMAL)
+               this.close();
+             this._quickFindTimeout = null;
+           }, this._quickFindTimeoutLength);
         ]]></body>
       </method>
 
@@ -1054,8 +1052,17 @@
             userWantsPrefill =
               prefsvc.getBoolPref("accessibility.typeaheadfind.prefillwithselection");
 
-          let initialString = (this.prefillWithSelection && userWantsPrefill) ?
-                              this._getInitialSelection() : null;
+          let initialString = null;
+          if (this.prefillWithSelection && userWantsPrefill)
+            initialString = this._getInitialSelection();
+#ifdef XP_MACOSX
+          if (!initialString) {
+            let clipboardSearchString = this.browser.finder.clipboardSearchString;
+            if (clipboardSearchString)
+              initialString = clipboardSearchString;
+          }
+#endif
+
           if (initialString)
             this._findField.value = initialString;
 
@@ -1111,6 +1118,32 @@
         ]]></body>
       </method>
 
+#ifdef XP_MACOSX
+      <!--
+        - Fetches the currently selected text and sets that as the text to search
+        - next. This is a MacOS specific feature.
+      -->
+      <method name="onFindSelectionCommand">
+        <body><![CDATA[
+          let searchString = this.browser.finder.setSearchStringToSelection();
+          if (searchString)
+            this._findField.value = searchString;
+        ]]></body>
+      </method>
+
+      <method name="_onFindFieldFocus">
+        <body><![CDATA[
+          let clipboardSearchString = this._browser.finder.clipboardSearchString;
+          if (clipboardSearchString && this._findField.value != clipboardSearchString) {
+            this._findField.value = clipboardSearchString;
+            // Changing the search string makes the previous status invalid, so
+            // we better clear it here.
+            this._updateStatusUI();
+          }
+        ]]></body>
+      </method>
+#endif
+
       <!--
         - This handles all the result changes for both
         - type-ahead-find and highlighting.
@@ -1126,19 +1159,19 @@
         -   when not in FIND_LINKS mode.
         -->
       <method name="onFindResult">
-        <parameter name="aResult"/>
-        <parameter name="aFindBackwards"/>
-        <parameter name="aLinkURL" />
+        <parameter name="aData"/>
         <body><![CDATA[
-          this._updateStatusUI(aResult, aFindBackwards);
-          this._updateStatusUIBar(aLinkURL);
+          if (aData.storeResult && this._findField.value != this.browser.finder.searchString)
+            this._findField.value = this.browser.finder.searchString;
+          this._updateStatusUI(aData.result, aData.findBackwards);
+          this._updateStatusUIBar(aData.linkURL);
 
-          if (aResult == this.nsITypeAheadFind.FIND_NOTFOUND)
-            this._findFailedString = this.browser.finder.searchString;
+          if (aData.result == this.nsITypeAheadFind.FIND_NOTFOUND)
+            this._findFailedString = aData.searchString;
           else
             this._findFailedString = null;
 
-          if (this._findMode != this.FIND_NORMAL && !this.hidden)
+          if (this._findMode != this.FIND_NORMAL)
             this._setFindCloseTimeout();
         ]]></body>
       </method>
@@ -1169,7 +1202,12 @@
     </implementation>
 
     <handlers>
-      <handler event="keypress" keycode="VK_ESCAPE" phase="capturing" action="this.close();" preventdefault="true"/>
+      <!--
+        - We have to guard against `this.close` being |null| due to an unknown
+        - issue, which is tracked in bug 957999.
+        -->
+      <handler event="keypress" keycode="VK_ESCAPE" phase="capturing"
+               action="if (this.close) this.close();" preventdefault="true"/>
     </handlers>
   </binding>
 </bindings>

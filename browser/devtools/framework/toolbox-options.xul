@@ -20,9 +20,12 @@
         <vbox id="default-tools-box" class="options-groupbox" tabindex="0"/>
         <label value="&options.selectAdditionalTools.label;"/>
         <vbox id="additional-tools-box" class="options-groupbox"/>
+        <label value="&options.selectEnabledToolboxButtons.label;"/>
+        <vbox id="enabled-toolbox-buttons-box" class="options-groupbox"/>
         <label id="tools-not-supported-label"
                class="options-citation-label theme-comment"
                value="&options.toolNotSupported.label;"/>
+
       </vbox>
       <vbox class="options-vertical-pane" flex="1">
         <label value="&options.selectDevToolsTheme.label;"/>
@@ -60,6 +63,15 @@
                     label="&options.timestampMessages.label;"
                     tooltiptext="&options.timestampMessages.tooltip;"
                     data-pref="devtools.webconsole.timestampMessages"/>
+        </vbox>
+        <label value="&options.styleeditor.label;"/>
+        <vbox id="styleeditor-options" class="options-groupbox">
+          <checkbox label="&options.stylesheetSourceMaps.label;"
+                    tooltiptext="&options.stylesheetSourceMaps.tooltip;"
+                    data-pref="devtools.styleeditor.source-maps-enabled"/>
+          <checkbox label="&options.stylesheetAutocompletion.label;"
+                    tooltiptext="&options.stylesheetAutocompletion.tooltip;"
+                    data-pref="devtools.styleeditor.autocompletion-enabled"/>
         </vbox>
         <label value="&options.profiler.label;"/>
         <vbox id="profiler-options" class="options-groupbox">

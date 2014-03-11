@@ -569,18 +569,12 @@ HistoryMenu.prototype = {
     if (!menuitem)
       return;
 
-    // If Sync isn't configured yet, then don't show the menuitem.
-    if (Weave.Status.checkSetup() == Weave.CLIENT_NOT_CONFIGURED ||
-        Weave.Svc.Prefs.get("firstSync", "") == "notReady") {
+    if (!PlacesUIUtils.shouldShowTabsFromOtherComputersMenuitem()) {
       menuitem.setAttribute("hidden", true);
       return;
     }
 
-    // The tabs engine might never be inited (if services.sync.registerEngines
-    // is modified), so make sure we avoid undefined errors.
-    let enabled = Weave.Service.isLoggedIn &&
-                  Weave.Service.engineManager.get("tabs") &&
-                  Weave.Service.engineManager.get("tabs").enabled;
+    let enabled = PlacesUIUtils.shouldEnableTabsFromOtherComputersMenuitem();
     menuitem.setAttribute("disabled", !enabled);
     menuitem.setAttribute("hidden", false);
 #endif
@@ -746,6 +740,7 @@ var PlacesMenuDNDHandler = {
   _closeDelayMs: 500,
   _loadTimer: null,
   _closeTimer: null,
+  _closingTimerNode: null,
 
   /**
    * Called when the user enters the <menu> element during a drag.
@@ -757,6 +752,15 @@ var PlacesMenuDNDHandler = {
     if (!this._isStaticContainer(event.target))
       return;
 
+    // If we re-enter the same menu or anchor before the close timer runs out,
+    // we should ensure that we do not close:
+    if (this._closeTimer && this._closingTimerNode === event.currentTarget) {
+      this._closeTimer.cancel();
+      this._closingTimerNode = null;
+      this._closeTimer = null;
+    }
+
+    PlacesControllerDragHelper.currentDropTarget = event.target;
     let popup = event.target.lastChild;
     if (this._loadTimer || popup.state === "showing" || popup.state === "open")
       return;
@@ -773,8 +777,6 @@ var PlacesMenuDNDHandler = {
 
   /**
    * Handles dragleave on the <menu> element.
-   * @returns true if the element is a container element (menu or 
-   *          menu-toolbarbutton), false otherwise.
    */
   onDragLeave: function PMDH_onDragLeave(event) {
     // Handle menu-button separate targets.
@@ -787,6 +789,7 @@ var PlacesMenuDNDHandler = {
     if (!this._isStaticContainer(event.target))
       return;
 
+    PlacesControllerDragHelper.currentDropTarget = null;
     let popup = event.target.lastChild;
 
     if (this._loadTimer) {
@@ -794,8 +797,10 @@ var PlacesMenuDNDHandler = {
       this._loadTimer = null;
     }
     this._closeTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+    this._closingTimerNode = event.currentTarget;
     this._closeTimer.initWithCallback(function() {
       this._closeTimer = null;
+      this._closingTimerNode = null;
       let node = PlacesControllerDragHelper.currentDropTarget;
       let inHierarchy = false;
       while (node && !inHierarchy) {
@@ -851,6 +856,7 @@ var PlacesMenuDNDHandler = {
                                 PlacesUtils.bookmarks.DEFAULT_INDEX,
                                 Ci.nsITreeView.DROP_ON);
     PlacesControllerDragHelper.onDrop(ip, event.dataTransfer);
+    PlacesControllerDragHelper.currentDropTarget = null;
     event.stopPropagation();
   }
 };
@@ -867,6 +873,10 @@ let PlacesToolbarHelper = {
 
   get _viewElt() {
     return document.getElementById("PlacesToolbar");
+  },
+
+  get _placeholder() {
+    return document.getElementById("bookmarks-toolbar-placeholder");
   },
 
   init: function PTH_init(forceToolbarOverflowCheck) {
@@ -889,6 +899,7 @@ let PlacesToolbarHelper = {
     if (forceToolbarOverflowCheck) {
       viewElt._placesView.updateOverflowStatus();
     }
+    this.customizeChange();
   },
 
   customizeStart: function PTH_customizeStart() {
@@ -899,11 +910,35 @@ let PlacesToolbarHelper = {
     } finally {
       this._isCustomizing = true;
     }
+    this._shouldWrap = this._getShouldWrap();
+  },
+
+  customizeChange: function PTH_customizeChange() {
+    let placeholder = this._placeholder;
+    if (!placeholder) {
+      return;
+    }
+    let shouldWrapNow = this._getShouldWrap();
+    if (this._shouldWrap != shouldWrapNow) {
+      if (shouldWrapNow) {
+        placeholder.setAttribute("wrap", "true");
+      } else {
+        placeholder.removeAttribute("wrap");
+      }
+      this._shouldWrap = shouldWrapNow;
+    }
   },
 
   customizeDone: function PTH_customizeDone() {
     this._isCustomizing = false;
     this.init(true);
+  },
+
+  _getShouldWrap: function PTH_getShouldWrap() {
+    let placement = CustomizableUI.getPlacementOfWidget("personal-bookmarks");
+    let area = placement && placement.area;
+    let areaType = area && CustomizableUI.getAreaType(area);
+    return !area || CustomizableUI.TYPE_MENU_PANEL == areaType;
   },
 
   onPlaceholderCommand: function () {
@@ -934,40 +969,57 @@ let PlacesToolbarHelper = {
  */
 
 let BookmarkingUI = {
+  BOOKMARK_BUTTON_ID: "bookmarks-menu-button",
   get button() {
-    let widgetGroup = CustomizableUI.getWidget("bookmarks-menu-button");
-    if (widgetGroup.areaType == CustomizableUI.TYPE_TOOLBAR) {
-      return widgetGroup.forWindow(window).node;
-    }
-    return null;
+    delete this.button;
+    let widgetGroup = CustomizableUI.getWidget(this.BOOKMARK_BUTTON_ID);
+    return this.button = widgetGroup.forWindow(window).node;
   },
 
+  /* Can't make this a self-deleting getter because it's anonymous content
+   * and might lose/regain bindings at some point. */
   get star() {
-    let button = this.button;
-    return button && document.getAnonymousElementByAttribute(button, "anonid",
-                                                             "button");
+    return document.getAnonymousElementByAttribute(this.button, "anonid",
+                                                   "button");
   },
 
   get anchor() {
-    let widget = CustomizableUI.getWidget("bookmarks-menu-button")
+    if (!this._shouldUpdateStarState()) {
+      return null;
+    }
+    let widget = CustomizableUI.getWidget(this.BOOKMARK_BUTTON_ID)
                                .forWindow(window);
     if (widget.overflowed)
       return widget.anchor;
 
     let star = this.star;
-    return star && document.getAnonymousElementByAttribute(star, "class",
-                                                           "toolbarbutton-icon");
+    return star ? document.getAnonymousElementByAttribute(star, "class",
+                                                          "toolbarbutton-icon")
+                : null;
+  },
+
+  get notifier() {
+    delete this.notifier;
+    return this.notifier = document.getElementById("bookmarked-notification-anchor");
+  },
+
+  get broadcaster() {
+    delete this.broadcaster;
+    let broadcaster = document.getElementById("bookmarkThisPageBroadcaster");
+    return this.broadcaster = broadcaster;
   },
 
   STATUS_UPDATING: -1,
   STATUS_UNSTARRED: 0,
   STATUS_STARRED: 1,
   get status() {
+    if (!this._shouldUpdateStarState()) {
+      return this.STATUS_UNSTARRED;
+    }
     if (this._pendingStmt)
       return this.STATUS_UPDATING;
-    let button = this.button;
-    return button && button.hasAttribute("starred") ? this.STATUS_STARRED
-                                                    : this.STATUS_UNSTARRED;
+    return this.button.hasAttribute("starred") ? this.STATUS_STARRED
+                                               : this.STATUS_UNSTARRED;
   },
 
   get _starredTooltip()
@@ -982,6 +1034,15 @@ let BookmarkingUI = {
     delete this._unstarredTooltip;
     return this._unstarredTooltip =
       gNavigatorBundle.getString("starButtonOff.tooltip");
+  },
+
+  /**
+   * The type of the area in which the button is currently located.
+   * When in the panel, we don't update the button's icon.
+   */
+  _currentAreaType: null,
+  _shouldUpdateStarState: function() {
+    return this._currentAreaType == CustomizableUI.TYPE_TOOLBAR;
   },
 
   /**
@@ -1000,12 +1061,22 @@ let BookmarkingUI = {
     if (event.target != event.currentTarget)
       return;
 
-    let widget = CustomizableUI.getWidget("bookmarks-menu-button")
+    // Ideally this code would never be reached, but if you click the outer
+    // button's border, some cpp code for the menu button's so-called XBL binding
+    // decides to open the popup even though the dropmarker is invisible.
+    if (this._currentAreaType == CustomizableUI.TYPE_MENU_PANEL) {
+      this._showSubview();
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
+    let widget = CustomizableUI.getWidget(this.BOOKMARK_BUTTON_ID)
                                .forWindow(window);
     if (widget.overflowed) {
       // Don't open a popup in the overflow popup, rather just open the Library.
       event.preventDefault();
-      widget.node.removeAttribute("noautoclose");
+      widget.node.removeAttribute("closemenu");
       PlacesCommandHook.showPlacesOrganizer("BookmarksMenu");
       return;
     }
@@ -1028,11 +1099,24 @@ let BookmarkingUI = {
     }
   },
 
+  attachPlacesView: function(event, node) {
+    // If the view is already there, bail out early.
+    if (node.parentNode._placesView)
+      return;
+
+    new PlacesMenu(event, "place:folder=BOOKMARKS_MENU", {
+      extraClasses: {
+        mainLevel: "subviewbutton"
+      },
+      insertionPoint: ".panel-subview-footer"
+    });
+  },
+
   /**
    * Handles star styling based on page proxy state changes.
    */
   onPageProxyStateChanged: function BUI_onPageProxyStateChanged(aState) {
-    if (!this.star) {
+    if (!this._shouldUpdateStarState() || !this.star) {
       return;
     }
 
@@ -1043,53 +1127,104 @@ let BookmarkingUI = {
     }
     else {
       this.star.removeAttribute("disabled");
+      this._updateStar();
     }
     this._updateToolbarStyle();
   },
 
+  _updateCustomizationState: function BUI__updateCustomizationState() {
+    let placement = CustomizableUI.getPlacementOfWidget(this.BOOKMARK_BUTTON_ID);
+    this._currentAreaType = placement && CustomizableUI.getAreaType(placement.area);
+  },
+
   _updateToolbarStyle: function BUI__updateToolbarStyle() {
-    let button = this.button;
-    if (!button)
-      return;
-
-    let personalToolbar = document.getElementById("PersonalToolbar");
-    let onPersonalToolbar = button.parentNode == personalToolbar ||
-                            button.parentNode.parentNode == personalToolbar;
-
-    if (onPersonalToolbar) {
-      button.classList.add("bookmark-item");
-      button.classList.remove("toolbarbutton-1");
+    let onPersonalToolbar = false;
+    if (this._currentAreaType == CustomizableUI.TYPE_TOOLBAR) {
+      let personalToolbar = document.getElementById("PersonalToolbar");
+      onPersonalToolbar = this.button.parentNode == personalToolbar ||
+                          this.button.parentNode.parentNode == personalToolbar;
     }
-    else {
-      button.classList.remove("bookmark-item");
-      button.classList.add("toolbarbutton-1");
-    }
+
+    if (onPersonalToolbar)
+      this.button.classList.add("bookmark-item");
+    else
+      this.button.classList.remove("bookmark-item");
   },
 
   _uninitView: function BUI__uninitView() {
     // When an element with a placesView attached is removed and re-inserted,
     // XBL reapplies the binding causing any kind of issues and possible leaks,
     // so kill current view and let popupshowing generate a new one.
-    let button = this.button;
-    if (button && button._placesView)
-      button._placesView.uninit();
+    if (this.button._placesView)
+      this.button._placesView.uninit();
   },
 
-  customizeStart: function BUI_customizeStart() {
-    this._uninitView();
+  onCustomizeStart: function BUI_customizeStart(aWindow) {
+    if (aWindow == window) {
+      this._uninitView();
+      this._isCustomizing = true;
+    }
   },
 
-  customizeChange: function BUI_customizeChange() {
+  onWidgetAdded: function BUI_widgetAdded(aWidgetId) {
+    if (aWidgetId == this.BOOKMARK_BUTTON_ID) {
+      this._onWidgetWasMoved();
+    }
+  },
+
+  onWidgetRemoved: function BUI_widgetRemoved(aWidgetId) {
+    if (aWidgetId == this.BOOKMARK_BUTTON_ID) {
+      this._onWidgetWasMoved();
+    }
+  },
+
+  onWidgetReset: function BUI_widgetReset(aNode, aContainer) {
+    if (aNode == this.button) {
+      this._onWidgetWasMoved();
+    }
+  },
+
+  onWidgetUndoMove: function BUI_undoWidgetUndoMove(aNode, aContainer) {
+    if (aNode == this.button) {
+      this._onWidgetWasMoved();
+    }
+  },
+
+  _onWidgetWasMoved: function BUI_widgetWasMoved() {
+    let usedToUpdateStarState = this._shouldUpdateStarState();
+    this._updateCustomizationState();
+    if (!usedToUpdateStarState && this._shouldUpdateStarState()) {
+      this.updateStarState();
+    } else if (usedToUpdateStarState && !this._shouldUpdateStarState()) {
+      this._updateStar();
+    }
+    // If we're moved outside of customize mode, we need to uninit
+    // our view so it gets reconstructed.
+    if (!this._isCustomizing) {
+      this._uninitView();
+    }
     this._updateToolbarStyle();
   },
 
-  customizeDone: function BUI_customizeDone() {
-    this.onToolbarVisibilityChange();
-    this._updateToolbarStyle();
+  onCustomizeEnd: function BUI_customizeEnd(aWindow) {
+    if (aWindow == window) {
+      this._isCustomizing = false;
+      this.onToolbarVisibilityChange();
+      this._updateToolbarStyle();
+    }
+  },
+
+  init: function() {
+    CustomizableUI.addListener(this);
+    this._updateCustomizationState();
   },
 
   _hasBookmarksObserver: false,
+  _itemIds: [],
   uninit: function BUI_uninit() {
+    this._updateBookmarkPageMenuItem(true);
+    CustomizableUI.removeListener(this);
+
     this._uninitView();
 
     if (this._hasBookmarksObserver) {
@@ -1102,11 +1237,14 @@ let BookmarkingUI = {
     }
   },
 
-  updateStarState: function BUI_updateStarState() {
-    if (!this.button || (this._uri && gBrowser.currentURI.equals(this._uri))) {
+  onLocationChange: function BUI_onLocationChange() {
+    if (this._uri && gBrowser.currentURI.equals(this._uri)) {
       return;
     }
+    this.updateStarState();
+  },
 
+  updateStarState: function BUI_updateStarState() {
     // Reset tracked values.
     this._uri = gBrowser.currentURI;
     this._itemIds = [];
@@ -1152,18 +1290,88 @@ let BookmarkingUI = {
   },
 
   _updateStar: function BUI__updateStar() {
-    let button = this.button;
-    if (!button)
+    if (!this._shouldUpdateStarState()) {
+      if (this.button.hasAttribute("starred")) {
+        this.button.removeAttribute("starred");
+        this.button.removeAttribute("buttontooltiptext");
+      }
       return;
+    }
 
     if (this._itemIds.length > 0) {
-      button.setAttribute("starred", "true");
-      button.setAttribute("buttontooltiptext", this._starredTooltip);
+      this.button.setAttribute("starred", "true");
+      this.button.setAttribute("buttontooltiptext", this._starredTooltip);
     }
     else {
-      button.removeAttribute("starred");
-      button.setAttribute("buttontooltiptext", this._unstarredTooltip);
+      this.button.removeAttribute("starred");
+      this.button.setAttribute("buttontooltiptext", this._unstarredTooltip);
     }
+  },
+
+  /**
+   * forceReset is passed when we're destroyed and the label should go back
+   * to the default (Bookmark This Page) for OS X.
+   */
+  _updateBookmarkPageMenuItem: function BUI__updateBookmarkPageMenuItem(forceReset) {
+    let isStarred = !forceReset && this._itemIds.length > 0;
+    let label = isStarred ? "editlabel" : "bookmarklabel";
+    this.broadcaster.setAttribute("label", this.broadcaster.getAttribute(label));
+  },
+
+  onMainMenuPopupShowing: function BUI_onMainMenuPopupShowing(event) {
+    this._updateBookmarkPageMenuItem();
+    PlacesCommandHook.updateBookmarkAllTabsCommand();
+  },
+
+  _showBookmarkedNotification: function BUI_showBookmarkedNotification() {
+
+    if (this._notificationTimeout) {
+      clearTimeout(this._notificationTimeout);
+    }
+
+    if (this.notifier.style.transform == '') {
+      let isRTL = getComputedStyle(this.button).direction == "rtl";
+      let buttonRect = this.button.getBoundingClientRect();
+      let notifierRect = this.notifier.getBoundingClientRect();
+      let topDiff = buttonRect.top - notifierRect.top;
+      let leftDiff = buttonRect.left - notifierRect.left;
+      let heightDiff = buttonRect.height - notifierRect.height;
+      let widthDiff = buttonRect.width - notifierRect.width;
+      let translateX = (leftDiff + .5 * widthDiff) + "px";
+      let translateY = (topDiff + .5 * heightDiff) + "px";
+      let transform = "translate(" +  translateX + ", " + translateY + ")";
+      if (isRTL) {
+        transform += " scaleX(-1)";
+      }
+      this.notifier.style.transform = transform;
+    }
+
+    let isInBookmarksToolbar = this.button.classList.contains("bookmark-item");
+    if (isInBookmarksToolbar)
+      this.notifier.setAttribute("in-bookmarks-toolbar", true);
+
+    let isInOverflowPanel = this.button.getAttribute("overflowedItem") == "true";
+    if (!isInOverflowPanel) {
+      this.notifier.setAttribute("notification", "finish");
+      this.button.setAttribute("notification", "finish");
+    }
+
+    this._notificationTimeout = setTimeout( () => {
+      this.notifier.removeAttribute("notification");
+      this.notifier.removeAttribute("in-bookmarks-toolbar");
+      this.button.removeAttribute("notification");
+      this.notifier.style.transform = '';
+    }, 1000);
+  },
+
+  _showSubview: function() {
+    let view = document.getElementById("PanelUI-bookmarks");
+    view.addEventListener("ViewShowing", this);
+    view.addEventListener("ViewHiding", this);
+    let anchor = document.getElementById(this.BOOKMARK_BUTTON_ID);
+    anchor.setAttribute("closemenu", "none");
+    PanelUI.showSubView("PanelUI-bookmarks", anchor,
+                        CustomizableUI.AREA_PANEL);
   },
 
   onCommand: function BUI_onCommand(aEvent) {
@@ -1172,33 +1380,44 @@ let BookmarkingUI = {
     }
 
     // Handle special case when the button is in the panel.
-    let widgetGroup = CustomizableUI.getWidget("bookmarks-menu-button");
-    let widget = widgetGroup.forWindow(window);
-    if (widgetGroup.areaType == CustomizableUI.TYPE_MENU_PANEL) {
-      let view = document.getElementById("PanelUI-bookmarks");
-      view.addEventListener("ViewShowing", this.onPanelMenuViewShowing);
-      view.addEventListener("ViewHiding", this.onPanelMenuViewHiding);
-      widget.node.setAttribute("noautoclose", "true");
-      PanelUI.showSubView("PanelUI-bookmarks", widget.node,
-                          CustomizableUI.AREA_PANEL);
+    let isBookmarked = this._itemIds.length > 0;
+
+    if (this._currentAreaType == CustomizableUI.TYPE_MENU_PANEL) {
+      this._showSubview();
       return;
     }
-    else if (widget.overflowed) {
+    let widget = CustomizableUI.getWidget(this.BOOKMARK_BUTTON_ID)
+                               .forWindow(window);
+    if (widget.overflowed) {
       // Allow to close the panel if the page is already bookmarked, cause
       // we are going to open the edit bookmark panel.
-      if (this._itemIds.length > 0)
-        widget.node.removeAttribute("noautoclose");
+      if (isBookmarked)
+        widget.node.removeAttribute("closemenu");
       else
-        widget.node.setAttribute("noautoclose", "true");
+        widget.node.setAttribute("closemenu", "none");
     }
 
     // Ignore clicks on the star if we are updating its state.
     if (!this._pendingStmt) {
-      PlacesCommandHook.bookmarkCurrentPage(this._itemIds.length > 0);
+      if (!isBookmarked)
+        this._showBookmarkedNotification();
+      PlacesCommandHook.bookmarkCurrentPage(isBookmarked);
+    }
+  },
+
+  handleEvent: function BUI_handleEvent(aEvent) {
+    switch (aEvent.type) {
+      case "ViewShowing":
+        this.onPanelMenuViewShowing(aEvent);
+        break;
+      case "ViewHiding":
+        this.onPanelMenuViewHiding(aEvent);
+        break;
     }
   },
 
   onPanelMenuViewShowing: function BUI_onViewShowing(aEvent) {
+    this._updateBookmarkPageMenuItem();
     // Update checked status of the toolbar toggle.
     let viewToolbar = document.getElementById("panelMenu_viewBookmarksToolbar");
     let personalToolbar = document.getElementById("PersonalToolbar");
@@ -1209,12 +1428,18 @@ let BookmarkingUI = {
     // Setup the Places view.
     this._panelMenuView = new PlacesPanelMenuView("place:folder=BOOKMARKS_MENU",
                                                   "panelMenu_bookmarksMenu",
-                                                  "panelMenu_bookmarksMenu");
+                                                  "panelMenu_bookmarksMenu", {
+                                                    extraClasses: {
+                                                      mainLevel: "subviewbutton"
+                                                    }
+                                                  });
+    aEvent.target.removeEventListener("ViewShowing", this);
   },
 
   onPanelMenuViewHiding: function BUI_onViewHiding(aEvent) {
     this._panelMenuView.uninit();
     delete this._panelMenuView;
+    aEvent.target.removeEventListener("ViewHiding", this);
   },
 
   onPanelMenuViewCommand: function BUI_onPanelMenuViewCommand(aEvent, aView) {
@@ -1231,50 +1456,50 @@ let BookmarkingUI = {
   // nsINavBookmarkObserver
   onItemAdded: function BUI_onItemAdded(aItemId, aParentId, aIndex, aItemType,
                                         aURI) {
-    if (!this.button) {
-      return;
-    }
-
     if (aURI && aURI.equals(this._uri)) {
       // If a new bookmark has been added to the tracked uri, register it.
       if (this._itemIds.indexOf(aItemId) == -1) {
         this._itemIds.push(aItemId);
-        this._updateStar();
+        // Only need to update the UI if it wasn't marked as starred before:
+        if (this._itemIds.length == 1) {
+          this._updateStar();
+        }
       }
     }
   },
 
   onItemRemoved: function BUI_onItemRemoved(aItemId) {
-    if (!this.button) {
-      return;
-    }
-
     let index = this._itemIds.indexOf(aItemId);
     // If one of the tracked bookmarks has been removed, unregister it.
     if (index != -1) {
       this._itemIds.splice(index, 1);
-      this._updateStar();
+      // Only need to update the UI if the page is no longer starred
+      if (this._itemIds.length == 0) {
+        this._updateStar();
+      }
     }
   },
 
   onItemChanged: function BUI_onItemChanged(aItemId, aProperty,
                                             aIsAnnotationProperty, aNewValue) {
-    if (!this.button) {
-      return;
-    }
-
     if (aProperty == "uri") {
       let index = this._itemIds.indexOf(aItemId);
       // If the changed bookmark was tracked, check if it is now pointing to
       // a different uri and unregister it.
       if (index != -1 && aNewValue != this._uri.spec) {
         this._itemIds.splice(index, 1);
-        this._updateStar();
+        // Only need to update the UI if the page is no longer starred
+        if (this._itemIds.length == 0) {
+          this._updateStar();
+        }
       }
       // If another bookmark is now pointing to the tracked uri, register it.
       else if (index == -1 && aNewValue == this._uri.spec) {
         this._itemIds.push(aItemId);
-        this._updateStar();
+        // Only need to update the UI if it wasn't marked as starred before:
+        if (this._itemIds.length == 1) {
+          this._updateStar();
+        }
       }
     }
   },
@@ -1284,6 +1509,47 @@ let BookmarkingUI = {
   onBeforeItemRemoved: function () {},
   onItemVisited: function () {},
   onItemMoved: function () {},
+
+  // CustomizableUI events:
+  _starButtonLabel: null,
+  get _starButtonOverflowedLabel() {
+    delete this._starButtonOverflowedLabel;
+    return this._starButtonOverflowedLabel =
+      gNavigatorBundle.getString("starButtonOverflowed.label");
+  },
+  get _starButtonOverflowedStarredLabel() {
+    delete this._starButtonOverflowedStarredLabel;
+    return this._starButtonOverflowedStarredLabel =
+      gNavigatorBundle.getString("starButtonOverflowedStarred.label");
+  },
+  onWidgetOverflow: function(aNode, aContainer) {
+    let win = aNode.ownerDocument.defaultView;
+    if (aNode.id != this.BOOKMARK_BUTTON_ID || win != window)
+      return;
+
+    let currentLabel = aNode.getAttribute("label");
+    if (!this._starButtonLabel)
+      this._starButtonLabel = currentLabel;
+
+    if (currentLabel == this._starButtonLabel) {
+      let desiredLabel = this._itemIds.length > 0 ? this._starButtonOverflowedStarredLabel
+                                                 : this._starButtonOverflowedLabel;
+      aNode.setAttribute("label", desiredLabel);
+    }
+  },
+
+  onWidgetUnderflow: function(aNode, aContainer) {
+    let win = aNode.ownerDocument.defaultView;
+    if (aNode.id != this.BOOKMARK_BUTTON_ID || win != window)
+      return;
+
+    // The view gets broken by being removed and reinserted. Uninit
+    // here so popupshowing will generate a new one:
+    this._uninitView();
+
+    if (aNode.getAttribute("label") != this._starButtonLabel)
+      aNode.setAttribute("label", this._starButtonLabel);
+  },
 
   QueryInterface: XPCOMUtils.generateQI([
     Ci.nsINavBookmarkObserver

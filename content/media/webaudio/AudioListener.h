@@ -10,26 +10,27 @@
 #include "nsWrapperCache.h"
 #include "nsCycleCollectionParticipant.h"
 #include "mozilla/Attributes.h"
-#include "EnableWebAudioCheck.h"
 #include "nsAutoPtr.h"
 #include "ThreeDPoint.h"
 #include "AudioContext.h"
 #include "PannerNode.h"
 #include "WebAudioUtils.h"
 #include "js/TypeDecls.h"
+#include "mozilla/MemoryReporting.h"
 
 namespace mozilla {
 
 namespace dom {
 
-class AudioListener MOZ_FINAL : public nsWrapperCache,
-                                public EnableWebAudioCheck
+class AudioListener MOZ_FINAL : public nsWrapperCache
 {
 public:
   explicit AudioListener(AudioContext* aContext);
 
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(AudioListener)
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(AudioListener)
+
+  size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
   AudioContext* GetParentObject() const
   {

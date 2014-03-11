@@ -587,9 +587,13 @@ LinearScanAllocator::populateSafepoints()
 
                 // If the payload is an argument, we'll scan that explicitly as
                 // part of the frame. It is therefore safe to not add any
-                // safepoint entry.
-                if (payloadAlloc->isArgument())
+                // safepoint entry, as long as the vreg does not have a stack
+                // slot as canonical spill slot.
+                if (payloadAlloc->isArgument() &&
+                    (!payload->canonicalSpill() || payload->canonicalSpill() == payloadAlloc))
+                {
                     continue;
+                }
 
                 if (isSpilledAt(typeInterval, inputOf(ins)) &&
                     isSpilledAt(payloadInterval, inputOf(ins)))
@@ -767,7 +771,13 @@ LinearScanAllocator::assign(LAllocation allocation)
         }
     }
 
-    if (reg && allocation.isMemory()) {
+    bool useAsCanonicalSpillSlot = allocation.isMemory();
+    // Only canonically spill argument values when frame arguments are not
+    // modified in the body.
+    if (mir->modifiesFrameArguments())
+        useAsCanonicalSpillSlot = allocation.isStackSlot();
+
+    if (reg && useAsCanonicalSpillSlot) {
         if (reg->canonicalSpill()) {
             JS_ASSERT(allocation == *reg->canonicalSpill());
 
@@ -1069,7 +1079,7 @@ LinearScanAllocator::findBestBlockedRegister(CodePosition *nextUsed)
         LAllocation *alloc = i->getAllocation();
         if (alloc->isRegister(needFloat)) {
             AnyRegister reg = alloc->toRegister();
-            if (i->start().ins() == current->start().ins()) {
+            if (i->start() == current->start()) {
                 nextUsePos[reg.code()] = CodePosition::MIN;
                 IonSpew(IonSpew_RegAlloc, "   Disqualifying %s due to recency", reg.name());
             } else if (nextUsePos[reg.code()] != CodePosition::MIN) {

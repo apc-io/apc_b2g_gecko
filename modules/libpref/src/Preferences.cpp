@@ -155,7 +155,7 @@ NS_IMPL_ISUPPORTS1(ValueObserver, nsIObserver)
 NS_IMETHODIMP
 ValueObserver::Observe(nsISupports     *aSubject,
                        const char      *aTopic,
-                       const PRUnichar *aData)
+                       const char16_t *aData)
 {
   NS_ASSERTION(!nsCRT::strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID),
                "invalid topic");
@@ -301,7 +301,7 @@ PreferenceServiceReporter::CollectReports(nsIMemoryReporterCallback* aCb,
     } while (0)
 
   REPORT(NS_LITERAL_CSTRING("explicit/preferences"),
-         nsIMemoryReporter::KIND_HEAP, nsIMemoryReporter::UNITS_BYTES,
+         KIND_HEAP, UNITS_BYTES,
          Preferences::SizeOfIncludingThisAndOtherStuff(PreferenceServiceMallocSizeOf),
          "Memory used by the preferences system.");
 
@@ -323,26 +323,22 @@ PreferenceServiceReporter::CollectReports(nsIMemoryReporterCallback* aCb,
                                 "referent(pref=%s)", suspect.get());
 
     REPORT(suspectPath,
-           nsIMemoryReporter::KIND_OTHER, nsIMemoryReporter::UNITS_COUNT,
-           totalReferentCount,
+           KIND_OTHER, UNITS_COUNT, totalReferentCount,
            "A preference with a suspiciously large number "
            "referents (symptom of a leak).");
   }
 
   REPORT(NS_LITERAL_CSTRING("preference-service/referent/strong"),
-         nsIMemoryReporter::KIND_OTHER, nsIMemoryReporter::UNITS_COUNT,
-         referentCount.numStrong,
+         KIND_OTHER, UNITS_COUNT, referentCount.numStrong,
          "The number of strong referents held by the preference service.");
 
   REPORT(NS_LITERAL_CSTRING("preference-service/referent/weak/alive"),
-         nsIMemoryReporter::KIND_OTHER, nsIMemoryReporter::UNITS_COUNT,
-         referentCount.numWeakAlive,
+         KIND_OTHER, UNITS_COUNT, referentCount.numWeakAlive,
          "The number of weak referents held by the preference service "
          "that are still alive.");
 
   REPORT(NS_LITERAL_CSTRING("preference-service/referent/weak/dead"),
-         nsIMemoryReporter::KIND_OTHER, nsIMemoryReporter::UNITS_COUNT,
-         referentCount.numWeakDead,
+         KIND_OTHER, UNITS_COUNT, referentCount.numWeakDead,
          "The number of weak referents held by the preference service "
          "that are dead.");
 
@@ -406,6 +402,10 @@ Preferences::GetInstanceForService()
 bool
 Preferences::InitStaticMembers()
 {
+#ifndef MOZ_B2G
+  MOZ_ASSERT(NS_IsMainThread());
+#endif
+
   if (!sShutdown && !sPreferences) {
     nsCOMPtr<nsIPrefService> prefService =
       do_GetService(NS_PREFSERVICE_CONTRACTID);
@@ -542,7 +542,7 @@ Preferences::ResetAndReadUserPrefs()
 
 NS_IMETHODIMP
 Preferences::Observe(nsISupports *aSubject, const char *aTopic,
-                     const PRUnichar *someData)
+                     const char16_t *someData)
 {
   if (XRE_GetProcessType() == GeckoProcessType_Content)
     return NS_ERROR_NOT_AVAILABLE;
@@ -1256,8 +1256,6 @@ static nsresult pref_InitInitialObjects()
 #elif defined(_AIX)
     , "aix.js"
 #endif
-#elif defined(XP_OS2)
-    "os2pref.js"
 #elif defined(XP_BEOS)
     "beos.js"
 #endif
@@ -1468,7 +1466,7 @@ Preferences::SetCString(const char* aPref, const nsACString &aValue)
 
 // static
 nsresult
-Preferences::SetString(const char* aPref, const PRUnichar* aValue)
+Preferences::SetString(const char* aPref, const char16_t* aValue)
 {
   ENSURE_MAIN_PROCESS("Cannot SetString from content process:", aPref);
   NS_ENSURE_TRUE(InitStaticMembers(), NS_ERROR_NOT_AVAILABLE);

@@ -6,7 +6,7 @@
 #include "nsMathMLmactionFrame.h"
 #include "nsCOMPtr.h"
 #include "nsPresContext.h"
-#include "nsINameSpaceManager.h"
+#include "nsNameSpaceManager.h"
 #include "prprf.h"         // For PR_snprintf()
 #include "nsIDocShell.h"
 #include "nsIDocShellTreeOwner.h"
@@ -131,8 +131,7 @@ nsMathMLmactionFrame::GetSelectedFrame()
     return mSelectedFrame;
   }
 
-  GetAttribute(mContent, mPresentationData.mstyle, nsGkAtoms::selection_,
-               value);
+  mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::selection_, value);
   if (!value.IsEmpty()) {
     nsresult errorCode;
     selection = value.ToInteger(&errorCode);
@@ -173,7 +172,7 @@ nsMathMLmactionFrame::GetSelectedFrame()
   return mSelectedFrame;
 }
 
-NS_IMETHODIMP
+nsresult
 nsMathMLmactionFrame::SetInitialChildList(ChildListID     aListID,
                                           nsFrameList&    aChildList)
 {
@@ -196,7 +195,7 @@ nsMathMLmactionFrame::SetInitialChildList(ChildListID     aListID,
   return rv;
 }
 
-NS_IMETHODIMP
+nsresult
 nsMathMLmactionFrame::AttributeChanged(int32_t  aNameSpaceID,
                                        nsIAtom* aAttribute,
                                        int32_t  aModType)

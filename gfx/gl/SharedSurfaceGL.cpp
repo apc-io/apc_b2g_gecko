@@ -8,6 +8,8 @@
 #include "GLBlitHelper.h"
 #include "ScopedGLHelpers.h"
 #include "gfxImageSurface.h"
+#include "mozilla/gfx/2D.h"
+#include "GLReadTexImageHelper.h"
 
 using namespace mozilla::gfx;
 
@@ -243,7 +245,7 @@ SurfaceFactory_GL::ChooseBufferBits(const SurfaceCaps& caps,
 SharedSurface_Basic*
 SharedSurface_Basic::Create(GLContext* gl,
                             const GLFormats& formats,
-                            const gfxIntSize& size,
+                            const IntSize& size,
                             bool hasAlpha)
 {
     gl->MakeCurrent();
@@ -252,18 +254,18 @@ SharedSurface_Basic::Create(GLContext* gl,
                                formats.color_texType,
                                size);
 
-    gfxImageFormat format = gfxImageFormatRGB24;
+    SurfaceFormat format = SurfaceFormat::B8G8R8X8;
     switch (formats.color_texInternalFormat) {
     case LOCAL_GL_RGB:
     case LOCAL_GL_RGB8:
         if (formats.color_texType == LOCAL_GL_UNSIGNED_SHORT_5_6_5)
-            format = gfxImageFormatRGB16_565;
+            format = SurfaceFormat::R5G6B5;
         else
-            format = gfxImageFormatRGB24;
+            format = SurfaceFormat::B8G8R8X8;
         break;
     case LOCAL_GL_RGBA:
     case LOCAL_GL_RGBA8:
-        format = gfxImageFormatARGB32;
+        format = SurfaceFormat::B8G8R8A8;
         break;
     default:
         MOZ_CRASH("Unhandled Tex format.");
@@ -272,18 +274,35 @@ SharedSurface_Basic::Create(GLContext* gl,
 }
 
 SharedSurface_Basic::SharedSurface_Basic(GLContext* gl,
-                                         const gfxIntSize& size,
+                                         const IntSize& size,
                                          bool hasAlpha,
-                                         gfxImageFormat format,
+                                         SurfaceFormat format,
                                          GLuint tex)
     : SharedSurface_GL(SharedSurfaceType::Basic,
                        AttachmentType::GLTexture,
                        gl,
                        size,
                        hasAlpha)
-    , mTex(tex)
+    , mTex(tex), mFB(0)
 {
-    mData = new gfxImageSurface(size, format);
+    mGL->MakeCurrent();
+    mGL->fGenFramebuffers(1, &mFB);
+
+    ScopedBindFramebuffer autoFB(mGL, mFB);
+    mGL->fFramebufferTexture2D(LOCAL_GL_FRAMEBUFFER,
+                              LOCAL_GL_COLOR_ATTACHMENT0,
+                              LOCAL_GL_TEXTURE_2D,
+                              mTex,
+                              0);
+
+    GLenum status = mGL->fCheckFramebufferStatus(LOCAL_GL_FRAMEBUFFER);
+    if (status != LOCAL_GL_FRAMEBUFFER_COMPLETE) {
+        mGL->fDeleteFramebuffers(1, &mFB);
+        mFB = 0;
+    }
+
+    mData = Factory::CreateDataSourceSurfaceWithStride(size, format,
+              GetAlignedStride<4>(size.width * BytesPerPixel(format)));
 }
 
 SharedSurface_Basic::~SharedSurface_Basic()
@@ -291,37 +310,55 @@ SharedSurface_Basic::~SharedSurface_Basic()
     if (!mGL->MakeCurrent())
         return;
 
-    GLuint tex = mTex;
-    mGL->fDeleteTextures(1, &tex);
+    if (mFB)
+        mGL->fDeleteFramebuffers(1, &mFB);
+
+    mGL->fDeleteTextures(1, &mTex);
 }
 
 void
 SharedSurface_Basic::Fence()
 {
-    MOZ_ASSERT(mData->GetSize() == mGL->OffscreenSize());
-
     mGL->MakeCurrent();
-    mData->Flush();
-    mGL->ReadScreenIntoImageSurface(mData);
-    mData->MarkDirty();
+
+    ScopedBindFramebuffer autoFB(mGL, mFB);
+
+    DataSourceSurface::MappedSurface map;
+    mData->Map(DataSourceSurface::MapType::WRITE, &map);
+    nsRefPtr<gfxImageSurface> wrappedData =
+      new gfxImageSurface(map.mData,
+                          ThebesIntSize(mData->GetSize()),
+                          map.mStride,
+                          SurfaceFormatToImageFormat(mData->GetFormat()));
+    ReadPixelsIntoImageSurface(mGL, wrappedData);
+    mData->Unmap();
 }
 
 
 
 SharedSurface_GLTexture*
 SharedSurface_GLTexture::Create(GLContext* prodGL,
-                             GLContext* consGL,
-                             const GLFormats& formats,
-                             const gfxIntSize& size,
-                             bool hasAlpha)
+                                GLContext* consGL,
+                                const GLFormats& formats,
+                                const gfx::IntSize& size,
+                                bool hasAlpha,
+                                GLuint texture)
 {
     MOZ_ASSERT(prodGL);
     MOZ_ASSERT(!consGL || prodGL->SharesWith(consGL));
 
     prodGL->MakeCurrent();
-    GLuint tex = CreateTextureForOffscreen(prodGL, formats, size);
 
-    return new SharedSurface_GLTexture(prodGL, consGL, size, hasAlpha, tex);
+    GLuint tex = texture;
+
+    bool ownsTex = false;
+
+    if (!tex) {
+      tex = CreateTextureForOffscreen(prodGL, formats, size);
+      ownsTex = true;
+    }
+
+    return new SharedSurface_GLTexture(prodGL, consGL, size, hasAlpha, tex, ownsTex);
 }
 
 SharedSurface_GLTexture::~SharedSurface_GLTexture()
@@ -329,8 +366,9 @@ SharedSurface_GLTexture::~SharedSurface_GLTexture()
     if (!mGL->MakeCurrent())
         return;
 
-    GLuint tex = mTex;
-    mGL->fDeleteTextures(1, &tex);
+    if (mOwnsTex) {
+        mGL->fDeleteTextures(1, &mTex);
+    }
 
     if (mSync) {
         mGL->fDeleteSync(mSync);

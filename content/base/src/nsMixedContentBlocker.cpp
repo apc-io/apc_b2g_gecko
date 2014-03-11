@@ -184,7 +184,7 @@ LogMixedContentMessage(MixedContentTypes aClassification,
   aContentLocation->GetSpec(locationSpec);
   NS_ConvertUTF8toUTF16 locationSpecUTF16(locationSpec);
 
-  const PRUnichar* strings[] = { locationSpecUTF16.get() };
+  const char16_t* strings[] = { locationSpecUTF16.get() };
   nsContentUtils::ReportToConsole(severityFlag, messageCategory, aRootDoc,
                                   nsContentUtils::eSECURITY_PROPERTIES,
                                   messageLookupKey.get(), strings, ArrayLength(strings));
@@ -242,6 +242,8 @@ nsMixedContentBlocker::ShouldLoad(uint32_t aContentType,
   // spoofing attacks (e.g. make a "grant permission" button look like a
   // "refuse permission" button).
   //
+  // TYPE_BEACON: Beacon requests are similar to TYPE_PING, but are default on.
+  //
   // TYPE_WEBSOCKET: The Websockets API requires browsers to
   // reject mixed-content websockets: "If secure is false but the origin of
   // the entry script has a scheme component that is itself a secure protocol,
@@ -285,6 +287,7 @@ nsMixedContentBlocker::ShouldLoad(uint32_t aContentType,
     case TYPE_MEDIA:
     case TYPE_OBJECT_SUBREQUEST:
     case TYPE_PING:
+    case TYPE_BEACON:
       classification = eMixedDisplay;
       break;
 

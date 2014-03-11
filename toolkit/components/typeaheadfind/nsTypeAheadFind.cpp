@@ -43,7 +43,7 @@
 #include "nsLayoutCID.h"
 #include "nsWidgetsCID.h"
 #include "nsIFormControl.h"
-#include "nsINameSpaceManager.h"
+#include "nsNameSpaceManager.h"
 #include "nsIWindowWatcher.h"
 #include "nsIObserverService.h"
 #include "nsFocusManager.h"
@@ -220,7 +220,7 @@ nsTypeAheadFind::CollapseSelection()
 
 NS_IMETHODIMP
 nsTypeAheadFind::Observe(nsISupports *aSubject, const char *aTopic,
-                         const PRUnichar *aData)
+                         const char16_t *aData)
 {
   if (!nsCRT::strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID))
     return PrefsReset();

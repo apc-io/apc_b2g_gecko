@@ -323,6 +323,75 @@ MediaElementChecker.prototype = {
   }
 };
 
+/**
+ * Query function for determining if any IP address is available for
+ * generating SDP.
+ *
+ * @return false if required additional network setup.
+ */
+function isNetworkReady() {
+  // for gonk platform
+  if ("nsINetworkInterfaceListService" in SpecialPowers.Ci) {
+    var listService = SpecialPowers.Cc["@mozilla.org/network/interface-list-service;1"]
+                        .getService(SpecialPowers.Ci.nsINetworkInterfaceListService);
+    var itfList = listService.getDataInterfaceList(
+          SpecialPowers.Ci.nsINetworkInterfaceListService.LIST_NOT_INCLUDE_MMS_INTERFACES |
+          SpecialPowers.Ci.nsINetworkInterfaceListService.LIST_NOT_INCLUDE_SUPL_INTERFACES);
+    var num = itfList.getNumberOfInterface();
+    for (var i = 0; i < num; i++) {
+      if (itfList.getInterface(i).ip) {
+        info("Network interface is ready with address: " + itfList.getInterface(i).ip);
+        return true;
+      }
+    }
+    // ip address is not available
+    info("Network interface is not ready, required additional network setup");
+    return false;
+  }
+  info("Network setup is not required");
+  return true;
+}
+
+/**
+ * Network setup utils for Gonk
+ *
+ * @return {object} providing functions for setup/teardown data connection
+ */
+function getNetworkUtils() {
+  var url = SimpleTest.getTestFileURL("NetworkPreparationChromeScript.js");
+  var script = SpecialPowers.loadChromeScript(url);
+
+  var utils = {
+    /**
+     * Utility for setting up data connection.
+     *
+     * @param aCallback callback after data connection is ready.
+     */
+    prepareNetwork: function(aCallback) {
+      script.addMessageListener('network-ready', function (message) {
+        info("Network interface is ready");
+        aCallback();
+      });
+      info("Setup network interface");
+      script.sendAsyncMessage("prepare-network", true);
+    },
+    /**
+     * Utility for tearing down data connection.
+     *
+     * @param aCallback callback after data connection is closed.
+     */
+    tearDownNetwork: function(aCallback) {
+      script.addMessageListener('network-disabled', function (message) {
+        ok(true, 'network-disabled');
+        script.destroy();
+        aCallback();
+      });
+      script.sendAsyncMessage("network-cleanup", true);
+    }
+  };
+
+  return utils;
+}
 
 /**
  * This class handles tests for peer connections.
@@ -349,6 +418,27 @@ function PeerConnectionTest(options) {
   options.is_local = "is_local" in options ? options.is_local : true;
   options.is_remote = "is_remote" in options ? options.is_remote : true;
 
+  var netTeardownCommand = null;
+  if (!isNetworkReady()) {
+    var utils = getNetworkUtils();
+    // Trigger network setup to obtain IP address before creating any PeerConnection.
+    utils.prepareNetwork(function() {
+      ok(isNetworkReady(),'setup network connection successfully');
+    });
+
+    netTeardownCommand = [
+      [
+        'TEARDOWN_NETWORK',
+        function(test) {
+          utils.tearDownNetwork(function() {
+            info('teardown network connection');
+            test.next();
+          });
+        }
+      ]
+    ];
+  }
+
   if (options.is_local)
     this.pcLocal = new PeerConnectionWrapper('pcLocal', options.config_pc1);
   else
@@ -368,6 +458,11 @@ function PeerConnectionTest(options) {
   }
   if (!options.is_remote) {
     this.chain.filterOut(/^PC_REMOTE/);
+  }
+
+  // Insert network teardown after testcase execution.
+  if (netTeardownCommand) {
+    this.chain.append(netTeardownCommand);
   }
 
   var self = this;
@@ -433,6 +528,11 @@ function PCT_createOffer(peer, onSuccess) {
   peer.createOffer(function (offer) {
     onSuccess(offer);
   });
+};
+
+PeerConnectionTest.prototype.setIdentityProvider =
+function(peer, provider, protocol, identity) {
+  peer.setIdentityProvider(provider, protocol, identity);
 };
 
 /**
@@ -670,7 +770,7 @@ DataChannelTest.prototype = Object.create(PeerConnectionTest.prototype, {
           });
         } else {
           check_next_test();
-	}
+        }
       });
     }
   },
@@ -958,6 +1058,7 @@ DataChannelWrapper.prototype = {
 function PeerConnectionWrapper(label, configuration) {
   this.configuration = configuration;
   this.label = label;
+  this.whenCreated = Date.now();
 
   this.constraints = [ ];
   this.offerConstraints = {};
@@ -976,8 +1077,20 @@ function PeerConnectionWrapper(label, configuration) {
   var self = this;
   // This enables tests to validate that the next ice state is the one they expect to happen
   this.next_ice_state = ""; // in most cases, the next state will be "checking", but in some tests "closed"
+  // This allows test to register their own callbacks for ICE connection state changes
+  this.ice_connection_callbacks = [ ];
+
   this._pc.oniceconnectionstatechange = function() {
       ok(self._pc.iceConnectionState != undefined, "iceConnectionState should not be undefined");
+      info(self + ": oniceconnectionstatechange fired, new state is: " + self._pc.iceConnectionState);
+      if (Object.keys(self.ice_connection_callbacks).length >= 1) {
+        var it = Iterator(self.ice_connection_callbacks);
+        var name = "";
+        var callback = "";
+        for ([name, callback] in it) {
+          callback();
+        }
+      }
       if (self.next_ice_state != "") {
         is(self._pc.iceConnectionState, self.next_ice_state, "iceConnectionState changed to '" +
            self.next_ice_state + "'");
@@ -994,10 +1107,16 @@ function PeerConnectionWrapper(label, configuration) {
    *        Event data which includes the stream to be added
    */
   this._pc.onaddstream = function (event) {
-    info(self + ": 'onaddstream' event fired for " + event.stream);
+    info(self + ": 'onaddstream' event fired for " + JSON.stringify(event.stream));
 
-    // TODO: Bug 834835 - Assume type is video until we get get{Audio,Video}Tracks.
-    self.attachMedia(event.stream, 'video', 'remote');
+    var type = '';
+    if (event.stream.getAudioTracks().length > 0) {
+      type = 'audio';
+    }
+    if (event.stream.getVideoTracks().length > 0) {
+      type += 'video';
+    }
+    self.attachMedia(event.stream, type, 'remote');
    };
 
   /**
@@ -1081,12 +1200,24 @@ PeerConnectionWrapper.prototype = {
   },
 
   /**
-   * Returns the remote signaling state.
+   * Returns the signaling state.
    *
    * @returns {object} The local description
    */
   get signalingState() {
     return this._pc.signalingState;
+  },
+  /**
+   * Returns the ICE connection state.
+   *
+   * @returns {object} The local description
+   */
+  get iceConnectionState() {
+    return this._pc.iceConnectionState;
+  },
+
+  setIdentityProvider: function(provider, protocol, identity) {
+      this._pc.setIdentityProvider(provider, protocol, identity);
   },
 
   /**
@@ -1317,6 +1448,74 @@ PeerConnectionWrapper.prototype = {
   },
 
   /**
+   * Returns if the ICE the connection state is "connected".
+   *
+   * @returns {boolean} True if the connection state is "connected", otherwise false.
+   */
+  isIceConnected : function PCW_isIceConnected() {
+    info("iceConnectionState: " + this.iceConnectionState);
+    return this.iceConnectionState === "connected";
+  },
+
+  /**
+   * Returns if the ICE the connection state is "checking".
+   *
+   * @returns {boolean} True if the connection state is "checking", otherwise false.
+   */
+  isIceChecking : function PCW_isIceChecking() {
+    return this.iceConnectionState === "checking";
+  },
+
+  /**
+   * Returns if the ICE the connection state is "new".
+   *
+   * @returns {boolean} True if the connection state is "new", otherwise false.
+   */
+  isIceNew : function PCW_isIceNew() {
+    return this.iceConnectionState === "new";
+  },
+
+  /**
+   * Checks if the ICE connection state still waits for a connection to get
+   * established.
+   *
+   * @returns {boolean} True if the connection state is "checking" or "new", 
+   *  otherwise false.
+   */
+  isIceConnectionPending : function PCW_isIceConnectionPending() {
+    return (this.isIceChecking() || this.isIceNew());
+  },
+
+  /**
+   * Registers a callback for the ICE connection state change and
+   * reports success (=connected) or failure via the callbacks.
+   * States "new" and "checking" are ignored.
+   *
+   * @param {function} onSuccess
+   *        Callback if ICE connection status is "connected".
+   * @param {function} onFailure
+   *        Callback if ICE connection reaches a different state than
+   *        "new", "checking" or "connected".
+   */
+  waitForIceConnected : function PCW_waitForIceConnected(onSuccess, onFailure) {
+    var self = this;
+    var mySuccess = onSuccess;
+    var myFailure = onFailure;
+
+    function iceConnectedChanged () {
+      if (self.isIceConnected()) {
+        delete self.ice_connection_callbacks["waitForIceConnected"];
+        mySuccess();
+      } else if (! self.isIceConnectionPending()) {
+        delete self.ice_connection_callbacks["waitForIceConnected"];
+        myFailure();
+      }
+    };
+
+    self.ice_connection_callbacks["waitForIceConnected"] = (function() {iceConnectedChanged()});
+  },
+
+  /**
    * Checks that we are getting the media streams we expect.
    *
    * @param {object} constraintsRemote
@@ -1353,6 +1552,137 @@ PeerConnectionWrapper.prototype = {
     }
 
     _checkMediaFlowPresent(0, onSuccess);
+  },
+
+  /**
+   * Check that stats are present by checking for known stats.
+   *
+   * @param {Function} onSuccess the success callback to return stats to
+   */
+  getStats : function PCW_getStats(selector, onSuccess) {
+    var self = this;
+
+    this._pc.getStats(selector, function(stats) {
+      info(self + ": Got stats: " + JSON.stringify(stats));
+      self._last_stats = stats;
+      onSuccess(stats);
+    }, unexpectedCallbackAndFinish());
+  },
+
+  /**
+   * Checks that we are getting the media streams we expect.
+   *
+   * @param {object} stats
+   *        The stats to check from this PeerConnectionWrapper
+   */
+  checkStats : function PCW_checkStats(stats) {
+    function toNum(obj) {
+      return obj? obj : 0;
+    }
+    function numTracks(streams) {
+      var n = 0;
+      streams.forEach(function(stream) {
+          n += stream.getAudioTracks().length + stream.getVideoTracks().length;
+        });
+      return n;
+    }
+
+    // Use spec way of enumerating stats
+    var counters = {};
+    for (var key in stats) {
+      if (stats.hasOwnProperty(key)) {
+        var res = stats[key];
+        // validate stats
+        ok(res.id == key, "Coherent stats id");
+        var nowish = Date.now() + 10000;        // TODO: severe drift observed
+        var minimum = this.whenCreated - 10000; // on Windows XP (Bug 979649)
+        ok(res.timestamp >= minimum,
+           "Valid " + (res.isRemote? "rtcp" : "rtp") + " timestamp " +
+               res.timestamp + " >= " + minimum + " (" +
+               (res.timestamp - minimum) + " ms)");
+        ok(res.timestamp <= nowish,
+           "Valid " + (res.isRemote? "rtcp" : "rtp") + " timestamp " +
+               res.timestamp + " <= " + nowish + " (" +
+               (res.timestamp - nowish) + " ms)");
+        if (!res.isRemote) {
+          counters[res.type] = toNum(counters[res.type]) + 1;
+
+          switch (res.type) {
+            case "inboundrtp":
+            case "outboundrtp": {
+              // ssrc is a 32 bit number returned as a string by spec
+              ok(res.ssrc.length > 0, "Ssrc has length");
+              ok(res.ssrc.length < 11, "Ssrc not lengthy");
+              ok(!/[^0-9]/.test(res.ssrc), "Ssrc numeric");
+              ok(parseInt(res.ssrc) < Math.pow(2,32), "Ssrc within limits");
+
+              if (res.type == "outboundrtp") {
+                ok(res.packetsSent !== undefined, "Rtp packetsSent");
+                // minimum fragment is 8 (from RFC 791)
+                ok(res.bytesSent >= res.packetsSent * 8, "Rtp bytesSent");
+              } else {
+                ok(res.packetsReceived !== undefined, "Rtp packetsReceived");
+                ok(res.bytesReceived >= res.packetsReceived * 8, "Rtp bytesReceived");
+              }
+              if (res.remoteId) {
+                var rem = stats[res.remoteId];
+                ok(rem.isRemote, "Remote is rtcp");
+                ok(rem.remoteId == res.id, "Remote backlink match");
+                if(res.type == "outboundrtp") {
+                  ok(rem.type == "inboundrtp", "Rtcp is inbound");
+                  ok(rem.packetsReceived !== undefined, "Rtcp packetsReceived");
+                  // TODO: Re-enable once Bug 980497 is fixed
+                  // ok(rem.packetsReceived <= res.packetsSent, "No more than sent");
+                  ok(rem.packetsLost !== undefined, "Rtcp packetsLost");
+                  ok(rem.bytesReceived >= rem.packetsReceived * 8, "Rtcp bytesReceived");
+                  // TODO: Re-enable once Bug 980497 is fixed
+                  // ok(rem.bytesReceived <= res.bytesSent, "No more than sent bytes");
+                  ok(rem.jitter !== undefined, "Rtcp jitter");
+                } else {
+                  ok(rem.type == "outboundrtp", "Rtcp is outbound");
+                  ok(rem.packetsSent !== undefined, "Rtcp packetsSent");
+                  // We may have received more than outdated Rtcp packetsSent
+                  ok(rem.bytesSent >= rem.packetsSent * 8, "Rtcp bytesSent");
+                }
+                ok(rem.ssrc == res.ssrc, "Remote ssrc match");
+              } else {
+                info("No rtcp info received yet");
+              }
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    // Use MapClass way of enumerating stats
+    var counters2 = {};
+    stats.forEach(function(res) {
+        if (!res.isRemote) {
+          counters2[res.type] = toNum(counters2[res.type]) + 1;
+        }
+      });
+    is(JSON.stringify(counters), JSON.stringify(counters2),
+       "Spec and MapClass variant of RTCStatsReport enumeration agree");
+    var nin = numTracks(this._pc.getRemoteStreams());
+    var nout = numTracks(this._pc.getLocalStreams());
+
+    // TODO(Bug 957145): Restore stronger inboundrtp test once Bug 948249 is fixed
+    //is(toNum(counters["inboundrtp"]), nin, "Have " + nin + " inboundrtp stat(s)");
+    ok(toNum(counters["inboundrtp"]) >= nin, "Have at least " + nin + " inboundrtp stat(s) *");
+
+    is(toNum(counters["outboundrtp"]), nout, "Have " + nout + " outboundrtp stat(s)");
+
+    var numLocalCandidates  = toNum(counters["localcandidate"]);
+    var numRemoteCandidates = toNum(counters["remotecandidate"]);
+    // If there are no tracks, there will be no stats either.
+    if (nin + nout > 0) {
+      ok(numLocalCandidates, "Have localcandidate stat(s)");
+      ok(numRemoteCandidates, "Have remotecandidate stat(s)");
+    } else {
+      is(numLocalCandidates, 0, "Have no localcandidate stats");
+      is(numRemoteCandidates, 0, "Have no remotecandidate stats");
+    }
   },
 
   /**

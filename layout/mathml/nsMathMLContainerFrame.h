@@ -79,16 +79,16 @@ public:
               ~(nsIFrame::eMathML | nsIFrame::eExcludesIgnorableWhitespace));
   }
 
-  NS_IMETHOD
+  virtual nsresult
   AppendFrames(ChildListID     aListID,
                nsFrameList&    aFrameList) MOZ_OVERRIDE;
 
-  NS_IMETHOD
+  virtual nsresult
   InsertFrames(ChildListID     aListID,
                nsIFrame*       aPrevFrame,
                nsFrameList&    aFrameList) MOZ_OVERRIDE;
 
-  NS_IMETHOD
+  virtual nsresult
   RemoveFrame(ChildListID     aListID,
               nsIFrame*       aOldFrame) MOZ_OVERRIDE;
 
@@ -106,20 +106,20 @@ public:
   GetIntrinsicWidthMetrics(nsRenderingContext* aRenderingContext,
                            nsHTMLReflowMetrics& aDesiredSize);
 
-  NS_IMETHOD
+  virtual nsresult
   Reflow(nsPresContext*          aPresContext,
          nsHTMLReflowMetrics&     aDesiredSize,
          const nsHTMLReflowState& aReflowState,
          nsReflowStatus&          aStatus) MOZ_OVERRIDE;
 
-  NS_IMETHOD
+  virtual nsresult
   WillReflow(nsPresContext* aPresContext) MOZ_OVERRIDE
   {
     mPresentationData.flags &= ~NS_MATHML_ERROR;
     return nsContainerFrame::WillReflow(aPresContext);
   }
 
-  NS_IMETHOD
+  virtual nsresult
   DidReflow(nsPresContext*           aPresContext,
             const nsHTMLReflowState*  aReflowState,
             nsDidReflowStatus         aStatus) MOZ_OVERRIDE
@@ -151,8 +151,8 @@ public:
   //    2b. If the automatic data to update affects us in some way, we ask our parent
   //        to re-layout its children using ReLayoutChildren(mParent);
   //        Therefore, there is an overhead here in that our siblings are re-laid
-  //        too (e.g., this happens with <mstyle>, <munder>, <mover>, <munderover>). 
-  NS_IMETHOD
+  //        too (e.g., this happens with <munder>, <mover>, <munderover>). 
+  virtual nsresult
   AttributeChanged(int32_t         aNameSpaceID,
                    nsIAtom*        aAttribute,
                    int32_t         aModType) MOZ_OVERRIDE;
@@ -247,8 +247,8 @@ public:
    * @param aValue The value for which the parse error occured.
    */
   nsresult
-  ReportParseError(const PRUnichar*           aAttribute,
-                   const PRUnichar*           aValue);
+  ReportParseError(const char16_t*           aAttribute,
+                   const char16_t*           aValue);
 
   /*
    * Helper to call ReportErrorToConsole when certain tags
@@ -271,7 +271,7 @@ public:
    */
   nsresult
   ReportErrorToConsole(const char*       aErrorMsgId,
-                       const PRUnichar** aParams = nullptr,
+                       const char16_t** aParams = nullptr,
                        uint32_t          aParamCount = 0);
 
   // helper method to reflow a child frame. We are inline frames, and we don't
@@ -338,6 +338,11 @@ public:
                                        int32_t         aLastChildIndex,
                                        uint32_t        aFlagsValues,
                                        uint32_t        aFlagsToUpdate);
+
+  // Sets flags on aFrame and all descendant frames
+  static void
+  PropagateFrameFlagFor(nsIFrame* aFrame,
+                        nsFrameState aFlags);
 
   // helper to let the rebuild of automatic data (presentation data
   // and embellishement data) walk through a subtree that may contain
@@ -406,11 +411,11 @@ public:
   NS_DECL_FRAMEARENA_HELPERS
 
   friend nsIFrame* NS_NewMathMLmathBlockFrame(nsIPresShell* aPresShell,
-          nsStyleContext* aContext, uint32_t aFlags);
+          nsStyleContext* aContext, nsFrameState aFlags);
 
   // beware, mFrames is not set by nsBlockFrame
   // cannot use mFrames{.FirstChild()|.etc} since the block code doesn't set mFrames
-  NS_IMETHOD
+  virtual nsresult
   SetInitialChildList(ChildListID     aListID,
                       nsFrameList&    aChildList) MOZ_OVERRIDE
   {
@@ -421,7 +426,7 @@ public:
     return rv;
   }
 
-  NS_IMETHOD
+  virtual nsresult
   AppendFrames(ChildListID     aListID,
                nsFrameList&    aFrameList) MOZ_OVERRIDE
   {
@@ -433,7 +438,7 @@ public:
     return rv;
   }
 
-  NS_IMETHOD
+  virtual nsresult
   InsertFrames(ChildListID     aListID,
                nsIFrame*       aPrevFrame,
                nsFrameList&    aFrameList) MOZ_OVERRIDE
@@ -446,7 +451,7 @@ public:
     return rv;
   }
 
-  NS_IMETHOD
+  virtual nsresult
   RemoveFrame(ChildListID     aListID,
               nsIFrame*       aOldFrame) MOZ_OVERRIDE
   {
@@ -480,7 +485,7 @@ public:
 
   friend nsIFrame* NS_NewMathMLmathInlineFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
-  NS_IMETHOD
+  virtual nsresult
   SetInitialChildList(ChildListID     aListID,
                       nsFrameList&    aChildList) MOZ_OVERRIDE
   {
@@ -491,7 +496,7 @@ public:
     return rv;
   }
 
-  NS_IMETHOD
+  virtual nsresult
   AppendFrames(ChildListID     aListID,
                nsFrameList&    aFrameList) MOZ_OVERRIDE
   {
@@ -503,7 +508,7 @@ public:
     return rv;
   }
 
-  NS_IMETHOD
+  virtual nsresult
   InsertFrames(ChildListID     aListID,
                nsIFrame*       aPrevFrame,
                nsFrameList&    aFrameList) MOZ_OVERRIDE
@@ -516,7 +521,7 @@ public:
     return rv;
   }
 
-  NS_IMETHOD
+  virtual nsresult
   RemoveFrame(ChildListID     aListID,
               nsIFrame*       aOldFrame) MOZ_OVERRIDE
   {

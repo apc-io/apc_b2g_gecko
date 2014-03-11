@@ -4,14 +4,13 @@
 
 #include "OGLShaderProgram.h"
 #include <stdint.h>                     // for uint32_t
-#include "gfxMatrix.h"                  // for gfxMatrix
+#include <sstream>                      // for ostringstream
 #include "gfxRect.h"                    // for gfxRect
 #include "mozilla/DebugOnly.h"          // for DebugOnly
 #include "nsAString.h"
 #include "nsAutoPtr.h"                  // for nsRefPtr
 #include "nsString.h"                   // for nsAutoCString
 #include "prenv.h"                      // for PR_GetEnv
-#include "OGLShaders.h"
 #include "Layers.h"
 #include "GLContext.h"
 
@@ -20,260 +19,344 @@ struct gfxRGBA;
 namespace mozilla {
 namespace layers {
 
+using namespace std;
+
 typedef ProgramProfileOGL::Argument Argument;
 
-// helper methods for GetProfileFor
+#define GAUSSIAN_KERNEL_HALF_WIDTH 11
+#define GAUSSIAN_KERNEL_STEP 0.2
+
 void
-AddCommonArgs(ProgramProfileOGL& aProfile)
+AddUniforms(ProgramProfileOGL& aProfile)
 {
-  aProfile.mUniforms.AppendElement(Argument("uLayerTransform"));
-  aProfile.mUniforms.AppendElement(Argument("uLayerQuadTransform"));
-  aProfile.mUniforms.AppendElement(Argument("uMatrixProj"));
-  aProfile.mHasMatrixProj = true;
-  aProfile.mUniforms.AppendElement(Argument("uRenderTargetOffset"));
-  aProfile.mAttributes.AppendElement(Argument("aVertexCoord"));
+    static const char *sKnownUniformNames[] = {
+        "uLayerTransform",
+        "uMaskQuadTransform",
+        "uLayerQuadTransform",
+        "uMatrixProj",
+        "uTextureTransform",
+        "uRenderTargetOffset",
+        "uLayerOpacity",
+        "uTexture",
+        "uYTexture",
+        "uCbTexture",
+        "uCrTexture",
+        "uBlackTexture",
+        "uWhiteTexture",
+        "uMaskTexture",
+        "uRenderColor",
+        "uTexCoordMultiplier",
+        "uTexturePass2",
+        nullptr
+    };
+
+    for (int i = 0; sKnownUniformNames[i] != nullptr; ++i) {
+        aProfile.mUniforms[i].mNameString = sKnownUniformNames[i];
+        aProfile.mUniforms[i].mName = (KnownUniform::KnownUniformName) i;
+    }
 }
+
 void
-AddCommonTextureArgs(ProgramProfileOGL& aProfile)
+ShaderConfigOGL::SetRenderColor(bool aEnabled)
 {
-  aProfile.mUniforms.AppendElement(Argument("uLayerOpacity"));
-  aProfile.mUniforms.AppendElement(Argument("uTexture"));
-  aProfile.mUniforms.AppendElement(Argument("uTextureTransform"));
-  aProfile.mAttributes.AppendElement(Argument("aTexCoord"));
+  SetFeature(ENABLE_RENDER_COLOR, aEnabled);
+}
+
+void
+ShaderConfigOGL::SetTextureTarget(GLenum aTarget)
+{
+  SetFeature(ENABLE_TEXTURE_EXTERNAL | ENABLE_TEXTURE_RECT, false);
+  switch (aTarget) {
+  case LOCAL_GL_TEXTURE_EXTERNAL:
+    SetFeature(ENABLE_TEXTURE_EXTERNAL, true);
+    break;
+  case LOCAL_GL_TEXTURE_RECTANGLE_ARB:
+    SetFeature(ENABLE_TEXTURE_RECT, true);
+    break;
+  }
+}
+
+void
+ShaderConfigOGL::SetRBSwap(bool aEnabled)
+{
+  SetFeature(ENABLE_TEXTURE_RB_SWAP, aEnabled);
+}
+
+void
+ShaderConfigOGL::SetNoAlpha(bool aEnabled)
+{
+  SetFeature(ENABLE_TEXTURE_NO_ALPHA, aEnabled);
+}
+
+void
+ShaderConfigOGL::SetOpacity(bool aEnabled)
+{
+  SetFeature(ENABLE_OPACITY, aEnabled);
+}
+
+void
+ShaderConfigOGL::SetYCbCr(bool aEnabled)
+{
+  SetFeature(ENABLE_TEXTURE_YCBCR, aEnabled);
+}
+
+void
+ShaderConfigOGL::SetComponentAlpha(bool aEnabled)
+{
+  SetFeature(ENABLE_TEXTURE_COMPONENT_ALPHA, aEnabled);
+}
+
+void
+ShaderConfigOGL::SetColorMatrix(bool aEnabled)
+{
+  SetFeature(ENABLE_COLOR_MATRIX, aEnabled);
+}
+
+void
+ShaderConfigOGL::SetBlur(bool aEnabled)
+{
+  SetFeature(ENABLE_BLUR, aEnabled);
+}
+
+void
+ShaderConfigOGL::SetMask2D(bool aEnabled)
+{
+  SetFeature(ENABLE_MASK_2D, aEnabled);
+}
+
+void
+ShaderConfigOGL::SetMask3D(bool aEnabled)
+{
+  SetFeature(ENABLE_MASK_3D, aEnabled);
 }
 
 /* static */ ProgramProfileOGL
-ProgramProfileOGL::GetProfileFor(ShaderProgramType aType,
-                                 MaskType aMask)
+ProgramProfileOGL::GetProfileFor(ShaderConfigOGL aConfig)
 {
-  NS_ASSERTION(ProgramExists(aType, aMask), "Invalid program type.");
   ProgramProfileOGL result;
+  ostringstream fs, vs;
 
-  switch (aType) {
-  case RGBALayerProgramType:
-    if (aMask == Mask3d) {
-      result.mVertexShaderString = sLayerMask3DVS;
-      result.mFragmentShaderString = sRGBATextureLayerMask3DFS;
-    } else if (aMask == Mask2d) {
-      result.mVertexShaderString = sLayerMaskVS;
-      result.mFragmentShaderString = sRGBATextureLayerMaskFS;
-    } else {
-      result.mVertexShaderString = sLayerVS;
-      result.mFragmentShaderString = sRGBATextureLayerFS;
-    }
-    AddCommonArgs(result);
-    AddCommonTextureArgs(result);
-    result.mTextureCount = 1;
-    break;
-  case BGRALayerProgramType:
-    if (aMask == Mask2d) {
-      result.mVertexShaderString = sLayerMaskVS;
-      result.mFragmentShaderString = sBGRATextureLayerMaskFS;
-    } else {
-      result.mVertexShaderString = sLayerVS;
-      result.mFragmentShaderString = sBGRATextureLayerFS;
-    }
-    AddCommonArgs(result);
-    AddCommonTextureArgs(result);
-    result.mTextureCount = 1;
-    break;
-  case RGBXLayerProgramType:
-    if (aMask == Mask2d) {
-      result.mVertexShaderString = sLayerMaskVS;
-      result.mFragmentShaderString = sRGBXTextureLayerMaskFS;
-    } else {
-      result.mVertexShaderString = sLayerVS;
-      result.mFragmentShaderString = sRGBXTextureLayerFS;
-    }
-    AddCommonArgs(result);
-    AddCommonTextureArgs(result);
-    result.mTextureCount = 1;
-    break;
-  case BGRXLayerProgramType:
-    if (aMask == Mask2d) {
-      result.mVertexShaderString = sLayerMaskVS;
-      result.mFragmentShaderString = sBGRXTextureLayerMaskFS;
-    } else {
-      result.mVertexShaderString = sLayerVS;
-      result.mFragmentShaderString = sBGRXTextureLayerFS;
-    }
-    AddCommonArgs(result);
-    AddCommonTextureArgs(result);
-    result.mTextureCount = 1;
-    break;
-  case RGBARectLayerProgramType:
-    if (aMask == Mask3d) {
-      result.mVertexShaderString = sLayerMask3DVS;
-      result.mFragmentShaderString = sRGBARectTextureLayerMask3DFS;
-    } else if (aMask == Mask2d) {
-      result.mVertexShaderString = sLayerMaskVS;
-      result.mFragmentShaderString = sRGBARectTextureLayerMaskFS;
-    } else {
-      result.mVertexShaderString = sLayerVS;
-      result.mFragmentShaderString = sRGBARectTextureLayerFS;
-    }
-    AddCommonArgs(result);
-    AddCommonTextureArgs(result);
-    result.mTextureCount = 1;
-    break;
-  case RGBXRectLayerProgramType:
-    if (aMask == Mask3d) {
-      result.mVertexShaderString = sLayerMask3DVS;
-      result.mFragmentShaderString = sRGBXRectTextureLayerMask3DFS;
-    } else if (aMask == Mask2d) {
-      result.mVertexShaderString = sLayerMaskVS;
-      result.mFragmentShaderString = sRGBXRectTextureLayerMaskFS;
-    } else {
-      result.mVertexShaderString = sLayerVS;
-      result.mFragmentShaderString = sRGBXRectTextureLayerFS;
-    }
-    AddCommonArgs(result);
-    AddCommonTextureArgs(result);
-    result.mTextureCount = 1;
-    break;
-  case BGRARectLayerProgramType:
-    MOZ_ASSERT(aMask == MaskNone, "BGRARectLayerProgramType can't handle masks.");
-    result.mVertexShaderString = sLayerVS;
-    result.mFragmentShaderString = sBGRARectTextureLayerFS;
-    AddCommonArgs(result);
-    AddCommonTextureArgs(result);
-    result.mTextureCount = 1;
-    break;
-  case RGBAExternalLayerProgramType:
-    if (aMask == Mask3d) {
-      result.mVertexShaderString = sLayerMask3DVS;
-      result.mFragmentShaderString = sRGBAExternalTextureLayerMask3DFS;
-    } else if (aMask == Mask2d) {
-      result.mVertexShaderString = sLayerMaskVS;
-      result.mFragmentShaderString = sRGBAExternalTextureLayerMaskFS;
-    } else {
-      result.mVertexShaderString = sLayerVS;
-      result.mFragmentShaderString = sRGBAExternalTextureLayerFS;
-    }
-    AddCommonArgs(result);
-    AddCommonTextureArgs(result);
-    result.mTextureCount = 1;
-    break;
-  case ColorLayerProgramType:
-    if (aMask == Mask2d) {
-      result.mVertexShaderString = sLayerMaskVS;
-      result.mFragmentShaderString = sSolidColorLayerMaskFS;
-    } else {
-      result.mVertexShaderString = sLayerVS;
-      result.mFragmentShaderString = sSolidColorLayerFS;
-    }
-    AddCommonArgs(result);
-    result.mUniforms.AppendElement(Argument("uRenderColor"));
-    break;
-  case YCbCrLayerProgramType:
-    if (aMask == Mask2d) {
-      result.mVertexShaderString = sLayerMaskVS;
-      result.mFragmentShaderString = sYCbCrTextureLayerMaskFS;
-    } else {
-      result.mVertexShaderString = sLayerVS;
-      result.mFragmentShaderString = sYCbCrTextureLayerFS;
-    }
-    AddCommonArgs(result);
-    result.mUniforms.AppendElement(Argument("uLayerOpacity"));
-    result.mUniforms.AppendElement(Argument("uYTexture"));
-    result.mUniforms.AppendElement(Argument("uCbTexture"));
-    result.mUniforms.AppendElement(Argument("uCrTexture"));
-    result.mUniforms.AppendElement(Argument("uTextureTransform"));
-    result.mAttributes.AppendElement(Argument("aTexCoord"));
-    result.mTextureCount = 3;
-    break;
-  case ComponentAlphaPass1ProgramType:
-    if (aMask == Mask2d) {
-      result.mVertexShaderString = sLayerMaskVS;
-      result.mFragmentShaderString = sComponentPassMask1FS;
-    } else {
-      result.mVertexShaderString = sLayerVS;
-      result.mFragmentShaderString = sComponentPass1FS;
-    }
-    AddCommonArgs(result);
-    result.mUniforms.AppendElement(Argument("uLayerOpacity"));
-    result.mUniforms.AppendElement(Argument("uBlackTexture"));
-    result.mUniforms.AppendElement(Argument("uWhiteTexture"));
-    result.mUniforms.AppendElement(Argument("uTextureTransform"));
-    result.mAttributes.AppendElement(Argument("aTexCoord"));
-    result.mTextureCount = 2;
-    break;
-  case ComponentAlphaPass1RGBProgramType:
-    if (aMask == Mask2d) {
-      result.mVertexShaderString = sLayerMaskVS;
-      result.mFragmentShaderString = sComponentPassMask1RGBFS;
-    } else {
-      result.mVertexShaderString = sLayerVS;
-      result.mFragmentShaderString = sComponentPass1RGBFS;
-    }
-    AddCommonArgs(result);
-    result.mUniforms.AppendElement(Argument("uLayerOpacity"));
-    result.mUniforms.AppendElement(Argument("uBlackTexture"));
-    result.mUniforms.AppendElement(Argument("uWhiteTexture"));
-    result.mUniforms.AppendElement(Argument("uTextureTransform"));
-    result.mAttributes.AppendElement(Argument("aTexCoord"));
-    result.mTextureCount = 2;
-    break;
-  case ComponentAlphaPass2ProgramType:
-    if (aMask == Mask2d) {
-      result.mVertexShaderString = sLayerMaskVS;
-      result.mFragmentShaderString = sComponentPassMask2FS;
-    } else {
-      result.mVertexShaderString = sLayerVS;
-      result.mFragmentShaderString = sComponentPass2FS;
-    }
-    AddCommonArgs(result);
-    result.mUniforms.AppendElement(Argument("uLayerOpacity"));
-    result.mUniforms.AppendElement(Argument("uBlackTexture"));
-    result.mUniforms.AppendElement(Argument("uWhiteTexture"));
-    result.mUniforms.AppendElement(Argument("uTextureTransform"));
-    result.mAttributes.AppendElement(Argument("aTexCoord"));
-    result.mTextureCount = 2;
-    break;
-  case ComponentAlphaPass2RGBProgramType:
-    if (aMask == Mask2d) {
-      result.mVertexShaderString = sLayerMaskVS;
-      result.mFragmentShaderString = sComponentPassMask2RGBFS;
-    } else {
-      result.mVertexShaderString = sLayerVS;
-      result.mFragmentShaderString = sComponentPass2RGBFS;
-    }
-    AddCommonArgs(result);
-    result.mUniforms.AppendElement(Argument("uLayerOpacity"));
-    result.mUniforms.AppendElement(Argument("uBlackTexture"));
-    result.mUniforms.AppendElement(Argument("uWhiteTexture"));
-    result.mUniforms.AppendElement(Argument("uTextureTransform"));
-    result.mAttributes.AppendElement(Argument("aTexCoord"));
-    result.mTextureCount = 2;
-    break;
-  case Copy2DProgramType:
-    NS_ASSERTION(!aMask, "Program does not have masked variant.");
-    result.mVertexShaderString = sCopyVS;
-    result.mFragmentShaderString = sCopy2DFS;
-    result.mUniforms.AppendElement(Argument("uTexture"));
-    result.mUniforms.AppendElement(Argument("uTextureTransform"));
-    result.mAttributes.AppendElement(Argument("aVertexCoord"));
-    result.mAttributes.AppendElement(Argument("aTexCoord"));
-    result.mTextureCount = 1;
-    break;
-  case Copy2DRectProgramType:
-    NS_ASSERTION(!aMask, "Program does not have masked variant.");
-    result.mVertexShaderString = sCopyVS;
-    result.mFragmentShaderString = sCopy2DRectFS;
-    result.mUniforms.AppendElement(Argument("uTexture"));
-    result.mUniforms.AppendElement(Argument("uTextureTransform"));
-    result.mAttributes.AppendElement(Argument("aVertexCoord"));
-    result.mAttributes.AppendElement(Argument("aTexCoord"));
-    result.mTextureCount = 1;
-    break;
-  default:
-    NS_NOTREACHED("Unknown shader program type.");
+  AddUniforms(result);
+
+  vs << "uniform mat4 uMatrixProj;" << endl;
+  vs << "uniform mat4 uLayerQuadTransform;" << endl;
+  vs << "uniform mat4 uLayerTransform;" << endl;
+  vs << "uniform vec4 uRenderTargetOffset;" << endl;
+
+  vs << "attribute vec4 aVertexCoord;" << endl;
+
+  if (!(aConfig.mFeatures & ENABLE_RENDER_COLOR)) {
+    vs << "uniform mat4 uTextureTransform;" << endl;
+    vs << "attribute vec2 aTexCoord;" << endl;
+    vs << "varying vec2 vTexCoord;" << endl;
   }
 
-  if (aMask > MaskNone) {
-    result.mUniforms.AppendElement(Argument("uMaskTexture"));
-    result.mUniforms.AppendElement(Argument("uMaskQuadTransform"));
-    result.mTextureCount += 1;
+  if (aConfig.mFeatures & ENABLE_MASK_2D ||
+      aConfig.mFeatures & ENABLE_MASK_3D) {
+    vs << "uniform mat4 uMaskQuadTransform;" << endl;
+    vs << "varying vec3 vMaskCoord;" << endl;
+  }
+
+  vs << "void main() {" << endl;
+  vs << "  vec4 finalPosition = aVertexCoord;" << endl;
+  vs << "  finalPosition = uLayerQuadTransform * finalPosition;" << endl;
+  vs << "  finalPosition = uLayerTransform * finalPosition;" << endl;
+  vs << "  finalPosition.xyz /= finalPosition.w;" << endl;
+
+  if (aConfig.mFeatures & ENABLE_MASK_3D) {
+    vs << "  vMaskCoord.xy = (uMaskQuadTransform * vec4(finalPosition.xyz, 1.0)).xy;" << endl;
+    // correct for perspective correct interpolation, see comment in D3D10 shader
+    vs << "  vMaskCoord.z = 1.0;" << endl;
+    vs << "  vMaskCoord *= finalPosition.w;" << endl;
+  } else if (aConfig.mFeatures & ENABLE_MASK_2D) {
+    vs << "  vMaskCoord.xy = (uMaskQuadTransform * finalPosition).xy;" << endl;
+  }
+
+  vs << "  finalPosition = finalPosition - uRenderTargetOffset;" << endl;
+  vs << "  finalPosition.xyz *= finalPosition.w;" << endl;
+  vs << "  finalPosition = uMatrixProj * finalPosition;" << endl;
+
+  if (!(aConfig.mFeatures & ENABLE_RENDER_COLOR)) {
+    vs << "  vTexCoord = (uTextureTransform * vec4(aTexCoord.x, aTexCoord.y, 0.0, 1.0)).xy;" << endl;
+  }
+
+  vs << "  gl_Position = finalPosition;" << endl;
+  vs << "}" << endl;
+
+  if (aConfig.mFeatures & ENABLE_TEXTURE_RECT) {
+    fs << "#extension GL_ARB_texture_rectangle : require" << endl;
+  }
+  if (aConfig.mFeatures & ENABLE_TEXTURE_EXTERNAL) {
+    fs << "#extension GL_OES_EGL_image_external : require" << endl;
+  }
+  fs << "#ifdef GL_ES" << endl;
+  fs << "precision mediump float;" << endl;
+  fs << "#define COLOR_PRECISION lowp" << endl;
+  fs << "#else" << endl;
+  fs << "#define COLOR_PRECISION" << endl;
+  fs << "#endif" << endl;
+  if (aConfig.mFeatures & ENABLE_RENDER_COLOR) {
+    fs << "uniform COLOR_PRECISION vec4 uRenderColor;" << endl;
+  } else {
+    // for tiling, texcoord can be greater than the lowfp range
+    fs << "varying vec2 vTexCoord;" << endl;
+    if (aConfig.mFeatures & ENABLE_BLUR) {
+      fs << "uniform bool uBlurAlpha;" << endl;
+      fs << "uniform vec2 uBlurRadius;" << endl;
+      fs << "uniform vec2 uBlurOffset;" << endl;
+      fs << "uniform float uBlurGaussianKernel[" << GAUSSIAN_KERNEL_HALF_WIDTH << "];" << endl;
+    }
+    if (aConfig.mFeatures & ENABLE_COLOR_MATRIX) {
+      fs << "uniform mat4 uColorMatrix;" << endl;
+      fs << "uniform vec4 uColorMatrixVector;" << endl;
+    }
+    if (aConfig.mFeatures & ENABLE_OPACITY) {
+      fs << "uniform COLOR_PRECISION float uLayerOpacity;" << endl;
+    }
+  }
+
+  const char *sampler2D = "sampler2D";
+  const char *texture2D = "texture2D";
+
+  if (aConfig.mFeatures & ENABLE_TEXTURE_RECT) {
+    fs << "uniform vec2 uTexCoordMultiplier;" << endl;
+    sampler2D = "sampler2DRect";
+    texture2D = "texture2DRect";
+  }
+
+  if (aConfig.mFeatures & ENABLE_TEXTURE_EXTERNAL) {
+    sampler2D = "samplerExternalOES";
+  }
+
+  if (aConfig.mFeatures & ENABLE_TEXTURE_YCBCR) {
+    fs << "uniform sampler2D uYTexture;" << endl;
+    fs << "uniform sampler2D uCbTexture;" << endl;
+    fs << "uniform sampler2D uCrTexture;" << endl;
+  } else if (aConfig.mFeatures & ENABLE_TEXTURE_COMPONENT_ALPHA) {
+    fs << "uniform sampler2D uBlackTexture;" << endl;
+    fs << "uniform sampler2D uWhiteTexture;" << endl;
+    fs << "uniform bool uTexturePass2;" << endl;
+  } else {
+    fs << "uniform " << sampler2D << " uTexture;" << endl;
+  }
+
+  if (aConfig.mFeatures & ENABLE_MASK_2D ||
+      aConfig.mFeatures & ENABLE_MASK_3D) {
+    fs << "varying vec3 vMaskCoord;" << endl;
+    fs << "uniform sampler2D uMaskTexture;" << endl;
+  }
+
+  if (!(aConfig.mFeatures & ENABLE_RENDER_COLOR)) {
+    fs << "vec4 sample(vec2 coord) {" << endl;
+    fs << "  vec4 color;" << endl;
+    if (aConfig.mFeatures & ENABLE_TEXTURE_YCBCR) {
+      fs << "  COLOR_PRECISION float y = texture2D(uYTexture, coord).r;" << endl;
+      fs << "  COLOR_PRECISION float cb = texture2D(uCbTexture, coord).r;" << endl;
+      fs << "  COLOR_PRECISION float cr = texture2D(uCrTexture, coord).r;" << endl;
+      fs << "  y = (y - 0.0625) * 1.164;" << endl;
+      fs << "  cb = cb - 0.5;" << endl;
+      fs << "  cr = cr - 0.5;" << endl;
+      fs << "  color.r = y + cr * 1.596;" << endl;
+      fs << "  color.g = y - 0.813 * cr - 0.391 * cb;" << endl;
+      fs << "  color.b = y + cb * 2.018;" << endl;
+      fs << "  color.a = 1.0;" << endl;
+    } else if (aConfig.mFeatures & ENABLE_TEXTURE_COMPONENT_ALPHA) {
+      fs << "  COLOR_PRECISION vec3 onBlack = texture2D(uBlackTexture, coord).rgb;" << endl;
+      fs << "  COLOR_PRECISION vec3 onWhite = texture2D(uWhiteTexture, coord).rgb;" << endl;
+      fs << "  COLOR_PRECISION vec4 alphas = (1.0 - onWhite + onBlack).rgbg;" << endl;
+      fs << "  if (uTexturePass2)" << endl;
+      fs << "    color = vec4(onBlack, alphas.a);" << endl;
+      fs << "  else" << endl;
+      fs << "    color = alphas;" << endl;
+    } else {
+      fs << "  color = " << texture2D << "(uTexture, coord);" << endl;
+    }
+    if (aConfig.mFeatures & ENABLE_TEXTURE_RB_SWAP) {
+      fs << "  color = color.bgra;" << endl;
+    }
+    if (aConfig.mFeatures & ENABLE_TEXTURE_NO_ALPHA) {
+      fs << "  color = vec4(color.rgb, 1.0);" << endl;
+    }
+    fs << "  return color;" << endl;
+    fs << "}" << endl;
+    if (aConfig.mFeatures & ENABLE_BLUR) {
+      fs << "vec4 sampleAtRadius(vec2 coord, float radius) {" << endl;
+      fs << "  coord += uBlurOffset;" << endl;
+      fs << "  coord += radius * uBlurRadius;" << endl;
+      fs << "  if (coord.x < 0. || coord.y < 0. || coord.x > 1. || coord.y > 1.)" << endl;
+      fs << "    return vec4(0, 0, 0, 0);" << endl;
+      fs << "  return sample(coord);" << endl;
+      fs << "}" << endl;
+      fs << "vec4 blur(vec4 color, vec2 coord) {" << endl;
+      fs << "  vec4 total = color * uBlurGaussianKernel[0];" << endl;
+      fs << "  for (int i = 1; i < " << GAUSSIAN_KERNEL_HALF_WIDTH << "; ++i) {" << endl;
+      fs << "    float r = float(i) * " << GAUSSIAN_KERNEL_STEP << " << endl;" << endl;
+      fs << "    float k = uBlurGaussianKernel[i];" << endl;
+      fs << "    total += sampleAtRadius(coord, r) * k;" << endl;
+      fs << "    total += sampleAtRadius(coord, -r) * k;" << endl;
+      fs << "  }" << endl;
+      fs << "  if (uBlurAlpha) {" << endl;
+      fs << "    color *= total.a;" << endl;
+      fs << "  } else {" << endl;
+      fs << "    color = total;" << endl;
+      fs << "  }" << endl;
+      fs << "  return color;" << endl;
+      fs << "}" << endl;
+    }
+  }
+  fs << "void main() {" << endl;
+  if (aConfig.mFeatures & ENABLE_RENDER_COLOR) {
+    fs << "  vec4 color = uRenderColor;" << endl;
+  } else {
+    if (aConfig.mFeatures & ENABLE_TEXTURE_RECT) {
+      fs << "  vec4 color = sample(vTexCoord * uTexCoordMultiplier);" << endl;
+    } else {
+      fs << "  vec4 color = sample(vTexCoord);" << endl;
+    }
+    if (aConfig.mFeatures & ENABLE_BLUR) {
+      fs << "  color = blur(color, vTexCoord);" << endl;
+    }
+    if (aConfig.mFeatures & ENABLE_COLOR_MATRIX) {
+      fs << "  color = uColorMatrix * vec4(color.rgb / color.a, color.a) + uColorMatrixVector;" << endl;
+      fs << "  color.rgb *= color.a;" << endl;
+    }
+    if (aConfig.mFeatures & ENABLE_OPACITY) {
+      fs << "  color *= uLayerOpacity;" << endl;
+    }
+  }
+  if (aConfig.mFeatures & ENABLE_MASK_3D) {
+    fs << "  vec2 maskCoords = vMaskCoord.xy / vMaskCoord.z;" << endl;
+    fs << "  COLOR_PRECISION float mask = texture2D(uMaskTexture, maskCoords).r;" << endl;
+    fs << "  color *= mask;" << endl;
+  } else if (aConfig.mFeatures & ENABLE_MASK_2D) {
+    fs << "  COLOR_PRECISION float mask = texture2D(uMaskTexture, vMaskCoord.xy).r;" << endl;
+    fs << "  color *= mask;" << endl;
+  } else {
+    fs << "  COLOR_PRECISION float mask = 1.0;" << endl;
+    fs << "  color *= mask;" << endl;
+  }
+  fs << "  gl_FragColor = color;" << endl;
+  fs << "}" << endl;
+
+  result.mVertexShaderString = vs.str();
+  result.mFragmentShaderString = fs.str();
+
+  result.mAttributes.AppendElement(Argument("aVertexCoord"));
+  if (aConfig.mFeatures & ENABLE_RENDER_COLOR) {
+    result.mTextureCount = 0;
+  } else {
+    result.mAttributes.AppendElement(Argument("aTexCoord"));
+    if (aConfig.mFeatures & ENABLE_TEXTURE_YCBCR) {
+      result.mTextureCount = 3;
+    } else if (aConfig.mFeatures & ENABLE_TEXTURE_COMPONENT_ALPHA) {
+      result.mTextureCount = 2;
+    } else {
+      result.mTextureCount = 1;
+    }
+  }
+  if (aConfig.mFeatures & ENABLE_MASK_2D ||
+      aConfig.mFeatures & ENABLE_MASK_3D) {
+    result.mTextureCount = 1;
   }
 
   return result;
@@ -283,12 +366,12 @@ const char* const ShaderProgramOGL::VertexCoordAttrib = "aVertexCoord";
 const char* const ShaderProgramOGL::TexCoordAttrib = "aTexCoord";
 
 ShaderProgramOGL::ShaderProgramOGL(GLContext* aGL, const ProgramProfileOGL& aProfile)
-  : mIsProjectionMatrixStale(false)
-  , mGL(aGL)
+  : mGL(aGL)
   , mProgram(0)
   , mProfile(aProfile)
   , mProgramState(STATE_NEW)
-{}
+{
+}
 
 ShaderProgramOGL::~ShaderProgramOGL()
 {
@@ -309,18 +392,24 @@ ShaderProgramOGL::Initialize()
 {
   NS_ASSERTION(mProgramState == STATE_NEW, "Shader program has already been initialised");
 
-  if (!CreateProgram(mProfile.mVertexShaderString,
-                     mProfile.mFragmentShaderString)) {
+  ostringstream vs, fs;
+  for (uint32_t i = 0; i < mProfile.mDefines.Length(); ++i) {
+    vs << mProfile.mDefines[i] << endl;
+    fs << mProfile.mDefines[i] << endl;
+  }
+  vs << mProfile.mVertexShaderString << endl;
+  fs << mProfile.mFragmentShaderString << endl;
+
+  if (!CreateProgram(vs.str().c_str(), fs.str().c_str())) {
     mProgramState = STATE_ERROR;
     return false;
   }
 
   mProgramState = STATE_OK;
 
-  for (uint32_t i = 0; i < mProfile.mUniforms.Length(); ++i) {
+  for (uint32_t i = 0; i < KnownUniform::KnownUniformCount; ++i) {
     mProfile.mUniforms[i].mLocation =
-      mGL->fGetUniformLocation(mProgram, mProfile.mUniforms[i].mName);
-    NS_ASSERTION(mProfile.mUniforms[i].mLocation >= 0, "Bad uniform location.");
+      mGL->fGetUniformLocation(mProgram, mProfile.mUniforms[i].mNameString);
   }
 
   for (uint32_t i = 0; i < mProfile.mAttributes.Length(); ++i) {
@@ -329,9 +418,7 @@ ShaderProgramOGL::Initialize()
     NS_ASSERTION(mProfile.mAttributes[i].mLocation >= 0, "Bad attribute location.");
   }
 
-  // this is a one-off that's present in the 2DRect versions of some shaders.
-  mTexCoordMultiplierUniformLocation =
-    mGL->fGetUniformLocation(mProgram, "uTexCoordMultiplier");
+  //mProfile.mHasMatrixProj = mProfile.mUniforms[KnownUniform::MatrixProj].mLocation != -1;
 
   return true;
 }
@@ -448,83 +535,7 @@ ShaderProgramOGL::Activate()
   }
   NS_ASSERTION(HasInitialized(), "Attempting to activate a program that's not in use!");
   mGL->fUseProgram(mProgram);
-
-  // check and set the projection matrix
-  if (mIsProjectionMatrixStale) {
-    SetProjectionMatrix(mProjectionMatrix);
-  }
 }
-
-
-void
-ShaderProgramOGL::SetUniform(GLint aLocation, float aFloatValue)
-{
-  ASSERT_THIS_PROGRAM;
-  NS_ASSERTION(aLocation >= 0, "Invalid location");
-
-  mGL->fUniform1f(aLocation, aFloatValue);
-}
-
-void
-ShaderProgramOGL::SetUniform(GLint aLocation, const gfxRGBA& aColor)
-{
-  ASSERT_THIS_PROGRAM;
-  NS_ASSERTION(aLocation >= 0, "Invalid location");
-
-  mGL->fUniform4f(aLocation, float(aColor.r), float(aColor.g), float(aColor.b), float(aColor.a));
-}
-
-void
-ShaderProgramOGL::SetUniform(GLint aLocation, int aLength, float *aFloatValues)
-{
-  ASSERT_THIS_PROGRAM;
-  NS_ASSERTION(aLocation >= 0, "Invalid location");
-
-  if (aLength == 1) {
-    mGL->fUniform1fv(aLocation, 1, aFloatValues);
-  } else if (aLength == 2) {
-    mGL->fUniform2fv(aLocation, 1, aFloatValues);
-  } else if (aLength == 3) {
-    mGL->fUniform3fv(aLocation, 1, aFloatValues);
-  } else if (aLength == 4) {
-    mGL->fUniform4fv(aLocation, 1, aFloatValues);
-  } else {
-    NS_NOTREACHED("Bogus aLength param");
-  }
-}
-
-void
-ShaderProgramOGL::SetUniform(GLint aLocation, GLint aIntValue)
-{
-  ASSERT_THIS_PROGRAM;
-  NS_ASSERTION(aLocation >= 0, "Invalid location");
-
-  mGL->fUniform1i(aLocation, aIntValue);
-}
-
-void
-ShaderProgramOGL::SetMatrixUniform(GLint aLocation, const gfx3DMatrix& aMatrix)
-{
-  SetMatrixUniform(aLocation, &aMatrix._11);
-}
-
-void
-ShaderProgramOGL::SetMatrixUniform(GLint aLocation, const float *aFloatValues)
-{
-  ASSERT_THIS_PROGRAM;
-  NS_ASSERTION(aLocation >= 0, "Invalid location");
-
-  mGL->fUniformMatrix4fv(aLocation, 1, false, aFloatValues);
-}
-
-void
-ShaderProgramOGL::SetUniform(GLint aLocation, const gfx::Color& aColor) {
-  ASSERT_THIS_PROGRAM;
-  NS_ASSERTION(aLocation >= 0, "Invalid location");
-
-  mGL->fUniform4f(aLocation, float(aColor.r), float(aColor.g), float(aColor.b), float(aColor.a));
-}
-
 
 } /* layers */
 } /* mozilla */

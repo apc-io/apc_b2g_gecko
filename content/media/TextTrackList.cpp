@@ -7,14 +7,17 @@
 #include "mozilla/dom/TextTrackListBinding.h"
 #include "mozilla/dom/TrackEvent.h"
 #include "nsThreadUtils.h"
+#include "mozilla/dom/TextTrackCue.h"
+#include "mozilla/dom/TextTrackManager.h"
 
 namespace mozilla {
 namespace dom {
 
-NS_IMPL_CYCLE_COLLECTION_INHERITED_2(TextTrackList,
+NS_IMPL_CYCLE_COLLECTION_INHERITED_3(TextTrackList,
                                      nsDOMEventTargetHelper,
                                      mGlobal,
-                                     mTextTracks)
+                                     mTextTracks,
+                                     mTextTrackManager)
 
 NS_IMPL_ADDREF_INHERITED(TextTrackList, nsDOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(TextTrackList, nsDOMEventTargetHelper)
@@ -26,12 +29,22 @@ TextTrackList::TextTrackList(nsISupports* aGlobal) : mGlobal(aGlobal)
   SetIsDOMBinding();
 }
 
-void
-TextTrackList::Update(double aTime)
+TextTrackList::TextTrackList(nsISupports* aGlobal, TextTrackManager* aTextTrackManager)
+ : mGlobal(aGlobal)
+ , mTextTrackManager(aTextTrackManager)
 {
-  uint32_t length = Length(), i;
-  for (i = 0; i < length; i++) {
-    mTextTracks[i]->Update(aTime);
+  SetIsDOMBinding();
+}
+
+void
+TextTrackList::GetAllActiveCues(nsTArray<nsRefPtr<TextTrackCue> >& aCues)
+{
+  nsTArray< nsRefPtr<TextTrackCue> > cues;
+  for (uint32_t i = 0; i < Length(); i++) {
+    if (mTextTracks[i]->Mode() != TextTrackMode::Disabled) {
+      mTextTracks[i]->GetActiveCueArray(cues);
+      aCues.AppendElements(cues);
+    }
   }
 }
 
@@ -49,18 +62,22 @@ TextTrackList::IndexedGetter(uint32_t aIndex, bool& aFound)
 }
 
 already_AddRefed<TextTrack>
-TextTrackList::AddTextTrack(HTMLMediaElement* aMediaElement,
-                            TextTrackKind aKind,
+TextTrackList::AddTextTrack(TextTrackKind aKind,
                             const nsAString& aLabel,
                             const nsAString& aLanguage)
 {
-  nsRefPtr<TextTrack> track = new TextTrack(mGlobal, aMediaElement, aKind,
-                                            aLabel, aLanguage);
-  if (mTextTracks.AppendElement(track)) {
-    CreateAndDispatchTrackEventRunner(track, NS_LITERAL_STRING("addtrack"));
-  }
-
+  nsRefPtr<TextTrack> track = new TextTrack(mGlobal, this, aKind, aLabel, aLanguage);
+  AddTextTrack(track);
   return track.forget();
+}
+
+void
+TextTrackList::AddTextTrack(TextTrack* aTextTrack)
+{
+  if (mTextTracks.AppendElement(aTextTrack)) {
+    aTextTrack->SetTextTrackList(this);
+    CreateAndDispatchTrackEventRunner(aTextTrack, NS_LITERAL_STRING("addtrack"));
+  }
 }
 
 TextTrack*
@@ -95,7 +112,7 @@ TextTrackList::DidSeek()
 class TrackEventRunner MOZ_FINAL: public nsRunnable
 {
 public:
-  TrackEventRunner(TextTrackList* aList, TrackEvent* aEvent)
+  TrackEventRunner(TextTrackList* aList, nsIDOMEvent* aEvent)
     : mList(aList)
     , mEvent(aEvent)
   {}
@@ -107,13 +124,35 @@ public:
 
 private:
   nsRefPtr<TextTrackList> mList;
-  nsRefPtr<TrackEvent> mEvent;
+  nsRefPtr<nsIDOMEvent> mEvent;
 };
 
 nsresult
-TextTrackList::DispatchTrackEvent(TrackEvent* aEvent)
+TextTrackList::DispatchTrackEvent(nsIDOMEvent* aEvent)
 {
   return DispatchTrustedEvent(aEvent);
+}
+
+void
+TextTrackList::CreateAndDispatchChangeEvent()
+{
+  nsCOMPtr<nsIDOMEvent> event;
+  nsresult rv = NS_NewDOMEvent(getter_AddRefs(event), this, nullptr, nullptr);
+  if (NS_FAILED(rv)) {
+    NS_WARNING("Failed to create the error event!");
+    return;
+  }
+
+  rv = event->InitEvent(NS_LITERAL_STRING("change"), false, false);
+  if (NS_FAILED(rv)) {
+    NS_WARNING("Failed to init the change event!");
+    return;
+  }
+
+  event->SetTrusted(true);
+
+  nsCOMPtr<nsIRunnable> eventRunner = new TrackEventRunner(this, event);
+  NS_DispatchToMainThread(eventRunner, NS_DISPATCH_NORMAL);
 }
 
 void
@@ -124,12 +163,27 @@ TextTrackList::CreateAndDispatchTrackEventRunner(TextTrack* aTrack,
   eventInit.mBubbles = false;
   eventInit.mCancelable = false;
   eventInit.mTrack = aTrack;
-  nsRefPtr<TrackEvent> trackEvent =
+  nsRefPtr<TrackEvent> event =
     TrackEvent::Constructor(this, aEventName, eventInit);
 
   // Dispatch the TrackEvent asynchronously.
-  nsCOMPtr<nsIRunnable> event = new TrackEventRunner(this, trackEvent);
-  NS_DispatchToMainThread(event, NS_DISPATCH_NORMAL);
+  nsCOMPtr<nsIRunnable> eventRunner = new TrackEventRunner(this, event);
+  NS_DispatchToMainThread(eventRunner, NS_DISPATCH_NORMAL);
+}
+
+HTMLMediaElement*
+TextTrackList::GetMediaElement()
+{
+  if (mTextTrackManager) {
+    return mTextTrackManager->mMediaElement;
+  }
+  return nullptr;
+}
+
+void
+TextTrackList::SetTextTrackManager(TextTrackManager* aTextTrackManager)
+{
+  mTextTrackManager = aTextTrackManager;
 }
 
 } // namespace dom

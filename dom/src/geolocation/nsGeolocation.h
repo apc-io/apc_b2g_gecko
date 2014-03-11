@@ -32,7 +32,6 @@
 #include "nsIGeolocationProvider.h"
 #include "nsIContentPermissionPrompt.h"
 #include "nsIDOMWindow.h"
-#include "DictionaryHelpers.h"
 #include "mozilla/Attributes.h"
 
 class nsGeolocationService;
@@ -66,7 +65,7 @@ public:
 
   nsresult Init();
 
-  void HandleMozsettingChanged(const PRUnichar* aData);
+  void HandleMozsettingChanged(const char16_t* aData);
   void HandleMozsettingValue(const bool aValue);
 
   // Management of the Geolocation objects

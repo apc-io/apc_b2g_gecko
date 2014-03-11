@@ -21,7 +21,7 @@
 #include "nsWeakReference.h"
 #include "nsClassHashtable.h"
 #include "nsCRT.h"
-#include "nsTraceRefcnt.h"
+#include "nsISupportsImpl.h"
 #include "mozilla/HashFunctions.h"
 #include "mozilla/MemoryReporting.h"
 
@@ -182,7 +182,7 @@ class nsPrefBranch : public nsIPrefBranchInternal,
 {
   friend class mozilla::PreferenceServiceReporter;
 public:
-  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_DECL_ISUPPORTS
   NS_DECL_NSIPREFBRANCH
   NS_DECL_NSIPREFBRANCH2
   NS_DECL_NSIOBSERVER
@@ -202,7 +202,7 @@ protected:
   nsPrefBranch()    /* disallow use of this constructer */
     { }
 
-  nsresult   GetDefaultFromPropertiesFile(const char *aPrefName, PRUnichar **return_buf);
+  nsresult   GetDefaultFromPropertiesFile(const char *aPrefName, char16_t **return_buf);
   // As SetCharPref, but without any check on the length of |aValue|
   nsresult   SetCharPrefInternal(const char *aPrefName, const char *aValue);
   // Reject strings that are more than 1Mb, warn if strings are more than 16kb
@@ -235,16 +235,16 @@ public:
   nsPrefLocalizedString();
   virtual ~nsPrefLocalizedString();
 
-  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_DECL_ISUPPORTS
   NS_FORWARD_NSISUPPORTSSTRING(mUnicodeString->)
   NS_FORWARD_NSISUPPORTSPRIMITIVE(mUnicodeString->)
 
   nsresult Init();
 
 private:
-  NS_IMETHOD GetData(PRUnichar**);
-  NS_IMETHOD SetData(const PRUnichar* aData);
-  NS_IMETHOD SetDataWithLength(uint32_t aLength, const PRUnichar *aData);
+  NS_IMETHOD GetData(char16_t**);
+  NS_IMETHOD SetData(const char16_t* aData);
+  NS_IMETHOD SetDataWithLength(uint32_t aLength, const char16_t *aData);
 
   nsCOMPtr<nsISupportsString> mUnicodeString;
 };
@@ -253,7 +253,7 @@ private:
 class nsRelativeFilePref : public nsIRelativeFilePref
 {
 public:
-  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_DECL_ISUPPORTS
   NS_DECL_NSIRELATIVEFILEPREF
   
                 nsRelativeFilePref();

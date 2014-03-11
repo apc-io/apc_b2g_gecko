@@ -185,6 +185,10 @@ enum {
 };
 typedef NSUInteger NSEventPhase;
 
+enum {
+   NSFullScreenWindowMask = 1 << 14
+};
+
 @interface NSWindow (LionWindowFeatures)
 - (NSRect)convertRectToScreen:(NSRect)aRect;
 @end
@@ -513,7 +517,7 @@ public:
   NS_IMETHOD        ActivateNativeMenuItemAt(const nsAString& indexString);
   NS_IMETHOD        ForceUpdateNativeMenuAt(const nsAString& indexString);
 
-  NS_IMETHOD        NotifyIME(NotificationToIME aNotification) MOZ_OVERRIDE;
+  NS_IMETHOD        NotifyIME(const IMENotification& aIMENotification) MOZ_OVERRIDE;
   NS_IMETHOD_(void) SetInputContext(const InputContext& aContext,
                                     const InputContextAction& aAction);
   NS_IMETHOD_(InputContext) GetInputContext();
@@ -680,6 +684,7 @@ protected:
   bool mHasRoundedBottomCorners;
   int mDevPixelCornerRadius;
   bool mIsCoveringTitlebar;
+  bool mIsFullscreen;
   nsIntRect mTitlebarRect;
 
   // The area of mTitlebarCGContext that needs to be redrawn during the next

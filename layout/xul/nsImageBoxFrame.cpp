@@ -31,7 +31,7 @@
 #include "prprf.h"
 #include "nsCSSRendering.h"
 #include "nsIDOMHTMLImageElement.h"
-#include "nsINameSpaceManager.h"
+#include "nsNameSpaceManager.h"
 #include "nsTextFragment.h"
 #include "nsIDOMHTMLMapElement.h"
 #include "nsTransform2D.h"
@@ -61,7 +61,7 @@ public:
   nsImageBoxFrameEvent(nsIContent *content, uint32_t message)
     : mContent(content), mMessage(message) {}
 
-  NS_IMETHOD Run();
+  NS_IMETHOD Run() MOZ_OVERRIDE;
 
 private:
   nsCOMPtr<nsIContent> mContent;
@@ -121,7 +121,7 @@ NS_NewImageBoxFrame (nsIPresShell* aPresShell, nsStyleContext* aContext)
 
 NS_IMPL_FRAMEARENA_HELPERS(nsImageBoxFrame)
 
-NS_IMETHODIMP
+nsresult
 nsImageBoxFrame::AttributeChanged(int32_t aNameSpaceID,
                                   nsIAtom* aAttribute,
                                   int32_t aModType)
@@ -400,11 +400,12 @@ nsDisplayXULImage::ConfigureLayer(ImageLayer* aLayer, const nsIntPoint& aOffset)
 
   NS_ASSERTION(imageWidth != 0 && imageHeight != 0, "Invalid image size!");
 
-  gfxMatrix transform;
-  transform.Translate(destRect.TopLeft() + aOffset);
+  gfxPoint p = destRect.TopLeft() + aOffset;
+  gfx::Matrix transform;
+  transform.Translate(p.x, p.y);
   transform.Scale(destRect.Width()/imageWidth,
                   destRect.Height()/imageHeight);
-  aLayer->SetBaseTransform(gfx3DMatrix::From2D(transform));
+  aLayer->SetBaseTransform(gfx::Matrix4x4::From2D(transform));
 
   aLayer->SetVisibleRegion(nsIntRect(0, 0, imageWidth, imageHeight));
 }
@@ -591,8 +592,8 @@ nsImageBoxFrame::GetType() const
   return nsGkAtoms::imageBoxFrame;
 }
 
-#ifdef DEBUG
-NS_IMETHODIMP
+#ifdef DEBUG_FRAME_DUMP
+nsresult
 nsImageBoxFrame::GetFrameName(nsAString& aResult) const
 {
   return MakeFrameName(NS_LITERAL_STRING("ImageBox"), aResult);

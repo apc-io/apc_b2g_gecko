@@ -17,7 +17,6 @@
 #include "mozilla/layers/LayersMessages.h"  // for TargetConfig
 #include "nsAutoPtr.h"                  // for nsRefPtr
 #include "nsISupportsImpl.h"            // for LayerManager::AddRef, etc
-#include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
 
 namespace mozilla {
 namespace layers {
@@ -66,6 +65,7 @@ class AsyncCompositionManager MOZ_FINAL : public RefCounted<AsyncCompositionMana
 {
   friend class AutoResolveRefLayers;
 public:
+  MOZ_DECLARE_REFCOUNTED_TYPENAME(AsyncCompositionManager)
   AsyncCompositionManager(LayerManagerComposite* aManager)
     : mLayerManager(aManager)
     , mIsFirstPaint(false)
@@ -163,7 +163,7 @@ private:
    * zooming.
    */
   void AlignFixedAndStickyLayers(Layer* aLayer, Layer* aTransformedSubtreeRoot,
-                                 const gfx3DMatrix& aPreviousTransformForRoot,
+                                 const gfx::Matrix4x4& aPreviousTransformForRoot,
                                  const LayerMargin& aFixedLayerMargins);
 
   /**
@@ -201,10 +201,18 @@ private:
 class MOZ_STACK_CLASS AutoResolveRefLayers {
 public:
   AutoResolveRefLayers(AsyncCompositionManager* aManager) : mManager(aManager)
-  { mManager->ResolveRefLayers(); }
+  {
+    if (mManager) {
+      mManager->ResolveRefLayers();
+    }
+  }
 
   ~AutoResolveRefLayers()
-  { mManager->DetachRefLayers(); }
+  {
+    if (mManager) {
+      mManager->DetachRefLayers();
+    }
+  }
 
 private:
   AsyncCompositionManager* mManager;

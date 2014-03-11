@@ -28,7 +28,6 @@ interface nsIDOMNode;
 interface nsIDOMNodeList;
 interface nsIDOMProcessingInstruction;
 interface nsIDOMText;
-interface nsIDOMDOMStringList;
 interface nsIDOMClientRect;
 interface nsIDOMClientRectList;
 
@@ -76,13 +75,8 @@ interface nsIDOMHTMLTableCaptionElement;
 interface nsIDOMRange;
 
 // Crypto
-interface nsIDOMCRMFObject;
 interface nsIDOMCrypto;
-interface nsIDOMPkcs11;
 
 // Used font face (for inspector)
 interface nsIDOMFontFace;
 interface nsIDOMFontFaceList;
-
-// Power
-interface nsIDOMMozWakeLock;

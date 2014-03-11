@@ -70,20 +70,20 @@ protected:
     virtual PPluginIdentifierParent*
     AllocPPluginIdentifierParent(const nsCString& aString,
                                  const int32_t& aInt,
-                                 const bool& aTemporary);
+                                 const bool& aTemporary) MOZ_OVERRIDE;
 
     virtual bool
-    DeallocPPluginIdentifierParent(PPluginIdentifierParent* aActor);
+    DeallocPPluginIdentifierParent(PPluginIdentifierParent* aActor) MOZ_OVERRIDE;
 
     PPluginInstanceParent*
     AllocPPluginInstanceParent(const nsCString& aMimeType,
                                const uint16_t& aMode,
                                const InfallibleTArray<nsCString>& aNames,
                                const InfallibleTArray<nsCString>& aValues,
-                               NPError* rv);
+                               NPError* rv) MOZ_OVERRIDE;
 
     virtual bool
-    DeallocPPluginInstanceParent(PPluginInstanceParent* aActor);
+    DeallocPPluginInstanceParent(PPluginInstanceParent* aActor) MOZ_OVERRIDE;
 
 public:
     // aFilePath is UTF8, not native!
@@ -141,20 +141,18 @@ protected:
         return MediateRace(parent, child);
     }
 
-    virtual bool RecvXXX_HACK_FIXME_cjones(Shmem& mem) { NS_RUNTIMEABORT("not reached"); return false; }
-
     virtual bool ShouldContinueFromReplyTimeout() MOZ_OVERRIDE;
 
     virtual bool
     RecvBackUpXResources(const FileDescriptor& aXSocketFd) MOZ_OVERRIDE;
 
     virtual bool
-    AnswerNPN_UserAgent(nsCString* userAgent);
+    AnswerNPN_UserAgent(nsCString* userAgent) MOZ_OVERRIDE;
 
     virtual bool
     AnswerNPN_GetValue_WithBoolReturn(const NPNVariable& aVariable,
                                       NPError* aError,
-                                      bool* aBoolVal);
+                                      bool* aBoolVal) MOZ_OVERRIDE;
 
     virtual bool AnswerProcessSomeEvents() MOZ_OVERRIDE;
 
@@ -262,7 +260,7 @@ private:
     virtual nsresult NP_GetMIMEDescription(const char** mimeDesc);
     virtual nsresult NP_GetValue(void *future, NPPVariable aVariable,
                                  void *aValue, NPError* error);
-#if defined(XP_WIN) || defined(XP_MACOSX) || defined(XP_OS2)
+#if defined(XP_WIN) || defined(XP_MACOSX)
     virtual nsresult NP_GetEntryPoints(NPPluginFuncs* pFuncs, NPError* error);
 #endif
     virtual nsresult NPP_New(NPMIMEType pluginType, NPP instance,

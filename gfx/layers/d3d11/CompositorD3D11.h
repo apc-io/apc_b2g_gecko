@@ -49,7 +49,7 @@ public:
     GetTextureFactoryIdentifier() MOZ_OVERRIDE;
 
   virtual TemporaryRef<DataTextureSource>
-    CreateDataTextureSource(TextureFlags aFlags = 0) MOZ_OVERRIDE { return nullptr; }
+    CreateDataTextureSource(TextureFlags aFlags = 0) MOZ_OVERRIDE;
 
   virtual bool CanUseCanvasLayerForSize(const gfx::IntSize& aSize) MOZ_OVERRIDE;
   virtual int32_t GetMaxTextureSize() const MOZ_FINAL;
@@ -102,7 +102,7 @@ public:
    */
   virtual void BeginFrame(const nsIntRegion& aInvalidRegion,
                           const gfx::Rect *aClipRectIn,
-                          const gfxMatrix& aTransform,
+                          const gfx::Matrix& aTransform,
                           const gfx::Rect& aRenderBounds,
                           gfx::Rect *aClipRectOut = nullptr,
                           gfx::Rect *aRenderBoundsOut = nullptr) MOZ_OVERRIDE;
@@ -116,7 +116,7 @@ public:
    * Post rendering stuff if the rendering is outside of this Compositor
    * e.g., by Composer2D
    */
-  virtual void EndFrameForExternalComposition(const gfxMatrix& aTransform) MOZ_OVERRIDE {}
+  virtual void EndFrameForExternalComposition(const gfx::Matrix& aTransform) MOZ_OVERRIDE {}
 
   /**
    * Tidy up if BeginFrame has been called, but EndFrame won't be
@@ -128,7 +128,7 @@ public:
    * to a window of the given dimensions.
    */
   virtual void PrepareViewport(const gfx::IntSize& aSize,
-                               const gfxMatrix& aWorldTransform) MOZ_OVERRIDE;
+                               const gfx::Matrix& aWorldTransform) MOZ_OVERRIDE;
 
   virtual bool SupportsPartialTextureUpdate() MOZ_OVERRIDE { return true; }
 
@@ -136,7 +136,9 @@ public:
   virtual const char* Name() const MOZ_OVERRIDE { return "Direct3D 11"; }
 #endif
 
-  virtual void NotifyLayersTransaction() MOZ_OVERRIDE { }
+  virtual LayersBackend GetBackendType() const MOZ_OVERRIDE {
+    return LayersBackend::LAYERS_D3D11;
+  }
 
   virtual nsIWidget* GetWidget() const MOZ_OVERRIDE { return mWidget; }
 
@@ -150,7 +152,7 @@ private:
   bool CreateShaders();
   void UpdateConstantBuffers();
   void SetSamplerForFilter(gfx::Filter aFilter);
-  void SetPSForEffect(Effect *aEffect, MaskType aMaskType);
+  void SetPSForEffect(Effect *aEffect, MaskType aMaskType, gfx::SurfaceFormat aFormat);
   void PaintToTarget();
 
   RefPtr<ID3D11DeviceContext> mContext;

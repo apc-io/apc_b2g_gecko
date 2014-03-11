@@ -8,6 +8,7 @@
 
 #include "nsObjectFrame.h"
 
+#include "gfx2DGlue.h"
 #include "mozilla/BasicEvents.h"
 #ifdef XP_WIN
 // This is needed for DoublePassRenderingEvent.
@@ -80,13 +81,6 @@ using mozilla::DefaultXDisplay;
 #include <winuser.h>
 #endif
 
-#ifdef XP_OS2
-#define INCL_PM
-#define INCL_GPI
-#include <os2.h>
-#include "gfxOS2Surface.h"
-#endif
-
 #ifdef MOZ_WIDGET_ANDROID
 #include "AndroidBridge.h"
 #include "GLContext.h"
@@ -145,6 +139,7 @@ extern "C" {
 #endif /* #if defined(XP_MACOSX) && !defined(__LP64__) */
 
 using namespace mozilla;
+using namespace mozilla::gfx;
 using namespace mozilla::layers;
 
 class PluginBackgroundSink : public ReadbackSink {
@@ -288,8 +283,8 @@ nsObjectFrame::GetType() const
   return nsGkAtoms::objectFrame; 
 }
 
-#ifdef DEBUG
-NS_IMETHODIMP
+#ifdef DEBUG_FRAME_DUMP
+nsresult
 nsObjectFrame::GetFrameName(nsAString& aResult) const
 {
   return MakeFrameName(NS_LITERAL_STRING("ObjectFrame"), aResult);
@@ -442,28 +437,28 @@ nsObjectFrame::GetDesiredSize(nsPresContext* aPresContext,
                               nsHTMLReflowMetrics& aMetrics)
 {
   // By default, we have no area
-  aMetrics.width = 0;
-  aMetrics.height = 0;
+  aMetrics.Width() = 0;
+  aMetrics.Height() = 0;
 
   if (IsHidden(false)) {
     return;
   }
   
-  aMetrics.width = aReflowState.ComputedWidth();
-  aMetrics.height = aReflowState.ComputedHeight();
+  aMetrics.Width() = aReflowState.ComputedWidth();
+  aMetrics.Height() = aReflowState.ComputedHeight();
 
   // for EMBED and APPLET, default to 240x200 for compatibility
   nsIAtom *atom = mContent->Tag();
   if (atom == nsGkAtoms::applet || atom == nsGkAtoms::embed) {
-    if (aMetrics.width == NS_UNCONSTRAINEDSIZE) {
-      aMetrics.width = clamped(nsPresContext::CSSPixelsToAppUnits(EMBED_DEF_WIDTH),
-                               aReflowState.mComputedMinWidth,
-                               aReflowState.mComputedMaxWidth);
+    if (aMetrics.Width() == NS_UNCONSTRAINEDSIZE) {
+      aMetrics.Width() = clamped(nsPresContext::CSSPixelsToAppUnits(EMBED_DEF_WIDTH),
+                               aReflowState.ComputedMinWidth(),
+                               aReflowState.ComputedMaxWidth());
     }
-    if (aMetrics.height == NS_UNCONSTRAINEDSIZE) {
-      aMetrics.height = clamped(nsPresContext::CSSPixelsToAppUnits(EMBED_DEF_HEIGHT),
-                                aReflowState.mComputedMinHeight,
-                                aReflowState.mComputedMaxHeight);
+    if (aMetrics.Height() == NS_UNCONSTRAINEDSIZE) {
+      aMetrics.Height() = clamped(nsPresContext::CSSPixelsToAppUnits(EMBED_DEF_HEIGHT),
+                                aReflowState.ComputedMinHeight(),
+                                aReflowState.ComputedMaxHeight());
     }
 
 #if defined(MOZ_WIDGET_GTK)
@@ -471,28 +466,28 @@ nsObjectFrame::GetDesiredSize(nsPresContext* aPresContext,
     // exceed the maximum size of X coordinates.  See bug #225357 for
     // more information.  In theory Gtk2 can handle large coordinates,
     // but underlying plugins can't.
-    aMetrics.height = std::min(aPresContext->DevPixelsToAppUnits(INT16_MAX), aMetrics.height);
-    aMetrics.width = std::min(aPresContext->DevPixelsToAppUnits(INT16_MAX), aMetrics.width);
+    aMetrics.Height() = std::min(aPresContext->DevPixelsToAppUnits(INT16_MAX), aMetrics.Height());
+    aMetrics.Width() = std::min(aPresContext->DevPixelsToAppUnits(INT16_MAX), aMetrics.Width());
 #endif
   }
 
   // At this point, the width has an unconstrained value only if we have
   // nothing to go on (no width set, no information from the plugin, nothing).
   // Make up a number.
-  if (aMetrics.width == NS_UNCONSTRAINEDSIZE) {
-    aMetrics.width =
-      (aReflowState.mComputedMinWidth != NS_UNCONSTRAINEDSIZE) ?
-        aReflowState.mComputedMinWidth : 0;
+  if (aMetrics.Width() == NS_UNCONSTRAINEDSIZE) {
+    aMetrics.Width() =
+      (aReflowState.ComputedMinWidth() != NS_UNCONSTRAINEDSIZE) ?
+        aReflowState.ComputedMinWidth() : 0;
   }
 
   // At this point, the height has an unconstrained value only in two cases:
   // a) We are in standards mode with percent heights and parent is auto-height
   // b) We have no height information at all.
   // In either case, we have to make up a number.
-  if (aMetrics.height == NS_UNCONSTRAINEDSIZE) {
-    aMetrics.height =
-      (aReflowState.mComputedMinHeight != NS_UNCONSTRAINEDSIZE) ?
-        aReflowState.mComputedMinHeight : 0;
+  if (aMetrics.Height() == NS_UNCONSTRAINEDSIZE) {
+    aMetrics.Height() =
+      (aReflowState.ComputedMinHeight() != NS_UNCONSTRAINEDSIZE) ?
+        aReflowState.ComputedMinHeight() : 0;
   }
 
   // XXXbz don't add in the border and padding, because we screw up our
@@ -502,7 +497,7 @@ nsObjectFrame::GetDesiredSize(nsPresContext* aPresContext,
   // call the superclass in all cases.
 }
 
-NS_IMETHODIMP
+nsresult
 nsObjectFrame::Reflow(nsPresContext*           aPresContext,
                       nsHTMLReflowMetrics&     aMetrics,
                       const nsHTMLReflowState& aReflowState,
@@ -530,8 +525,8 @@ nsObjectFrame::Reflow(nsPresContext*           aPresContext,
     return NS_OK;
   }
 
-  nsRect r(0, 0, aMetrics.width, aMetrics.height);
-  r.Deflate(aReflowState.mComputedBorderPadding);
+  nsRect r(0, 0, aMetrics.Width(), aMetrics.Height());
+  r.Deflate(aReflowState.ComputedPhysicalBorderPadding());
 
   if (mInnerView) {
     nsViewManager* vm = mInnerView->GetViewManager();
@@ -806,7 +801,7 @@ nsIntPoint nsObjectFrame::GetWindowOriginInPixels(bool aWindowless)
                     PresContext()->AppUnitsToDevPixels(origin.y));
 }
 
-NS_IMETHODIMP
+nsresult
 nsObjectFrame::DidReflow(nsPresContext*            aPresContext,
                          const nsHTMLReflowState*  aReflowState,
                          nsDidReflowStatus         aStatus)
@@ -860,23 +855,24 @@ public:
   }
 #endif
 
-  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap);
+  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
+                           bool* aSnap) MOZ_OVERRIDE;
   virtual bool ComputeVisibility(nsDisplayListBuilder* aBuilder,
                                    nsRegion* aVisibleRegion,
-                                   const nsRect& aAllowVisibleRegionExpansion);
+                                   const nsRect& aAllowVisibleRegionExpansion) MOZ_OVERRIDE;
 
   NS_DISPLAY_DECL_NAME("PluginReadback", TYPE_PLUGIN_READBACK)
 
   virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
                                              LayerManager* aManager,
-                                             const ContainerLayerParameters& aContainerParameters)
+                                             const ContainerLayerParameters& aContainerParameters) MOZ_OVERRIDE
   {
     return static_cast<nsObjectFrame*>(mFrame)->BuildLayer(aBuilder, aManager, this, aContainerParameters);
   }
 
   virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
                                    LayerManager* aManager,
-                                   const ContainerLayerParameters& aParameters)
+                                   const ContainerLayerParameters& aParameters) MOZ_OVERRIDE
   {
     return LAYER_ACTIVE;
   }
@@ -930,23 +926,24 @@ public:
   }
 #endif
 
-  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap);
+  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
+                           bool* aSnap) MOZ_OVERRIDE;
   virtual bool ComputeVisibility(nsDisplayListBuilder* aBuilder,
                                    nsRegion* aVisibleRegion,
-                                   const nsRect& aAllowVisibleRegionExpansion);
+                                   const nsRect& aAllowVisibleRegionExpansion) MOZ_OVERRIDE;
 
   NS_DISPLAY_DECL_NAME("PluginVideo", TYPE_PLUGIN_VIDEO)
 
   virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
                                              LayerManager* aManager,
-                                             const ContainerLayerParameters& aContainerParameters)
+                                             const ContainerLayerParameters& aContainerParameters) MOZ_OVERRIDE
   {
     return static_cast<nsObjectFrame*>(mFrame)->BuildLayer(aBuilder, aManager, this, aContainerParameters);
   }
 
   virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
                                    LayerManager* aManager,
-                                   const ContainerLayerParameters& aParameters)
+                                   const ContainerLayerParameters& aParameters) MOZ_OVERRIDE
   {
     return LAYER_ACTIVE;
   }
@@ -1233,19 +1230,6 @@ nsObjectFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   }
 }
 
-#ifdef XP_OS2
-static void *
-GetPSFromRC(nsRenderingContext& aRenderingContext)
-{
-  nsRefPtr<gfxASurface>
-    surf = aRenderingContext.ThebesContext()->CurrentSurface();
-  if (!surf || surf->CairoStatus())
-    return nullptr;
-  return (void *)(static_cast<gfxOS2Surface*>
-                  (static_cast<gfxASurface*>(surf.get()))->GetPS());
-}
-#endif
-
 void
 nsObjectFrame::PrintPlugin(nsRenderingContext& aRenderingContext,
                            const nsRect& aDirtyRect)
@@ -1399,15 +1383,6 @@ nsObjectFrame::PrintPlugin(nsRenderingContext& aRenderingContext,
   (void)window;
   (void)npprint;
 
-#elif defined(XP_OS2)
-  void *hps = GetPSFromRC(aRenderingContext);
-  if (!hps)
-    return;
-
-  npprint.print.embedPrint.platformPrint = hps;
-  npprint.print.embedPrint.window = window;
-  // send off print info to plugin
-  pi->Print(&npprint);
 #elif defined(XP_WIN)
 
   /* On Windows, we use the win32 printing surface to print.  This, in
@@ -1527,7 +1502,7 @@ nsObjectFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
     scaleFactor = 1.0;
   }
   int intScaleFactor = ceil(scaleFactor);
-  gfxIntSize size(window->width * intScaleFactor, window->height * intScaleFactor);
+  IntSize size(window->width * intScaleFactor, window->height * intScaleFactor);
 
   nsRect area = GetContentRectRelativeToSelf() + aItem->ToReferenceFrame();
   gfxRect r = nsLayoutUtils::RectToGfxRect(area, PresContext()->AppUnitsPerDevPixel());
@@ -1560,7 +1535,7 @@ nsObjectFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
     }
 #endif
 
-    imglayer->SetScaleToSize(size, SCALE_STRETCH);
+    imglayer->SetScaleToSize(size, ScaleMode::STRETCH);
     imglayer->SetContainer(container);
     GraphicsFilter filter =
       nsLayoutUtils::GetGraphicsFilterForFrame(this);
@@ -1612,11 +1587,11 @@ nsObjectFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
     NS_ASSERTION(layer->GetType() == Layer::TYPE_READBACK, "Bad layer type");
 
     ReadbackLayer* readback = static_cast<ReadbackLayer*>(layer.get());
-    if (readback->GetSize() != nsIntSize(size.width, size.height)) {
+    if (readback->GetSize() != ThebesIntSize(size)) {
       // This will destroy any old background sink and notify us that the
       // background is now unknown
       readback->SetSink(nullptr);
-      readback->SetSize(nsIntSize(size.width, size.height));
+      readback->SetSize(ThebesIntSize(size));
 
       if (mBackgroundSink) {
         // Maybe we still have a background sink associated with another
@@ -1635,11 +1610,12 @@ nsObjectFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
   }
 
   // Set a transform on the layer to draw the plugin in the right place
-  gfxMatrix transform;
-  transform.Translate(r.TopLeft() + aContainerParameters.mOffset);
+  Matrix transform;
+  gfxPoint p = r.TopLeft() + aContainerParameters.mOffset;
+  transform.Translate(p.x, p.y);
 
-  layer->SetBaseTransform(gfx3DMatrix::From2D(transform));
-  layer->SetVisibleRegion(nsIntRect(0, 0, size.width, size.height));
+  layer->SetBaseTransform(Matrix4x4::From2D(transform));
+  layer->SetVisibleRegion(ThebesIntRect(IntRect(IntPoint(0, 0), size)));
   return layer.forget();
 }
 
@@ -1863,102 +1839,10 @@ nsObjectFrame::PaintPlugin(nsDisplayListBuilder* aBuilder,
 
     ctx->SetMatrix(currentMatrix);
   }
-#elif defined(XP_OS2)
-  nsRefPtr<nsNPAPIPluginInstance> inst;
-  GetPluginInstance(getter_AddRefs(inst));
-  if (inst) {
-    // Look if it's windowless
-    NPWindow *window;
-    mInstanceOwner->GetWindow(window);
-
-    if (window->type == NPWindowTypeDrawable) {
-      // FIXME - Bug 385435: Doesn't aDirtyRect need translating too?
-      nsRenderingContext::AutoPushTranslation
-        translate(&aRenderingContext, aPluginRect.TopLeft());
-
-      // check if we need to call SetWindow with updated parameters
-      bool doupdatewindow = false;
-      // the offset of the DC
-      nsIntPoint origin;
-
-      /*
-       * Layout now has an optimized way of painting. Now we always get
-       * a new drawing surface, sized to be just what's needed. Windowless
-       * plugins need a transform applied to their origin so they paint
-       * in the right place. Since |SetWindow| is no longer being used
-       * to tell the plugin where it is, we dispatch a NPWindow through
-       * |HandleEvent| to tell the plugin when its window moved
-       */
-      gfxContext *ctx = aRenderingContext.ThebesContext();
-
-      gfxMatrix ctxMatrix = ctx->CurrentMatrix();
-      if (ctxMatrix.HasNonTranslation()) {
-        // soo; in the future, we should be able to render
-        // the object content to an offscreen DC, and then
-        // composite it in with the right transforms.
-
-        // But, we don't bother doing that, because we don't
-        // have the event handling story figured out yet.
-        // Instead, let's just bail.
-
-        return;
-      }
-
-      origin.x = NSToIntRound(ctxMatrix.GetTranslation().x);
-      origin.y = NSToIntRound(ctxMatrix.GetTranslation().y);
-
-      /* Need to force the clip to be set */
-      ctx->UpdateSurfaceClip();
-
-      /* Set the device offsets as appropriate, for whatever our current group offsets might be */
-      gfxFloat xoff, yoff;
-      nsRefPtr<gfxASurface> surf = ctx->CurrentSurface(&xoff, &yoff);
-
-      if (surf->CairoStatus() != 0) {
-        NS_WARNING("Plugin is being asked to render to a surface that's in error!");
-        return;
-      }
-
-      // check if we need to update the PS
-      HPS hps = (HPS)GetPSFromRC(aRenderingContext);
-      if (reinterpret_cast<HPS>(window->window) != hps) {
-        window->window = reinterpret_cast<void*>(hps);
-        doupdatewindow = true;
-      }
-      LONG lPSid = GpiSavePS(hps);
-      RECTL rclViewport;
-      if (GpiQueryDevice(hps) != NULLHANDLE) { // ensure that we have an associated HDC
-        if (GpiQueryPageViewport(hps, &rclViewport)) {
-          rclViewport.xLeft += (LONG)xoff;
-          rclViewport.xRight += (LONG)xoff;
-          rclViewport.yBottom += (LONG)yoff;
-          rclViewport.yTop += (LONG)yoff;
-          GpiSetPageViewport(hps, &rclViewport);
-        }
-      }
-
-      if ((window->x != origin.x) || (window->y != origin.y)) {
-        window->x = origin.x;
-        window->y = origin.y;
-        doupdatewindow = true;
-      }
-
-      // if our location or visible area has changed, we need to tell the plugin
-      if (doupdatewindow) {
-        inst->SetWindow(window);        
-      }
-
-      mInstanceOwner->Paint(aDirtyRect, hps);
-      if (lPSid >= 1) {
-        GpiRestorePS(hps, lPSid);
-      }
-      surf->MarkDirty();
-    }
-  }
 #endif
 }
 
-NS_IMETHODIMP
+nsresult
 nsObjectFrame::HandleEvent(nsPresContext* aPresContext,
                            WidgetGUIEvent* anEvent,
                            nsEventStatus* anEventStatus)
@@ -2052,7 +1936,7 @@ nsObjectFrame::GetPluginInstance(nsNPAPIPluginInstance** aPluginInstance)
   return mInstanceOwner->GetInstance(aPluginInstance);
 }
 
-NS_IMETHODIMP
+nsresult
 nsObjectFrame::GetCursor(const nsPoint& aPoint, nsIFrame::Cursor& aCursor)
 {
   if (!mInstanceOwner) {

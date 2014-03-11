@@ -559,7 +559,7 @@ protected:
       // Jump directly to the original target of the jump instead of jumping to the
       // original function.
       // Adjust jump target displacement to jump location in the trampoline.
-      *((intptr_t*)(tramp+pJmp32+1)) += origBytes + pJmp32 - tramp;
+      *((intptr_t*)(tramp+pJmp32+1)) += origBytes - tramp;
     } else {
       tramp[nBytes] = 0xE9; // jmp
       *((intptr_t*)(tramp+nBytes+1)) = (intptr_t)trampDest - (intptr_t)(tramp+nBytes+5); // target displacement
@@ -671,24 +671,34 @@ public:
 
   bool AddHook(const char *pname, intptr_t hookDest, void **origFunc)
   {
+    // Use a nop space patch if possible, otherwise fall back to a detour.
+    // This should be the preferred method for adding hooks.
+
     if (!mModuleName) {
-      // printf("AddHook before initialized?\n");
       return false;
     }
 
     if (mNopSpacePatcher.AddHook(pname, hookDest, origFunc)) {
-      // printf("nopSpacePatcher succeeded.\n");
       return true;
     }
 
+    return AddDetour(pname, hookDest, origFunc);
+  }
+
+  bool AddDetour(const char *pname, intptr_t hookDest, void **origFunc)
+  {
+    // Generally, code should not call this method directly. Use AddHook unless
+    // there is a specific need to avoid nop space patches.
+
+    if (!mModuleName) {
+      return false;
+    }
+
     if (!mDetourPatcher.Initialized()) {
-      // printf("Initializing detour patcher.\n");
       mDetourPatcher.Init(mModuleName, mNHooks);
     }
 
-    bool rv = mDetourPatcher.AddHook(pname, hookDest, origFunc);
-    // printf("detourPatcher returned %d\n", rv);
-    return rv;
+    return mDetourPatcher.AddHook(pname, hookDest, origFunc);
   }
 };
 

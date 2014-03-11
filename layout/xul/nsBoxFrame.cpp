@@ -38,7 +38,7 @@
 #include "nsPlaceholderFrame.h"
 #include "nsPresContext.h"
 #include "nsCOMPtr.h"
-#include "nsINameSpaceManager.h"
+#include "nsNameSpaceManager.h"
 #include "nsGkAtoms.h"
 #include "nsIContent.h"
 #include "nsHTMLParts.h"
@@ -104,6 +104,12 @@ NS_NewBoxFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 
 NS_IMPL_FRAMEARENA_HELPERS(nsBoxFrame)
 
+#ifdef DEBUG
+NS_QUERYFRAME_HEAD(nsBoxFrame)
+  NS_QUERYFRAME_ENTRY(nsBoxFrame)
+NS_QUERYFRAME_TAIL_INHERITING(nsContainerFrame)
+#endif
+
 nsBoxFrame::nsBoxFrame(nsIPresShell* aPresShell,
                        nsStyleContext* aContext,
                        bool aIsRoot,
@@ -133,7 +139,7 @@ nsBoxFrame::~nsBoxFrame()
 {
 }
 
-NS_IMETHODIMP
+nsresult
 nsBoxFrame::SetInitialChildList(ChildListID     aListID,
                                 nsFrameList&    aChildList)
 {
@@ -545,7 +551,7 @@ nsBoxFrame::GetInitialAutoStretch(bool& aStretch)
   return true;
 }
 
-NS_IMETHODIMP
+nsresult
 nsBoxFrame::DidReflow(nsPresContext*           aPresContext,
                       const nsHTMLReflowState*  aReflowState,
                       nsDidReflowStatus         aStatus)
@@ -621,7 +627,7 @@ nsBoxFrame::GetPrefWidth(nsRenderingContext *aRenderingContext)
   return result;
 }
 
-NS_IMETHODIMP
+nsresult
 nsBoxFrame::Reflow(nsPresContext*          aPresContext,
                    nsHTMLReflowMetrics&     aDesiredSize,
                    const nsHTMLReflowState& aReflowState,
@@ -640,8 +646,8 @@ nsBoxFrame::Reflow(nsPresContext*          aPresContext,
   printf("\n-------------Starting BoxFrame Reflow ----------------------------\n");
   printf("%p ** nsBF::Reflow %d ", this, myCounter++);
   
-  printSize("AW", aReflowState.availableWidth);
-  printSize("AH", aReflowState.availableHeight);
+  printSize("AW", aReflowState.AvailableWidth());
+  printSize("AH", aReflowState.AvailableHeight());
   printSize("CW", aReflowState.ComputedWidth());
   printSize("CH", aReflowState.ComputedHeight());
 
@@ -658,7 +664,7 @@ nsBoxFrame::Reflow(nsPresContext*          aPresContext,
   nsSize computedSize(aReflowState.ComputedWidth(),aReflowState.ComputedHeight());
 
   nsMargin m;
-  m = aReflowState.mComputedBorderPadding;
+  m = aReflowState.ComputedPhysicalBorderPadding();
   // GetBorderAndPadding(m);
 
   nsSize prefSize(0,0);
@@ -681,7 +687,7 @@ nsBoxFrame::Reflow(nsPresContext*          aPresContext,
     computedSize.height = prefSize.height;
     // prefSize is border-box but min/max constraints are content-box.
     nscoord verticalBorderPadding =
-      aReflowState.mComputedBorderPadding.TopBottom();
+      aReflowState.ComputedPhysicalBorderPadding().TopBottom();
     nscoord contentHeight = computedSize.height - verticalBorderPadding;
     // Note: contentHeight might be negative, but that's OK because min-height
     // is never negative.
@@ -709,15 +715,15 @@ nsBoxFrame::Reflow(nsPresContext*          aPresContext,
     ascent = GetBoxAscent(state);
   }
 
-  aDesiredSize.width  = mRect.width;
-  aDesiredSize.height = mRect.height;
-  aDesiredSize.ascent = ascent;
+  aDesiredSize.Width() = mRect.width;
+  aDesiredSize.Height() = mRect.height;
+  aDesiredSize.SetTopAscent(ascent);
 
   aDesiredSize.mOverflowAreas = GetOverflowAreas();
 
 #ifdef DO_NOISY_REFLOW
   {
-    printf("%p ** nsBF(done) W:%d H:%d  ", this, aDesiredSize.width, aDesiredSize.height);
+    printf("%p ** nsBF(done) W:%d H:%d  ", this, aDesiredSize.Width(), aDesiredSize.Height());
 
     if (maxElementSize) {
       printf("MW:%d\n", *maxElementWidth); 
@@ -913,9 +919,9 @@ nsBoxFrame::DoLayout(nsBoxLayoutState& aState)
                                   nsSize(mRect.width, NS_UNCONSTRAINEDSIZE));
 
     // Set up a |desiredSize| to pass into ReflowAbsoluteFrames
-    nsHTMLReflowMetrics desiredSize;
-    desiredSize.width  = mRect.width;
-    desiredSize.height = mRect.height;
+    nsHTMLReflowMetrics desiredSize(reflowState);
+    desiredSize.Width() = mRect.width;
+    desiredSize.Height() = mRect.height;
 
     // get the ascent (cribbed from ::Reflow)
     nscoord ascent = mRect.height;
@@ -925,14 +931,16 @@ nsBoxFrame::DoLayout(nsBoxLayoutState& aState)
     if (!(mState & NS_STATE_IS_ROOT)) {
       ascent = GetBoxAscent(aState);
     }
-    desiredSize.ascent = ascent;
+    desiredSize.SetTopAscent(ascent);
     desiredSize.mOverflowAreas = GetOverflowAreas();
 
+    AddStateBits(NS_FRAME_IN_REFLOW);
     // Set up a |reflowStatus| to pass into ReflowAbsoluteFrames
     // (just a dummy value; hopefully that's OK)
     nsReflowStatus reflowStatus = NS_FRAME_COMPLETE;
     ReflowAbsoluteFrames(aState.PresContext(), desiredSize,
                          reflowState, reflowStatus);
+    RemoveStateBits(NS_FRAME_IN_REFLOW);
   }
 
   return rv;
@@ -951,7 +959,7 @@ nsBoxFrame::DestroyFrom(nsIFrame* aDestructRoot)
 } 
 
 #ifdef DEBUG_LAYOUT
-NS_IMETHODIMP
+nsresult
 nsBoxFrame::SetDebug(nsBoxLayoutState& aState, bool aDebug)
 {
   // see if our state matches the given debug state
@@ -994,7 +1002,7 @@ nsBoxFrame::MarkIntrinsicWidthsDirty()
   // IsBoxWrapped check.
 }
 
-NS_IMETHODIMP
+nsresult
 nsBoxFrame::RemoveFrame(ChildListID     aListID,
                         nsIFrame*       aOldFrame)
 {
@@ -1019,7 +1027,7 @@ nsBoxFrame::RemoveFrame(ChildListID     aListID,
   return NS_OK;
 }
 
-NS_IMETHODIMP
+nsresult
 nsBoxFrame::InsertFrames(ChildListID     aListID,
                          nsIFrame*       aPrevFrame,
                          nsFrameList&    aFrameList)
@@ -1058,7 +1066,7 @@ nsBoxFrame::InsertFrames(ChildListID     aListID,
 }
 
 
-NS_IMETHODIMP
+nsresult
 nsBoxFrame::AppendFrames(ChildListID     aListID,
                          nsFrameList&    aFrameList)
 {
@@ -1101,7 +1109,7 @@ nsBoxFrame::GetContentInsertionFrame()
   return nsContainerFrame::GetContentInsertionFrame();
 }
 
-NS_IMETHODIMP
+nsresult
 nsBoxFrame::AttributeChanged(int32_t aNameSpaceID,
                              nsIAtom* aAttribute,
                              int32_t aModType)
@@ -1524,8 +1532,8 @@ nsBoxFrame::GetBoxName(nsAutoString& aName)
 }
 #endif
 
-#ifdef DEBUG
-NS_IMETHODIMP
+#ifdef DEBUG_FRAME_DUMP
+nsresult
 nsBoxFrame::GetFrameName(nsAString& aResult) const
 {
   return MakeFrameName(NS_LITERAL_STRING("Box"), aResult);
@@ -1539,7 +1547,7 @@ nsBoxFrame::GetType() const
 }
 
 #ifdef DEBUG_LAYOUT
-NS_IMETHODIMP
+nsresult
 nsBoxFrame::GetDebug(bool& aDebug)
 {
   aDebug = (mState & NS_STATE_CURRENTLY_IN_DEBUG);
@@ -1932,7 +1940,7 @@ nsBoxFrame::LayoutChildAt(nsBoxLayoutState& aState, nsIFrame* aBox, const nsRect
   return NS_OK;
 }
 
-NS_IMETHODIMP
+nsresult
 nsBoxFrame::RelayoutChildAtOrdinal(nsBoxLayoutState& aState, nsIFrame* aChild)
 {
   if (!SupportsOrdinalsInChildren())
@@ -2002,7 +2010,8 @@ public:
                               nsIFrame* aTargetFrame)
     : nsDisplayWrapList(aBuilder, aFrame, aList), mTargetFrame(aTargetFrame) {}
   virtual void HitTest(nsDisplayListBuilder* aBuilder, const nsRect& aRect,
-                       HitTestState* aState, nsTArray<nsIFrame*> *aOutFrames);
+                       HitTestState* aState,
+                       nsTArray<nsIFrame*> *aOutFrames) MOZ_OVERRIDE;
   NS_DISPLAY_DECL_NAME("XULEventRedirector", TYPE_XUL_EVENT_REDIRECTOR)
 private:
   nsIFrame* mTargetFrame;
@@ -2045,12 +2054,13 @@ public:
   nsXULEventRedirectorWrapper(nsIFrame* aTargetFrame)
       : mTargetFrame(aTargetFrame) {}
   virtual nsDisplayItem* WrapList(nsDisplayListBuilder* aBuilder,
-                                  nsIFrame* aFrame, nsDisplayList* aList) {
+                                  nsIFrame* aFrame,
+                                  nsDisplayList* aList) MOZ_OVERRIDE {
     return new (aBuilder)
         nsDisplayXULEventRedirector(aBuilder, aFrame, aList, mTargetFrame);
   }
   virtual nsDisplayItem* WrapItem(nsDisplayListBuilder* aBuilder,
-                                  nsDisplayItem* aItem) {
+                                  nsDisplayItem* aItem) MOZ_OVERRIDE {
     return new (aBuilder)
         nsDisplayXULEventRedirector(aBuilder, aItem->Frame(), aItem,
                                     mTargetFrame);

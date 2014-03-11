@@ -11,9 +11,21 @@
 
 USING_FILE_NAMESPACE
 
-DOMFileRequest::DOMFileRequest(nsIDOMWindow* aWindow)
+DOMFileRequest::DOMFileRequest(nsPIDOMWindow* aWindow)
   : FileRequest(aWindow)
 {
+}
+
+// static
+already_AddRefed<DOMFileRequest>
+DOMFileRequest::Create(nsPIDOMWindow* aOwner, LockedFile* aLockedFile)
+{
+  MOZ_ASSERT(NS_IsMainThread(), "Wrong thread!");
+
+  nsRefPtr<DOMFileRequest> request = new DOMFileRequest(aOwner);
+  request->mLockedFile = aLockedFile;
+
+  return request.forget();
 }
 
 /* virtual */ JSObject*

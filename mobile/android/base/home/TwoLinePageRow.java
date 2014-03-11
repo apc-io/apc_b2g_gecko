@@ -5,13 +5,14 @@
 
 package org.mozilla.gecko.home;
 
-import android.util.Log;
-import org.mozilla.gecko.favicons.Favicons;
+import java.lang.ref.WeakReference;
+
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.Tabs;
 import org.mozilla.gecko.db.BrowserContract.Combined;
 import org.mozilla.gecko.db.BrowserDB.URLColumns;
+import org.mozilla.gecko.favicons.Favicons;
 import org.mozilla.gecko.favicons.OnFaviconLoadedListener;
 import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.gecko.widget.FaviconView;
@@ -26,18 +27,19 @@ import android.view.LayoutInflater;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import java.lang.ref.WeakReference;
-
 public class TwoLinePageRow extends LinearLayout
                             implements Tabs.OnTabsChangedListener {
+
     private static final int NO_ICON = 0;
 
     private final TextView mTitle;
     private final TextView mUrl;
+
+    private int mSwitchToTabIconId;
+    private int mPageTypeIconId;
+
     private final FaviconView mFavicon;
 
-    private int mUrlIconId;
-    private int mBookmarkIconId;
     private boolean mShowIcons;
     private int mLoadFaviconJobId = Favicons.NOT_LOADING;
 
@@ -81,14 +83,15 @@ public class TwoLinePageRow extends LinearLayout
 
         setGravity(Gravity.CENTER_VERTICAL);
 
-        mUrlIconId = NO_ICON;
-        mBookmarkIconId = NO_ICON;
-        mShowIcons = true;
-
         LayoutInflater.from(context).inflate(R.layout.two_line_page_row, this);
         mTitle = (TextView) findViewById(R.id.title);
         mUrl = (TextView) findViewById(R.id.url);
-        mFavicon = (FaviconView) findViewById(R.id.favicon);
+
+        mSwitchToTabIconId = NO_ICON;
+        mPageTypeIconId = NO_ICON;
+        mShowIcons = true;
+
+        mFavicon = (FaviconView) findViewById(R.id.icon);
         mFaviconListener = new UpdateViewFaviconLoadedListener(mFavicon);
     }
 
@@ -120,34 +123,34 @@ public class TwoLinePageRow extends LinearLayout
         }
     }
 
-    private void setTitle(String title) {
-        mTitle.setText(title);
+    private void setTitle(String text) {
+        mTitle.setText(text);
     }
 
-    private void setUrl(String url) {
-        mUrl.setText(url);
+    private void setUrl(String text) {
+        mUrl.setText(text);
     }
 
     private void setUrl(int stringId) {
         mUrl.setText(stringId);
     }
 
-    private void setUrlIcon(int urlIconId) {
-        if (mUrlIconId == urlIconId) {
+    private void setSwitchToTabIcon(int iconId) {
+        if (mSwitchToTabIconId == iconId) {
             return;
         }
 
-        mUrlIconId = urlIconId;
-        mUrl.setCompoundDrawablesWithIntrinsicBounds(mUrlIconId, 0, mBookmarkIconId, 0);
+        mSwitchToTabIconId = iconId;
+        mUrl.setCompoundDrawablesWithIntrinsicBounds(mSwitchToTabIconId, 0, mPageTypeIconId, 0);
     }
 
-    private void setBookmarkIcon(int bookmarkIconId) {
-        if (mBookmarkIconId == bookmarkIconId) {
+    private void setPageTypeIcon(int iconId) {
+        if (mPageTypeIconId == iconId) {
             return;
         }
 
-        mBookmarkIconId = bookmarkIconId;
-        mUrl.setCompoundDrawablesWithIntrinsicBounds(mUrlIconId, 0, mBookmarkIconId, 0);
+        mPageTypeIconId = iconId;
+        mUrl.setCompoundDrawablesWithIntrinsicBounds(mSwitchToTabIconId, 0, mPageTypeIconId, 0);
     }
 
     /**
@@ -166,13 +169,13 @@ public class TwoLinePageRow extends LinearLayout
      */
     private void updateDisplayedUrl() {
         boolean isPrivate = Tabs.getInstance().getSelectedTab().isPrivate();
-        int tabId = Tabs.getInstance().getTabIdForUrl(mPageUrl, isPrivate);
-        if (!mShowIcons || tabId < 0) {
+        Tab tab = Tabs.getInstance().getFirstTabForUrl(mPageUrl, isPrivate);
+        if (!mShowIcons || tab == null) {
             setUrl(mPageUrl);
-            setUrlIcon(NO_ICON);
+            setSwitchToTabIcon(NO_ICON);
         } else {
             setUrl(R.string.switch_to_tab);
-            setUrlIcon(R.drawable.ic_url_bar_tab);
+            setSwitchToTabIcon(R.drawable.ic_url_bar_tab);
         }
     }
 
@@ -207,14 +210,14 @@ public class TwoLinePageRow extends LinearLayout
                 // The bookmark id will be 0 (null in database) when the url
                 // is not a bookmark.
                 if (bookmarkId == 0) {
-                    setBookmarkIcon(NO_ICON);
+                    setPageTypeIcon(NO_ICON);
                 } else if (display == Combined.DISPLAY_READER) {
-                    setBookmarkIcon(R.drawable.ic_url_bar_reader);
+                    setPageTypeIcon(R.drawable.ic_url_bar_reader);
                 } else {
-                    setBookmarkIcon(R.drawable.ic_url_bar_star);
+                    setPageTypeIcon(R.drawable.ic_url_bar_star);
                 }
             } else {
-                setBookmarkIcon(NO_ICON);
+                setPageTypeIcon(NO_ICON);
             }
         }
 

@@ -65,6 +65,7 @@ class AsyncPanZoomController {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(AsyncPanZoomController)
 
   typedef mozilla::MonitorAutoLock MonitorAutoLock;
+  typedef uint32_t TouchBehaviorFlags;
 
 public:
   enum GestureBehavior {
@@ -130,20 +131,14 @@ public:
 
   /**
    * Updates any zoom constraints contained in the <meta name="viewport"> tag.
-   * We try to obey everything it asks us elsewhere, but here we only handle
-   * minimum-scale, maximum-scale, and user-scalable.
    */
-  void UpdateZoomConstraints(bool aAllowZoom,
-                             const CSSToScreenScale& aMinScale,
-                             const CSSToScreenScale& aMaxScale);
+  void UpdateZoomConstraints(const ZoomConstraints& aConstraints);
 
   /**
    * Return the zoom constraints last set for this APZC (in the constructor
    * or in UpdateZoomConstraints()).
    */
-  void GetZoomConstraints(bool* aAllowZoom,
-                          CSSToScreenScale* aMinScale,
-                          CSSToScreenScale* aMaxScale);
+  ZoomConstraints GetZoomConstraints() const;
 
   /**
    * Schedules a runnable to run on the controller/UI thread at some time
@@ -228,6 +223,15 @@ public:
   gfx3DMatrix GetNontransientAsyncTransform();
 
   /**
+   * Returns the transform to take something from the coordinate space of the
+   * last thing we know gecko painted, to the coordinate space of the last thing
+   * we asked gecko to paint. In cases where that last request has not yet been
+   * processed, this is needed to transform input events properly into a space
+   * gecko will understand.
+   */
+  gfx3DMatrix GetTransformToLastDispatchedPaint();
+
+  /**
    * Recalculates the displayport. Ideally, this should paint an area bigger
    * than the composite-to dimensions so that when you scroll down, you don't
    * checkerboard immediately. This includes a bunch of logic, including
@@ -235,8 +239,7 @@ public:
    */
   static const CSSRect CalculatePendingDisplayPort(
     const FrameMetrics& aFrameMetrics,
-    const gfx::Point& aVelocity,
-    const gfx::Point& aAcceleration,
+    const ScreenPoint& aVelocity,
     double aEstimatedPaintDuration);
 
   /**
@@ -299,6 +302,24 @@ public:
                      uint32_t aOverscrollHandoffChainIndex = 0);
 
   /**
+   * Returns allowed touch behavior for the given point on the scrollable layer.
+   * Internally performs a kind of hit testing based on the regions constructed
+   * on the main thread and attached to the current scrollable layer. Each of such regions
+   * contains info about allowed touch behavior. If regions info isn't enough it returns
+   * UNKNOWN value and we should switch to the fallback approach - asking content.
+   * TODO: for now it's only a stub and returns hardcoded magic value. As soon as bug 928833
+   * is done we should integrate its logic here.
+   */
+  TouchBehaviorFlags GetAllowedTouchBehavior(ScreenIntPoint& aPoint);
+
+  /**
+   * Sets allowed touch behavior for current touch session.
+   * This method is invoked by the APZCTreeManager which in its turn invoked by
+   * the widget after performing touch-action values retrieving.
+   */
+  void SetAllowedTouchBehavior(const nsTArray<TouchBehaviorFlags>& aBehaviors);
+
+  /**
    * A helper function for calling APZCTreeManager::DispatchScroll().
    * Guards against the case where the APZC is being concurrently destroyed
    * (and thus mTreeManager is being nulled out).
@@ -311,6 +332,16 @@ public:
    * attribute.
    */
   bool HasScrollgrab() const { return mFrameMetrics.mHasScrollgrab; }
+
+  void FlushRepaintForOverscrollHandoff();
+
+  /**
+   * Set an extra offset for testing async scrolling.
+   */
+  void SetTestAsyncScrollOffset(const CSSPoint& aPoint)
+  {
+    mTestAsyncScrollOffset = aPoint;
+  }
 
 protected:
   /**
@@ -414,12 +445,7 @@ protected:
   /**
    * Gets a vector of the velocities of each axis.
    */
-  const gfx::Point GetVelocityVector();
-
-  /**
-   * Gets a vector of the acceleration factors of each axis.
-   */
-  const gfx::Point GetAccelerationVector();
+  const ScreenPoint GetVelocityVector();
 
   /**
    * Gets a reference to the first touch point from a MultiTouchInput.  This
@@ -427,6 +453,16 @@ protected:
    * relevant.
    */
   ScreenIntPoint& GetFirstTouchScreenPoint(const MultiTouchInput& aEvent);
+
+  /**
+   * Sets the panning state basing on the pan direction angle and current touch-action value.
+   */
+  void HandlePanningWithTouchAction(double angle, TouchBehaviorFlags value);
+
+  /**
+   * Sets the panning state ignoring the touch action value.
+   */
+  void HandlePanning(double angle);
 
   /**
    * Sets up anything needed for panning. This takes us out of the "TOUCHING"
@@ -446,22 +482,6 @@ protected:
   void TrackTouch(const MultiTouchInput& aEvent);
 
   /**
-   * Attempts to enlarge the displayport along a single axis. Returns whether or
-   * not the displayport was enlarged. This will fail in circumstances where the
-   * velocity along that axis is not high enough to need any changes. The
-   * displayport metrics are expected to be passed into |aDisplayPortOffset| and
-   * |aDisplayPortLength|. If enlarged, these will be updated with the new
-   * metrics.
-   */
-  static bool EnlargeDisplayPortAlongAxis(float aSkateSizeMultiplier,
-                                          double aEstimatedPaintDuration,
-                                          float aCompositionBounds,
-                                          float aVelocity,
-                                          float aAcceleration,
-                                          float* aDisplayPortOffset,
-                                          float* aDisplayPortLength);
-
-  /**
    * Utility function to send updated FrameMetrics to Gecko so that it can paint
    * the displayport area. Calls into GeckoContentController to do the actual
    * work. Note that only one paint request can be active at a time. If a paint
@@ -475,7 +495,12 @@ protected:
    * Tell the paint throttler to request a content repaint with the given
    * metrics.  (Helper function used by RequestContentRepaint.)
    */
-  void ScheduleContentRepaint(FrameMetrics &aFrameMetrics);
+  void RequestContentRepaint(FrameMetrics& aFrameMetrics);
+
+  /**
+   * Actually send the next pending paint request to gecko.
+   */
+  void DispatchRepaintRequest(const FrameMetrics& aFrameMetrics);
 
   /**
    * Advances a fling by an interpolated amount based on the passed in |aDelta|.
@@ -492,13 +517,22 @@ protected:
   const FrameMetrics& GetFrameMetrics();
 
   /**
-   * Timeout function for touch listeners. This should be called on a timer
-   * after we get our first touch event in a batch, under the condition that we
-   * have touch listeners. If a notification comes indicating whether or not
-   * content preventDefaulted a series of touch events before the timeout, the
-   * timeout should be cancelled.
+   * Sets the timer for content response to a series of touch events, if it
+   * hasn't been already. This is to prevent us from batching up touch events
+   * indefinitely in the case that content doesn't respond with whether or not
+   * it wants to preventDefault. When the timer is fired, the touch event queue
+   * will be flushed.
    */
-  void TimeoutTouchListeners();
+  void SetContentResponseTimer();
+
+  /**
+   * Timeout function for content response. This should be called on a timer
+   * after we get our first touch event in a batch, under the condition that we
+   * waiting for response from content. If a notification comes indicating whether or not
+   * content preventDefaulted a series of touch events and touch behavior values are
+   * set before the timeout, the timeout should be cancelled.
+   */
+  void TimeoutContentResponse();
 
   /**
    * Timeout function for mozbrowserasyncscroll event. Because we throttle
@@ -510,25 +544,47 @@ protected:
 
 private:
   enum PanZoomState {
-    NOTHING,        /* no touch-start events received */
-    FLING,          /* all touches removed, but we're still scrolling page */
-    TOUCHING,       /* one touch-start event received */
+    NOTHING,                  /* no touch-start events received */
+    FLING,                    /* all touches removed, but we're still scrolling page */
+    TOUCHING,                 /* one touch-start event received */
 
-    PANNING,           /* panning the frame */
-    PANNING_LOCKED_X,  /* touch-start followed by move (i.e. panning with axis lock) X axis */
-    PANNING_LOCKED_Y,  /* as above for Y axis */
+    PANNING,                  /* panning the frame */
+    PANNING_LOCKED_X,         /* touch-start followed by move (i.e. panning with axis lock) X axis */
+    PANNING_LOCKED_Y,         /* as above for Y axis */
 
-    CROSS_SLIDING_X,   /* Panning disabled while user does a horizontal gesture
-                          on a vertically-scrollable view. This used for the
-                          Windows Metro "cross-slide" gesture. */
-    CROSS_SLIDING_Y,   /* as above for Y axis */
+    CROSS_SLIDING_X,          /* Panning disabled while user does a horizontal gesture
+                                 on a vertically-scrollable view. This used for the
+                                 Windows Metro "cross-slide" gesture. */
+    CROSS_SLIDING_Y,          /* as above for Y axis */
 
-    PINCHING,       /* nth touch-start, where n > 1. this mode allows pan and zoom */
-    ANIMATING_ZOOM, /* animated zoom to a new rect */
-    WAITING_LISTENERS, /* a state halfway between NOTHING and TOUCHING - the user has
-                    put a finger down, but we don't yet know if a touch listener has
-                    prevented the default actions yet. we still need to abort animations. */
+    PINCHING,                 /* nth touch-start, where n > 1. this mode allows pan and zoom */
+    ANIMATING_ZOOM,           /* animated zoom to a new rect */
+    WAITING_CONTENT_RESPONSE, /* a state halfway between NOTHING and TOUCHING - the user has
+                                 put a finger down, but we don't yet know if a touch listener has
+                                 prevented the default actions yet and the allowed touch behavior
+                                 was not set yet. we still need to abort animations. */
   };
+
+  /*
+   * Returns whether current touch behavior values allow zooming.
+   */
+  bool TouchActionAllowZoom();
+
+  /*
+   * Returns allowed touch behavior from the mAllowedTouchBehavior array.
+   * In case apzc didn't receive touch behavior values within the timeout
+   * it returns default value.
+   */
+  TouchBehaviorFlags GetTouchBehavior(uint32_t touchIndex);
+
+  /**
+   * To move from the WAITING_CONTENT_RESPONSE state to TOUCHING one we need two
+   * conditions set: get content listeners response (whether they called preventDefault)
+   * and get allowed touch behaviors.
+   * This method checks both conditions and changes (or not changes) state
+   * appropriately.
+   */
+  void CheckContentResponse();
 
   /**
    * Helper to set the current state. Holds the monitor before actually setting
@@ -586,6 +642,12 @@ protected:
   // function can be used, or the monitor can be held and then |mState| updated.
   ReentrantMonitor mMonitor;
 
+  // Specifies whether we should use touch-action css property. Initialized from
+  // the preferences. This property (in comparison with the global one) simplifies
+  // testing apzc with (and without) touch-action property enabled concurrently
+  // (e.g. with the gtest framework).
+  bool mTouchActionPropertyEnabled;
+
 private:
   // Metrics of the container layer corresponding to this APZC. This is
   // stored here so that it is accessible from the UI/controller thread.
@@ -598,20 +660,27 @@ private:
   // that we're not requesting a paint of the same thing that's already drawn.
   // If we don't do this check, we don't get a ShadowLayersUpdated back.
   FrameMetrics mLastPaintRequestMetrics;
+  // The last metrics that we actually sent to Gecko. This allows us to transform
+  // inputs into a coordinate space that Gecko knows about. This assumes the pipe
+  // through which input events and repaint requests are sent to Gecko operates
+  // in a FIFO manner.
+  FrameMetrics mLastDispatchedPaintMetrics;
 
   nsTArray<MultiTouchInput> mTouchQueue;
 
-  CancelableTask* mTouchListenerTimeoutTask;
+  CancelableTask* mContentResponseTimeoutTask;
 
   AxisX mX;
   AxisY mY;
 
+  // This flag is set to true when we are in a axis-locked pan as a result of
+  // the touch-action CSS property.
+  bool mPanDirRestricted;
+
   // Most up-to-date constraints on zooming. These should always be reasonable
   // values; for example, allowing a min zoom of 0.0 can cause very bad things
   // to happen.
-  bool mAllowZoom;
-  CSSToScreenScale mMinZoom;
-  CSSToScreenScale mMaxZoom;
+  ZoomConstraints mZoomConstraints;
 
   // The last time the compositor has sampled the content transform for this
   // frame.
@@ -645,6 +714,25 @@ private:
   // queued up event block. If set, this means that we are handling this queue
   // and we don't want to queue the events back up again.
   bool mHandlingTouchQueue;
+
+  // Values of allowed touch behavior for current touch points.
+  // Since there are maybe a few current active touch points per time (multitouch case)
+  // and each touch point should have its own value of allowed touch behavior- we're
+  // keeping an array of allowed touch behavior values, not the single value.
+  nsTArray<TouchBehaviorFlags> mAllowedTouchBehaviors;
+
+  // Specifies whether mAllowedTouchBehaviors is set for current touch events block.
+  bool mAllowedTouchBehaviorSet;
+
+  // Flag used to specify that content prevented the default behavior of the current
+  // touch events block.
+  bool mPreventDefault;
+
+  // Specifies whether mPreventDefault property is set for current touch events block.
+  bool mPreventDefaultSet;
+
+  // Extra offset to add in SampleContentTransformForFrame for testing
+  CSSPoint mTestAsyncScrollOffset;
 
   RefPtr<AsyncPanZoomAnimation> mAnimation;
 

@@ -10,7 +10,7 @@ const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource:///modules/devtools/shared/event-emitter.js");
+Cu.import("resource://gre/modules/devtools/event-emitter.js");
 let promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js").Promise;
 Cu.import("resource://gre/modules/devtools/Loader.jsm");
 
@@ -55,6 +55,11 @@ DevTools.prototype = {
    *                     A falsy value indicates that it cannot be hidden.
    * - icon: URL pointing to a graphic which will be used as the src for an
    *         16x16 img tag (string|required)
+   * - invertIconForLightTheme: The icon can automatically have an inversion
+   *         filter applied (default is false).  All builtin tools are true, but
+   *         addons may omit this to prevent unwanted changes to the `icon`
+   *         image. See browser/themes/shared/devtools/filters.svg#invert for
+   *         the filter being applied to the images (boolean|optional)
    * - url: URL pointing to a XUL/XHTML document containing the user interface
    *        (string|required)
    * - label: Localized name for the tool to be displayed to the user
@@ -457,7 +462,10 @@ let gDevToolsBrowser = {
     let toolbox = gDevTools.getToolbox(target);
     let toolDefinition = gDevTools.getToolDefinition(toolId);
 
-    if (toolbox && toolbox.currentToolId == toolId) {
+    if (toolbox &&
+        (toolbox.currentToolId == toolId ||
+          (toolId == "webconsole" && toolbox.splitConsole)))
+    {
       toolbox.fireCustomKey(toolId);
 
       if (toolDefinition.preventClosingOnKey || toolbox.hostType == devtools.Toolbox.HostType.WINDOW) {

@@ -64,10 +64,14 @@
 #include <winternl.h>
 #include "d3dkmtQueryStatistics.h"
 
+#include "SurfaceCache.h"
+#include "gfxPrefs.h"
+
 using namespace mozilla;
 using namespace mozilla::gfx;
 using namespace mozilla::layers;
 using namespace mozilla::widget;
+using namespace mozilla::image;
 
 #ifdef CAIRO_HAS_D2D_SURFACE
 
@@ -77,88 +81,65 @@ static const int kSupportedFeatureLevels[] =
   { D3D10_FEATURE_LEVEL_10_1, D3D10_FEATURE_LEVEL_10_0,
     D3D10_FEATURE_LEVEL_9_3 };
 
-class GfxD2DSurfaceCacheReporter MOZ_FINAL : public MemoryUniReporter
+class GfxD2DSurfaceReporter MOZ_FINAL : public nsIMemoryReporter
 {
 public:
-    GfxD2DSurfaceCacheReporter()
-      : MemoryUniReporter("gfx-d2d-surface-cache", KIND_OTHER, UNITS_BYTES,
-"Memory used by the Direct2D internal surface cache.")
-    {}
-private:
-    int64_t Amount() MOZ_OVERRIDE
+    NS_DECL_ISUPPORTS
+
+    NS_IMETHOD CollectReports(nsIHandleReportCallback* aHandleReport,
+                              nsISupports* aData)
     {
-        return cairo_d2d_get_image_surface_cache_usage();
+        nsresult rv;
+
+        int64_t amount = cairo_d2d_get_image_surface_cache_usage();
+        rv = MOZ_COLLECT_REPORT(
+            "gfx-d2d-surface-cache", KIND_OTHER, UNITS_BYTES, amount,
+            "Memory used by the Direct2D internal surface cache.");
+        NS_ENSURE_SUCCESS(rv, rv);
+
+        cairo_device_t *device =
+            gfxWindowsPlatform::GetPlatform()->GetD2DDevice();
+        amount = device ? cairo_d2d_get_surface_vram_usage(device) : 0;
+        rv = MOZ_COLLECT_REPORT(
+            "gfx-d2d-surface-vram", KIND_OTHER, UNITS_BYTES, amount,
+            "Video memory used by D2D surfaces.");
+        NS_ENSURE_SUCCESS(rv, rv);
+
+        return NS_OK;
     }
 };
 
-namespace
-{
-
-bool OncePreferenceDirect2DDisabled()
-{
-  static int preferenceValue = -1;
-  if (preferenceValue < 0) {
-    preferenceValue = Preferences::GetBool("gfx.direct2d.disabled", false);
-  }
-  return !!preferenceValue;
-}
-
-bool OncePreferenceDirect2DForceEnabled()
-{
-  static int preferenceValue = -1;
-  if (preferenceValue < 0) {
-    preferenceValue = Preferences::GetBool("gfx.direct2d.force-enabled", false);
-  }
-  return !!preferenceValue;
-}
-
-} // anonymous namespace
-
-class GfxD2DSurfaceVramReporter MOZ_FINAL : public MemoryUniReporter
-{
-public:
-    GfxD2DSurfaceVramReporter()
-      : MemoryUniReporter("gfx-d2d-surface-vram", KIND_OTHER, UNITS_BYTES,
-                           "Video memory used by D2D surfaces.")
-    {}
-private:
-    int64_t Amount() MOZ_OVERRIDE {
-      cairo_device_t *device =
-          gfxWindowsPlatform::GetPlatform()->GetD2DDevice();
-      return device ? cairo_d2d_get_surface_vram_usage(device) : 0;
-    }
-};
+NS_IMPL_ISUPPORTS1(GfxD2DSurfaceReporter, nsIMemoryReporter)
 
 #endif
 
-class GfxD2DVramDrawTargetReporter MOZ_FINAL : public MemoryUniReporter
+class GfxD2DVramReporter MOZ_FINAL : public nsIMemoryReporter
 {
 public:
-    GfxD2DVramDrawTargetReporter()
-      : MemoryUniReporter("gfx-d2d-vram-draw-target", KIND_OTHER, UNITS_BYTES,
-                           "Video memory used by D2D DrawTargets.")
-    {}
-private:
-    int64_t Amount() MOZ_OVERRIDE
+    NS_DECL_ISUPPORTS
+
+    NS_IMETHOD CollectReports(nsIHandleReportCallback* aHandleReport,
+                              nsISupports* aData)
     {
-        return Factory::GetD2DVRAMUsageDrawTarget();
+        nsresult rv;
+
+        rv = MOZ_COLLECT_REPORT(
+            "gfx-d2d-vram-draw-target", KIND_OTHER, UNITS_BYTES,
+            Factory::GetD2DVRAMUsageDrawTarget(),
+            "Video memory used by D2D DrawTargets.");
+        NS_ENSURE_SUCCESS(rv, rv);
+
+        rv = MOZ_COLLECT_REPORT(
+            "gfx-d2d-vram-source-surface", KIND_OTHER, UNITS_BYTES,
+            Factory::GetD2DVRAMUsageSourceSurface(),
+            "Video memory used by D2D SourceSurfaces.");
+        NS_ENSURE_SUCCESS(rv, rv);
+
+        return NS_OK;
     }
 };
 
-class GfxD2DVramSourceSurfaceReporter MOZ_FINAL : public MemoryUniReporter
-{
-public:
-    GfxD2DVramSourceSurfaceReporter()
-      : MemoryUniReporter("gfx-d2d-vram-source-surface",
-                           KIND_OTHER, UNITS_BYTES,
-                           "Video memory used by D2D SourceSurfaces.")
-    {}
-private:
-    int64_t Amount() MOZ_OVERRIDE
-    {
-        return Factory::GetD2DVRAMUsageSourceSurface();
-    }
-};
+NS_IMPL_ISUPPORTS1(GfxD2DVramReporter, nsIMemoryReporter)
 
 #define GFX_USE_CLEARTYPE_ALWAYS "gfx.font_rendering.cleartype.always_use_for_content"
 #define GFX_DOWNLOADABLE_FONTS_USE_CLEARTYPE "gfx.font_rendering.cleartype.use_for_downloadable_fonts"
@@ -169,46 +150,6 @@ private:
 #define GFX_CLEARTYPE_PARAMS_LEVEL     "gfx.font_rendering.cleartype_params.cleartype_level"
 #define GFX_CLEARTYPE_PARAMS_STRUCTURE "gfx.font_rendering.cleartype_params.pixel_structure"
 #define GFX_CLEARTYPE_PARAMS_MODE      "gfx.font_rendering.cleartype_params.rendering_mode"
-
-#ifdef CAIRO_HAS_DWRITE_FONT
-// DirectWrite is not available on all platforms, we need to use the function
-// pointer.
-typedef HRESULT (WINAPI*DWriteCreateFactoryFunc)(
-  DWRITE_FACTORY_TYPE factoryType,
-  REFIID iid,
-  IUnknown **factory
-);
-#endif
-
-#ifdef CAIRO_HAS_D2D_SURFACE
-typedef HRESULT (WINAPI*D3D10CreateDevice1Func)(
-  IDXGIAdapter *pAdapter,
-  D3D10_DRIVER_TYPE DriverType,
-  HMODULE Software,
-  UINT Flags,
-  D3D10_FEATURE_LEVEL1 HardwareLevel,
-  UINT SDKVersion,
-  ID3D10Device1 **ppDevice
-);
-#endif
-
-typedef HRESULT(WINAPI*CreateDXGIFactory1Func)(
-  REFIID riid,
-  void **ppFactory
-);
-
-typedef HRESULT (WINAPI*D3D11CreateDeviceFunc)(
-  IDXGIAdapter *pAdapter,
-  D3D_DRIVER_TYPE DriverType,
-  HMODULE Software,
-  UINT Flags,
-  D3D_FEATURE_LEVEL *pFeatureLevels,
-  UINT FeatureLevels,
-  UINT SDKVersion,
-  ID3D11Device **ppDevice,
-  D3D_FEATURE_LEVEL *pFeatureLevel,
-  ID3D11DeviceContext *ppImmediateContext
-);
 
 class GPUAdapterReporter : public nsIMemoryReporter
 {
@@ -318,8 +259,7 @@ public:
     do {                                                                      \
       nsresult rv;                                                            \
       rv = aCb->Callback(EmptyCString(), NS_LITERAL_CSTRING(_path),           \
-                         nsIMemoryReporter::KIND_OTHER,                       \
-                         nsIMemoryReporter::UNITS_BYTES, _amount,             \
+                         KIND_OTHER, UNITS_BYTES, _amount,                    \
                          NS_LITERAL_CSTRING(_desc), aClosure);                \
       NS_ENSURE_SUCCESS(rv, rv);                                              \
     } while (0)
@@ -365,12 +305,10 @@ gfxWindowsPlatform::gfxWindowsPlatform()
     CoInitialize(nullptr); 
 
 #ifdef CAIRO_HAS_D2D_SURFACE
-    RegisterStrongMemoryReporter(new GfxD2DSurfaceCacheReporter());
-    RegisterStrongMemoryReporter(new GfxD2DSurfaceVramReporter());
+    RegisterStrongMemoryReporter(new GfxD2DSurfaceReporter());
     mD2DDevice = nullptr;
 #endif
-    RegisterStrongMemoryReporter(new GfxD2DVramDrawTargetReporter());
-    RegisterStrongMemoryReporter(new GfxD2DVramSourceSurfaceReporter());
+    RegisterStrongMemoryReporter(new GfxD2DVramReporter());
 
     UpdateRenderMode();
 
@@ -439,10 +377,10 @@ gfxWindowsPlatform::UpdateRenderMode()
 
     // These will only be evaluated once, and any subsequent changes to
     // the preferences will be ignored until restart.
-    d2dDisabled = OncePreferenceDirect2DDisabled();
-    d2dForceEnabled = OncePreferenceDirect2DForceEnabled();
+    d2dDisabled = gfxPrefs::Direct2DDisabled();
+    d2dForceEnabled = gfxPrefs::Direct2DForceEnabled();
 
-    bool tryD2D = !d2dBlocked || d2dForceEnabled;
+    bool tryD2D = d2dForceEnabled || (!d2dBlocked && !gfxPrefs::LayersPreferD3D9());
 
     // Do not ever try if d2d is explicitly disabled,
     // or if we're not using DWrite fonts.
@@ -466,7 +404,7 @@ gfxWindowsPlatform::UpdateRenderMode()
     // we're going to use D2D.
     if (!mDWriteFactory && (mUseDirectWrite && isVistaOrHigher)) {
         mozilla::ScopedGfxFeatureReporter reporter("DWrite");
-        DWriteCreateFactoryFunc createDWriteFactory = (DWriteCreateFactoryFunc)
+        decltype(DWriteCreateFactory)* createDWriteFactory = (decltype(DWriteCreateFactory)*)
             GetProcAddress(LoadLibraryW(L"dwrite.dll"), "DWriteCreateFactory");
 
         if (createDWriteFactory) {
@@ -496,15 +434,15 @@ gfxWindowsPlatform::UpdateRenderMode()
     }
 #endif
 
-    uint32_t canvasMask = 1 << BACKEND_CAIRO;
-    uint32_t contentMask = 1 << BACKEND_CAIRO;
-    BackendType defaultBackend = BACKEND_CAIRO;
+    uint32_t canvasMask = BackendTypeBit(BackendType::CAIRO);
+    uint32_t contentMask = BackendTypeBit(BackendType::CAIRO);
+    BackendType defaultBackend = BackendType::CAIRO;
     if (mRenderMode == RENDER_DIRECT2D) {
-      canvasMask |= 1 << BACKEND_DIRECT2D;
-      contentMask |= 1 << BACKEND_DIRECT2D;
-      defaultBackend = BACKEND_DIRECT2D;
+      canvasMask |= BackendTypeBit(BackendType::DIRECT2D);
+      contentMask |= BackendTypeBit(BackendType::DIRECT2D);
+      defaultBackend = BackendType::DIRECT2D;
     } else {
-      canvasMask |= 1 << BACKEND_SKIA;
+      canvasMask |= BackendTypeBit(BackendType::SKIA);
     }
     InitBackendPrefs(canvasMask, defaultBackend,
                      contentMask, defaultBackend);
@@ -518,8 +456,8 @@ gfxWindowsPlatform::CreateDevice(nsRefPtr<IDXGIAdapter1> &adapter1,
   nsModuleHandle d3d10module(LoadLibrarySystem32(L"d3d10_1.dll"));
   if (!d3d10module)
     return E_FAIL;
-  D3D10CreateDevice1Func createD3DDevice =
-    (D3D10CreateDevice1Func)GetProcAddress(d3d10module, "D3D10CreateDevice1");
+  decltype(D3D10CreateDevice1)* createD3DDevice =
+    (decltype(D3D10CreateDevice1)*) GetProcAddress(d3d10module, "D3D10CreateDevice1");
   if (!createD3DDevice)
     return E_FAIL;
 
@@ -557,6 +495,10 @@ gfxWindowsPlatform::VerifyD2DDevice(bool aAttemptForce)
             return;
         }
         mD2DDevice = nullptr;
+
+        // Surface cache needs to be invalidated since it may contain vector
+        // images rendered with our old, broken D2D device.
+        SurfaceCache::DiscardAll();
     }
 
     mozilla::ScopedGfxFeatureReporter reporter("D2D", aAttemptForce);
@@ -622,7 +564,9 @@ gfxWindowsPlatform::CreatePlatformFontList()
     mUsingGDIFonts = false;
     gfxPlatformFontList *pfl;
 #ifdef CAIRO_HAS_DWRITE_FONT
-    if (GetDWriteFactory()) {
+    // bug 630201 - older pre-RTM versions of Direct2D/DirectWrite cause odd
+    // crashers so blacklist them altogether
+    if (IsNotWin7PreRTM() && GetDWriteFactory()) {
         pfl = new gfxDWriteFontList();
         if (NS_SUCCEEDED(pfl->InitFontList())) {
             return pfl;
@@ -646,23 +590,26 @@ gfxWindowsPlatform::CreatePlatformFontList()
 }
 
 already_AddRefed<gfxASurface>
-gfxWindowsPlatform::CreateOffscreenSurface(const gfxIntSize& size,
+gfxWindowsPlatform::CreateOffscreenSurface(const IntSize& size,
                                            gfxContentType contentType)
 {
     nsRefPtr<gfxASurface> surf = nullptr;
 
 #ifdef CAIRO_HAS_WIN32_SURFACE
     if (mRenderMode == RENDER_GDI)
-        surf = new gfxWindowsSurface(size, OptimalFormatForContent(contentType));
+        surf = new gfxWindowsSurface(ThebesIntSize(size),
+                                     OptimalFormatForContent(contentType));
 #endif
 
 #ifdef CAIRO_HAS_D2D_SURFACE
     if (mRenderMode == RENDER_DIRECT2D)
-        surf = new gfxD2DSurface(size, OptimalFormatForContent(contentType));
+        surf = new gfxD2DSurface(ThebesIntSize(size),
+                                 OptimalFormatForContent(contentType));
 #endif
 
     if (!surf || surf->CairoStatus()) {
-        surf = new gfxImageSurface(size, OptimalFormatForContent(contentType));
+        surf = new gfxImageSurface(ThebesIntSize(size),
+                                   OptimalFormatForContent(contentType));
     }
 
     return surf.forget();
@@ -680,7 +627,8 @@ gfxWindowsPlatform::CreateOffscreenImageSurface(const gfxIntSize& aSize,
     }
 #endif
 
-    nsRefPtr<gfxASurface> surface = CreateOffscreenSurface(aSize, aContentType);
+    nsRefPtr<gfxASurface> surface = CreateOffscreenSurface(aSize.ToIntSize(),
+                                                           aContentType);
 #ifdef DEBUG
     nsRefPtr<gfxImageSurface> imageSurface = surface->GetAsImageSurface();
     NS_ASSERTION(imageSurface, "Surface cannot be converted to a gfxImageSurface");
@@ -695,10 +643,10 @@ gfxWindowsPlatform::GetScaledFontForFont(DrawTarget* aTarget, gfxFont *aFont)
         gfxDWriteFont *font = static_cast<gfxDWriteFont*>(aFont);
 
         NativeFont nativeFont;
-        nativeFont.mType = NATIVE_FONT_DWRITE_FONT_FACE;
+        nativeFont.mType = NativeFontType::DWRITE_FONT_FACE;
         nativeFont.mFont = font->GetFontFace();
 
-        if (aTarget->GetType() == BACKEND_CAIRO) {
+        if (aTarget->GetType() == BackendType::CAIRO) {
           return Factory::CreateScaledFontWithCairo(nativeFont,
                                                     font->GetAdjustedSize(),
                                                     font->GetCairoScaledFont());
@@ -712,12 +660,12 @@ gfxWindowsPlatform::GetScaledFontForFont(DrawTarget* aTarget, gfxFont *aFont)
         "Fonts on windows should be GDI or DWrite!");
 
     NativeFont nativeFont;
-    nativeFont.mType = NATIVE_FONT_GDI_FONT_FACE;
+    nativeFont.mType = NativeFontType::GDI_FONT_FACE;
     LOGFONT lf;
     GetObject(static_cast<gfxGDIFont*>(aFont)->GetHFONT(), sizeof(LOGFONT), &lf);
     nativeFont.mFont = &lf;
 
-    if (aTarget->GetType() == BACKEND_CAIRO) {
+    if (aTarget->GetType() == BackendType::CAIRO) {
       return Factory::CreateScaledFontWithCairo(nativeFont,
                                                 aFont->GetAdjustedSize(),
                                                 aFont->GetCairoScaledFont());
@@ -730,14 +678,14 @@ already_AddRefed<gfxASurface>
 gfxWindowsPlatform::GetThebesSurfaceForDrawTarget(DrawTarget *aTarget)
 {
 #ifdef XP_WIN
-  if (aTarget->GetType() == BACKEND_DIRECT2D) {
+  if (aTarget->GetType() == BackendType::DIRECT2D) {
     if (!GetD2DDevice()) {
       // We no longer have a D2D device, can't do this.
       return nullptr;
     }
 
     RefPtr<ID3D10Texture2D> texture =
-      static_cast<ID3D10Texture2D*>(aTarget->GetNativeSurface(NATIVE_SURFACE_D3D10_TEXTURE));
+      static_cast<ID3D10Texture2D*>(aTarget->GetNativeSurface(NativeSurfaceType::D3D10_TEXTURE));
 
     if (!texture) {
       return gfxPlatform::GetThebesSurfaceForDrawTarget(aTarget);
@@ -770,7 +718,7 @@ gfxWindowsPlatform::GetFontList(nsIAtom *aLangGroup,
 static void
 RemoveCharsetFromFontSubstitute(nsAString &aName)
 {
-    int32_t comma = aName.FindChar(PRUnichar(','));
+    int32_t comma = aName.FindChar(char16_t(','));
     if (comma >= 0)
         aName.Truncate(comma);
 }
@@ -1054,16 +1002,19 @@ gfxWindowsPlatform::FindFontEntry(const nsAString& aName, const gfxFontStyle& aF
     return ff->FindFontForStyle(aFontStyle, aNeedsBold);
 }
 
-qcms_profile*
-gfxWindowsPlatform::GetPlatformCMSOutputProfile()
+void
+gfxWindowsPlatform::GetPlatformCMSOutputProfile(void* &mem, size_t &mem_size)
 {
     WCHAR str[MAX_PATH];
     DWORD size = MAX_PATH;
     BOOL res;
 
+    mem = nullptr;
+    mem_size = 0;
+
     HDC dc = GetDC(nullptr);
     if (!dc)
-        return nullptr;
+        return;
 
 #if _MSC_VER
     __try {
@@ -1077,16 +1028,18 @@ gfxWindowsPlatform::GetPlatformCMSOutputProfile()
 
     ReleaseDC(nullptr, dc);
     if (!res)
-        return nullptr;
+        return;
 
-    qcms_profile* profile = qcms_profile_from_unicode_path(str);
+#ifdef _WIN32
+    qcms_data_from_unicode_path(str, &mem, &mem_size);
+
 #ifdef DEBUG_tor
-    if (profile)
+    if (mem_size > 0)
         fprintf(stderr,
                 "ICM profile read from %s successfully\n",
                 NS_ConvertUTF16toUTF8(str).get());
-#endif
-    return profile;
+#endif // DEBUG_tor
+#endif // _WIN32
 }
 
 bool
@@ -1445,7 +1398,7 @@ gfxWindowsPlatform::GetD3D11Device()
   mD3D11DeviceInitialized = true;
 
   nsModuleHandle d3d11Module(LoadLibrarySystem32(L"d3d11.dll"));
-  D3D11CreateDeviceFunc d3d11CreateDevice = (D3D11CreateDeviceFunc)
+  decltype(D3D11CreateDevice)* d3d11CreateDevice = (decltype(D3D11CreateDevice)*)
     GetProcAddress(d3d11Module, "D3D11CreateDevice");
 
   if (!d3d11CreateDevice) {
@@ -1513,7 +1466,7 @@ gfxWindowsPlatform::GetDXGIAdapter()
   }
 
   nsModuleHandle dxgiModule(LoadLibrarySystem32(L"dxgi.dll"));
-  CreateDXGIFactory1Func createDXGIFactory1 = (CreateDXGIFactory1Func)
+  decltype(CreateDXGIFactory1)* createDXGIFactory1 = (decltype(CreateDXGIFactory1)*)
     GetProcAddress(dxgiModule, "CreateDXGIFactory1");
 
   // Try to use a DXGI 1.1 adapter in order to share resources

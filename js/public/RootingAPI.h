@@ -138,6 +138,8 @@ struct NullPtr
 
 namespace gc {
 struct Cell;
+template<typename T>
+struct PersistentRootedMarker;
 } /* namespace gc */
 
 } /* namespace js */
@@ -198,6 +200,13 @@ class Heap : public js::HeapBase<T>
         init(js::GCMethods<T>::initial());
     }
     explicit Heap(T p) { init(p); }
+
+    /*
+     * For Heap, move semantics are equivalent to copy semantics. In C++, a
+     * copy constructor taking const-ref is the way to get a single function
+     * that will be used for both lvalue and rvalue copies, so we can simply
+     * omit the rvalue variant.
+     */
     explicit Heap(const Heap<T> &p) { init(p.ptr); }
 
     ~Heap() {
@@ -229,7 +238,7 @@ class Heap : public js::HeapBase<T>
     }
 
     void set(T newPtr) {
-        JS_ASSERT(!js::GCMethods<T>::poisoned(newPtr));
+        MOZ_ASSERT(!js::GCMethods<T>::poisoned(newPtr));
         if (js::GCMethods<T>::needsPostBarrier(newPtr)) {
             ptr = newPtr;
             post();
@@ -243,7 +252,7 @@ class Heap : public js::HeapBase<T>
 
   private:
     void init(T newPtr) {
-        JS_ASSERT(!js::GCMethods<T>::poisoned(newPtr));
+        MOZ_ASSERT(!js::GCMethods<T>::poisoned(newPtr));
         ptr = newPtr;
         if (js::GCMethods<T>::needsPostBarrier(ptr))
             post();
@@ -251,7 +260,7 @@ class Heap : public js::HeapBase<T>
 
     void post() {
 #ifdef JSGC_GENERATIONAL
-        JS_ASSERT(js::GCMethods<T>::needsPostBarrier(ptr));
+        MOZ_ASSERT(js::GCMethods<T>::needsPostBarrier(ptr));
         js::GCMethods<T>::postBarrier(&ptr);
 #endif
     }
@@ -315,31 +324,31 @@ class TenuredHeap : public js::HeapBase<T>
                       "TenuredHeap<T> must be binary compatible with T.");
     }
     explicit TenuredHeap(T p) : bits(0) { setPtr(p); }
-    explicit TenuredHeap(const TenuredHeap<T> &p) : bits(0) { setPtr(p.ptr); }
+    explicit TenuredHeap(const TenuredHeap<T> &p) : bits(0) { setPtr(p.getPtr()); }
 
     bool operator==(const TenuredHeap<T> &other) { return bits == other.bits; }
     bool operator!=(const TenuredHeap<T> &other) { return bits != other.bits; }
 
     void setPtr(T newPtr) {
-        JS_ASSERT((reinterpret_cast<uintptr_t>(newPtr) & flagsMask) == 0);
-        JS_ASSERT(!js::GCMethods<T>::poisoned(newPtr));
+        MOZ_ASSERT((reinterpret_cast<uintptr_t>(newPtr) & flagsMask) == 0);
+        MOZ_ASSERT(!js::GCMethods<T>::poisoned(newPtr));
         if (newPtr)
             AssertGCThingMustBeTenured(newPtr);
         bits = (bits & flagsMask) | reinterpret_cast<uintptr_t>(newPtr);
     }
 
     void setFlags(uintptr_t flagsToSet) {
-        JS_ASSERT((flagsToSet & ~flagsMask) == 0);
+        MOZ_ASSERT((flagsToSet & ~flagsMask) == 0);
         bits |= flagsToSet;
     }
 
     void unsetFlags(uintptr_t flagsToUnset) {
-        JS_ASSERT((flagsToUnset & ~flagsMask) == 0);
+        MOZ_ASSERT((flagsToUnset & ~flagsMask) == 0);
         bits &= ~flagsToUnset;
     }
 
     bool hasFlag(uintptr_t flag) const {
-        JS_ASSERT((flag & ~flagsMask) == 0);
+        MOZ_ASSERT((flag & ~flagsMask) == 0);
         return (bits & flag) != 0;
     }
 
@@ -506,13 +515,21 @@ class MOZ_STACK_CLASS MutableHandle : public js::MutableHandleBase<T>
   public:
     inline MutableHandle(Rooted<T> *root);
     inline MutableHandle(PersistentRooted<T> *root);
-    MutableHandle(int) MOZ_DELETE;
-#ifdef MOZ_HAVE_CXX11_NULLPTR
-    MutableHandle(decltype(nullptr)) MOZ_DELETE;
-#endif
 
+  private:
+    // Disallow true nullptr and emulated nullptr (gcc 4.4/4.5, __null, appears
+    // as int/long [32/64-bit]) for overloading purposes.
+    template<typename N>
+    MutableHandle(N,
+                  typename mozilla::EnableIf<mozilla::IsNullPointer<N>::value ||
+                                             mozilla::IsSame<N, int>::value ||
+                                             mozilla::IsSame<N, long>::value,
+                                             int>::Type dummy = 0)
+    MOZ_DELETE;
+
+  public:
     void set(T v) {
-        JS_ASSERT(!js::GCMethods<T>::poisoned(v));
+        MOZ_ASSERT(!js::GCMethods<T>::poisoned(v));
         *ptr = v;
     }
 
@@ -549,8 +566,8 @@ class MOZ_STACK_CLASS MutableHandle : public js::MutableHandleBase<T>
 };
 
 #ifdef JSGC_GENERATIONAL
-JS_PUBLIC_API(void) HeapCellPostBarrier(js::gc::Cell **cellp);
-JS_PUBLIC_API(void) HeapCellRelocate(js::gc::Cell **cellp);
+JS_FRIEND_API(void) HeapCellPostBarrier(js::gc::Cell **cellp);
+JS_FRIEND_API(void) HeapCellRelocate(js::gc::Cell **cellp);
 #endif
 
 } /* namespace JS */
@@ -678,7 +695,7 @@ class MOZ_STACK_CLASS Rooted : public js::RootedBase<T>
         this->prev = *stack;
         *stack = reinterpret_cast<Rooted<void*>*>(this);
 
-        JS_ASSERT(!js::GCMethods<T>::poisoned(ptr));
+        MOZ_ASSERT(!js::GCMethods<T>::poisoned(ptr));
 #endif
     }
 
@@ -758,7 +775,7 @@ class MOZ_STACK_CLASS Rooted : public js::RootedBase<T>
     // using MSVC, see bug 915735 for more details.
 #ifdef JSGC_TRACK_EXACT_ROOTS
     ~Rooted() {
-        JS_ASSERT(*stack == reinterpret_cast<Rooted<void*>*>(this));
+        MOZ_ASSERT(*stack == reinterpret_cast<Rooted<void*>*>(this));
         *stack = prev;
     }
 #endif
@@ -779,7 +796,7 @@ class MOZ_STACK_CLASS Rooted : public js::RootedBase<T>
     const T &get() const { return ptr; }
 
     T &operator=(T value) {
-        JS_ASSERT(!js::GCMethods<T>::poisoned(value));
+        MOZ_ASSERT(!js::GCMethods<T>::poisoned(value));
         ptr = value;
         return ptr;
     }
@@ -790,7 +807,7 @@ class MOZ_STACK_CLASS Rooted : public js::RootedBase<T>
     }
 
     void set(T value) {
-        JS_ASSERT(!js::GCMethods<T>::poisoned(value));
+        MOZ_ASSERT(!js::GCMethods<T>::poisoned(value));
         ptr = value;
     }
 
@@ -822,15 +839,27 @@ class MOZ_STACK_CLASS Rooted : public js::RootedBase<T>
     Rooted(const Rooted &) MOZ_DELETE;
 };
 
-#if !(defined(JSGC_ROOT_ANALYSIS) || defined(JSGC_USE_EXACT_ROOTING))
-// Defined in vm/String.h.
-template <>
-class Rooted<JSStableString *>;
-#endif
-
 } /* namespace JS */
 
 namespace js {
+
+/*
+ * Augment the generic Rooted<T> interface when T = JSObject* with
+ * class-querying and downcasting operations.
+ *
+ * Given a Rooted<JSObject*> obj, one can view
+ *   Handle<StringObject*> h = obj.as<StringObject*>();
+ * as an optimization of
+ *   Rooted<StringObject*> rooted(cx, &obj->as<StringObject*>());
+ *   Handle<StringObject*> h = rooted;
+ */
+template <>
+class RootedBase<JSObject*>
+{
+  public:
+    template <class U>
+    JS::Handle<U*> as() const;
+};
 
 /*
  * Mark a stack location as a root for the rooting analysis, without actually
@@ -858,7 +887,7 @@ class SkipRoot
 
   public:
     ~SkipRoot() {
-        JS_ASSERT(*stack == this);
+        MOZ_ASSERT(*stack == this);
         *stack = prev;
     }
 
@@ -908,6 +937,61 @@ class SkipRoot
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
+/*
+ * RootedGeneric<T> allows a class to instantiate its own Rooted type by
+ * including the following two methods:
+ *
+ *    static inline js::ThingRootKind rootKind() { return js::THING_ROOT_CUSTOM; }
+ *    void trace(JSTracer *trc);
+ *
+ * The trace() method must trace all of the class's fields.
+ *
+ * Implementation:
+ *
+ * RootedGeneric<T> works by placing a pointer to its 'rooter' field into the
+ * usual list of rooters when it is instantiated. When marking, it backs up
+ * from this pointer to find a vtable containing a type-appropriate trace()
+ * method.
+ */
+template <typename GCType>
+class JS_PUBLIC_API(RootedGeneric)
+{
+  public:
+    JS::Rooted<GCType> rooter;
+    SkipRoot skip;
+
+    RootedGeneric(js::ContextFriendFields *cx)
+        : rooter(cx), skip(cx, rooter.address())
+    {
+    }
+
+    RootedGeneric(js::ContextFriendFields *cx, const GCType &initial)
+        : rooter(cx, initial), skip(cx, rooter.address())
+    {
+    }
+
+    virtual inline void trace(JSTracer *trc);
+
+    operator const GCType&() const { return rooter.get(); }
+    GCType operator->() const { return rooter.get(); }
+};
+
+template <typename GCType>
+inline void RootedGeneric<GCType>::trace(JSTracer *trc)
+{
+    rooter->trace(trc);
+}
+
+// We will instantiate RootedGeneric<void*> in RootMarking.cpp, and MSVC will
+// notice that void*s have no trace() method defined on them and complain (even
+// though it's never called.) MSVC's complaint is not unreasonable, so
+// specialize for void*.
+template <>
+inline void RootedGeneric<void*>::trace(JSTracer *trc)
+{
+    MOZ_ASSUME_UNREACHABLE("RootedGeneric<void*>::trace()");
+}
+
 /* Interface substitute for Rooted<T> which does not root the variable's memory. */
 template <typename T>
 class FakeRooted : public RootedBase<T>
@@ -937,13 +1021,13 @@ class FakeRooted : public RootedBase<T>
     const T &get() const { return ptr; }
 
     FakeRooted<T> &operator=(T value) {
-        JS_ASSERT(!GCMethods<T>::poisoned(value));
+        MOZ_ASSERT(!GCMethods<T>::poisoned(value));
         ptr = value;
         return *this;
     }
 
     FakeRooted<T> &operator=(const FakeRooted<T> &other) {
-        JS_ASSERT(!GCMethods<T>::poisoned(other.ptr));
+        MOZ_ASSERT(!GCMethods<T>::poisoned(other.ptr));
         ptr = other.ptr;
         return *this;
     }
@@ -973,7 +1057,7 @@ class FakeMutableHandle : public js::MutableHandleBase<T>
     }
 
     void set(T v) {
-        JS_ASSERT(!js::GCMethods<T>::poisoned(v));
+        MOZ_ASSERT(!js::GCMethods<T>::poisoned(v));
         *ptr = v;
     }
 
@@ -996,7 +1080,7 @@ class FakeMutableHandle : public js::MutableHandleBase<T>
 
 /*
  * Types for a variable that either should or shouldn't be rooted, depending on
- * the template parameter Rooted. Used for implementing functions that can
+ * the template parameter allowGC. Used for implementing functions that can
  * operate on either rooted or unrooted data.
  *
  * The toHandle() and toMutableHandle() functions are for calling functions
@@ -1090,7 +1174,6 @@ MutableHandle<T>::MutableHandle(PersistentRooted<T> *root)
     ptr = root->address();
 }
 
-
 /*
  * A copyable, assignable global GC root type with arbitrary lifetime, an
  * infallible constructor, and automatic unrooting on destruction.
@@ -1124,9 +1207,11 @@ MutableHandle<T>::MutableHandle(PersistentRooted<T> *root)
  * marked when the object itself is marked.
  */
 template<typename T>
-class PersistentRooted : public mozilla::LinkedListElement<PersistentRooted<T> > {
-    typedef mozilla::LinkedList<PersistentRooted> List;
-    typedef mozilla::LinkedListElement<PersistentRooted> Element;
+class PersistentRooted : private mozilla::LinkedListElement<PersistentRooted<T> > {
+    friend class mozilla::LinkedList<PersistentRooted>;
+    friend class mozilla::LinkedListElement<PersistentRooted>;
+
+    friend class js::gc::PersistentRootedMarker<T>;
 
     void registerWithRuntime(JSRuntime *rt) {
         JS::shadow::Runtime *srt = JS::shadow::Runtime::asShadowRuntime(rt);
@@ -1176,7 +1261,7 @@ class PersistentRooted : public mozilla::LinkedListElement<PersistentRooted<T> >
     const T &get() const { return ptr; }
 
     T &operator=(T value) {
-        JS_ASSERT(!js::GCMethods<T>::poisoned(value));
+        MOZ_ASSERT(!js::GCMethods<T>::poisoned(value));
         ptr = value;
         return ptr;
     }
@@ -1187,7 +1272,7 @@ class PersistentRooted : public mozilla::LinkedListElement<PersistentRooted<T> >
     }
 
     void set(T value) {
-        JS_ASSERT(!js::GCMethods<T>::poisoned(value));
+        MOZ_ASSERT(!js::GCMethods<T>::poisoned(value));
         ptr = value;
     }
 

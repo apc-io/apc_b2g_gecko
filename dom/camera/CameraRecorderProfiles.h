@@ -10,9 +10,7 @@
 #include "nsAutoPtr.h"
 #include "nsTArray.h"
 #include "jsapi.h"
-#include "DictionaryHelpers.h"
 #include "CameraCommon.h"
-
 
 namespace mozilla {
 
@@ -173,7 +171,7 @@ public:
       return NS_ERROR_FAILURE;
     }
 
-    JS::Rooted<JSObject*> o(aCx, JS_NewObject(aCx, nullptr, nullptr, nullptr));
+    JS::Rooted<JSObject*> o(aCx, JS_NewObject(aCx, nullptr, JS::NullPtr(), JS::NullPtr()));
     if (!o) {
       return NS_ERROR_OUT_OF_MEMORY;
     }

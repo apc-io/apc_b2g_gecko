@@ -14,10 +14,13 @@
 #include "jsapi.h"
 #include "mozAutoDocUpdate.h"
 #include "mozilla/CORSMode.h"
+#include "mozilla/InternalMutationEvent.h"
 #include "mozilla/Likely.h"
 #include "mozilla/MemoryReporting.h"
-#include "mozilla/MutationEvent.h"
 #include "mozilla/Telemetry.h"
+#include "mozilla/dom/Element.h"
+#include "mozilla/dom/Event.h"
+#include "mozilla/dom/ShadowRoot.h"
 #include "nsAsyncDOMEvent.h"
 #include "nsAttrValueOrString.h"
 #include "nsBindingManager.h"
@@ -41,7 +44,6 @@
 #include "nsFocusManager.h"
 #include "nsFrameManager.h"
 #include "nsFrameSelection.h"
-#include "mozilla/dom/Element.h"
 #include "nsGenericHTMLElement.h"
 #include "nsGkAtoms.h"
 #include "nsIAnonymousContentCreator.h"
@@ -61,7 +63,6 @@
 #include "nsIEditor.h"
 #include "nsIEditorIMESupport.h"
 #include "nsILinkHandler.h"
-#include "nsINameSpaceManager.h"
 #include "nsINodeInfo.h"
 #include "nsIPresShell.h"
 #include "nsIScriptError.h"
@@ -75,6 +76,7 @@
 #include "nsIWebNavigation.h"
 #include "nsIWidget.h"
 #include "nsLayoutUtils.h"
+#include "nsNameSpaceManager.h"
 #include "nsNetUtil.h"
 #include "nsNodeInfoManager.h"
 #include "nsNodeUtils.h"
@@ -96,11 +98,9 @@
 #include "nsCSSParser.h"
 #include "HTMLLegendElement.h"
 #include "nsWrapperCacheInlines.h"
-#include "mozilla/dom/ShadowRoot.h"
 #include "WrapperFactory.h"
 #include "DocumentType.h"
 #include <algorithm>
-#include "nsDOMEvent.h"
 #include "nsGlobalWindow.h"
 #include "nsDOMMutationObserver.h"
 
@@ -704,8 +704,7 @@ nsINode::SetUserData(JSContext* aCx, const nsAString& aKey,
 {
   nsCOMPtr<nsIVariant> data;
   JS::Rooted<JS::Value> dataVal(aCx, aData);
-  aError = nsContentUtils::XPConnect()->JSValToVariant(aCx, dataVal.address(),
-                                                       getter_AddRefs(data));
+  aError = nsContentUtils::XPConnect()->JSValToVariant(aCx, dataVal, getter_AddRefs(data));
   if (aError.Failed()) {
     return JS::UndefinedValue();
   }
@@ -723,7 +722,7 @@ nsINode::SetUserData(JSContext* aCx, const nsAString& aKey,
   JS::Rooted<JS::Value> result(aCx);
   JSAutoCompartment ac(aCx, GetWrapper());
   aError = nsContentUtils::XPConnect()->VariantToJS(aCx, GetWrapper(), oldData,
-                                                    result.address());
+                                                    &result);
   return result;
 }
 
@@ -750,7 +749,7 @@ nsINode::GetUserData(JSContext* aCx, const nsAString& aKey, ErrorResult& aError)
   JS::Rooted<JS::Value> result(aCx);
   JSAutoCompartment ac(aCx, GetWrapper());
   aError = nsContentUtils::XPConnect()->VariantToJS(aCx, GetWrapper(), data,
-                                                    result.address());
+                                                    &result);
   return result;
 }
 
@@ -774,10 +773,10 @@ nsINode::CompareDocumentPosition(nsINode& aOtherNode) const
   const nsINode *node1 = &aOtherNode, *node2 = this;
 
   // Check if either node is an attribute
-  const nsIAttribute* attr1 = nullptr;
+  const Attr* attr1 = nullptr;
   if (node1->IsNodeOfType(nsINode::eATTRIBUTE)) {
-    attr1 = static_cast<const nsIAttribute*>(node1);
-    const nsIContent* elem = attr1->GetContent();
+    attr1 = static_cast<const Attr*>(node1);
+    const nsIContent* elem = attr1->GetElement();
     // If there is an owner element add the attribute
     // to the chain and walk up to the element
     if (elem) {
@@ -786,8 +785,8 @@ nsINode::CompareDocumentPosition(nsINode& aOtherNode) const
     }
   }
   if (node2->IsNodeOfType(nsINode::eATTRIBUTE)) {
-    const nsIAttribute* attr2 = static_cast<const nsIAttribute*>(node2);
-    const nsIContent* elem = attr2->GetContent();
+    const Attr* attr2 = static_cast<const Attr*>(node2);
+    const nsIContent* elem = attr2->GetElement();
     if (elem == node1 && attr1) {
       // Both nodes are attributes on the same element.
       // Compare position between the attributes.
@@ -2624,17 +2623,6 @@ nsINode::CloneNode(bool aDeep, ErrorResult& aError)
   return result.forget();
 }
 
-already_AddRefed<nsINode>
-nsINode::CloneNode(mozilla::ErrorResult& aError)
-{
-  if (HasChildNodes()) {
-    // Flag it as an error, not a warning, to make people actually notice.
-    OwnerDoc()->WarnOnceAbout(nsIDocument::eUnsafeCloneNode, true);
-  }
-  return CloneNode(true, aError);
-}
-
-
 nsDOMAttributeMap*
 nsINode::GetAttributes()
 {
@@ -2645,7 +2633,7 @@ nsINode::GetAttributes()
 }
 
 bool
-EventTarget::DispatchEvent(nsDOMEvent& aEvent,
+EventTarget::DispatchEvent(Event& aEvent,
                            ErrorResult& aRv)
 {
   bool result = false;

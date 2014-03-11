@@ -9,6 +9,7 @@
 
 #include "nsIMemoryReporter.h"
 #include "nsIObserver.h"
+#include "nsITimer.h"
 #include "nsDataHashtable.h"
 #include "nsWeakReference.h"
 #include "nsAutoPtr.h"
@@ -18,13 +19,6 @@
 #include "mozilla/PodOperations.h"
 #include "mozilla/TimeStamp.h"
 #include "nsArenaMemoryStats.h"
-
-// This should be used for any nsINode sub-class that has fields of its own
-// that it needs to measure;  any sub-class that doesn't use it will inherit
-// SizeOfExcludingThis from its super-class.  SizeOfIncludingThis() need not be
-// defined, it is inherited from nsINode.
-#define NS_DECL_SIZEOF_EXCLUDING_THIS \
-  virtual size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
 class nsWindowSizes {
 #define FOR_EACH_SIZE(macro) \
@@ -146,16 +140,33 @@ public:
 
   static void Init();
 
+  ~nsWindowMemoryReporter();
+
+#ifdef DEBUG
+  /**
+   * Unlink all known ghost windows, to enable investigating what caused them
+   * to become ghost windows in the first place.
+   */
+  static void UnlinkGhostWindows();
+#endif
+
 private:
   /**
    * nsGhostWindowReporter generates the "ghost-windows" report, which counts
    * the number of ghost windows present.
    */
-  class GhostWindowsReporter MOZ_FINAL : public mozilla::MemoryUniReporter
+  class GhostWindowsReporter MOZ_FINAL : public nsIMemoryReporter
   {
   public:
-    GhostWindowsReporter()
-      : MemoryUniReporter("ghost-windows", KIND_OTHER, UNITS_COUNT,
+    NS_DECL_ISUPPORTS
+
+    static int64_t DistinguishedAmount();
+
+    NS_IMETHOD
+    CollectReports(nsIHandleReportCallback* aHandleReport, nsISupports* aData)
+    {
+      return MOZ_COLLECT_REPORT(
+        "ghost-windows", KIND_OTHER, UNITS_COUNT, DistinguishedAmount(),
 "The number of ghost windows present (the number of nodes underneath "
 "explicit/window-objects/top(none)/ghost, modulo race conditions).  A ghost "
 "window is not shown in any tab, does not share a domain with any non-detached "
@@ -163,13 +174,8 @@ private:
 "memory.ghost_window_timeout_seconds, or has survived a round of "
 "about:memory's minimize memory usage button.\n\n"
 "Ghost windows can happen legitimately, but they are often indicative of "
-"leaks in the browser or add-ons.")
-    {}
-
-    static int64_t DistinguishedAmount();
-
-  private:
-    int64_t Amount() MOZ_OVERRIDE { return DistinguishedAmount(); }
+"leaks in the browser or add-ons.");
+    }
   };
 
   // Protect ctor, use Init() instead.
@@ -183,13 +189,6 @@ private:
 
   void ObserveDOMWindowDetached(nsISupports* aWindow);
   void ObserveAfterMinimizeMemoryUsage();
-
-  /**
-   * When we observe a DOM window being detached, we enqueue an asynchronous
-   * event which calls this method.  This method then calls
-   * CheckForGhostWindows.
-   */
-  void CheckForGhostWindowsCallback();
 
   /**
    * Iterate over all weak window pointers in mDetachedWindows and update our
@@ -207,6 +206,19 @@ private:
   void CheckForGhostWindows(nsTHashtable<nsUint64HashKey> *aOutGhostIDs = nullptr);
 
   /**
+   * Eventually do a check for ghost windows, if we haven't done one recently
+   * and we aren't already planning to do one soon.
+   */
+  void AsyncCheckForGhostWindows();
+
+  /**
+   * Kill the check timer, if it exists.
+   */
+  void KillCheckTimer();
+
+  static void CheckTimerFired(nsITimer* aTimer, void* aClosure);
+
+  /**
    * Maps a weak reference to a detached window (nsIWeakReference) to the time
    * when we observed that the window met ghost criterion (2) above.
    *
@@ -219,9 +231,16 @@ private:
   nsDataHashtable<nsISupportsHashKey, mozilla::TimeStamp> mDetachedWindows;
 
   /**
-   * True if we have an asynchronous call to CheckForGhostWindows pending.
+   * Track the last time we ran CheckForGhostWindows(), to avoid running it
+   * too often after a DOM window is detached.
    */
-  bool mCheckForGhostWindowsCallbackPending;
+  mozilla::TimeStamp mLastCheckForGhostWindows;
+
+  nsCOMPtr<nsITimer> mCheckTimer;
+
+  bool mCycleCollectorIsRunning;
+
+  bool mCheckTimerWaitingForCCEnd;
 };
 
 #endif // nsWindowMemoryReporter_h__

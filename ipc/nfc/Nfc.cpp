@@ -21,6 +21,7 @@
 #endif
 
 #include "jsfriendapi.h"
+#include "mozilla/ArrayUtils.h"
 #include "nsThreadUtils.h" // For NS_IsMainThread.
 
 USING_WORKERS_NAMESPACE
@@ -134,7 +135,7 @@ ConnectWorkerToNFC::RunTask(JSContext* aCx)
     // communication.
     NS_ASSERTION(!NS_IsMainThread(), "Expecting to be on the worker thread");
     NS_ASSERTION(!JS_IsRunning(aCx), "Are we being called somehow?");
-    JSObject* workerGlobal = JS::CurrentGlobalOrNull(aCx);
+    JS::Rooted<JSObject*> workerGlobal(aCx, JS::CurrentGlobalOrNull(aCx));
 
     return !!JS_DefineFunction(aCx, workerGlobal,
                                "postNfcMessage", PostToNFC, 1, 0);
@@ -156,17 +157,17 @@ private:
 bool
 DispatchNFCEvent::RunTask(JSContext* aCx)
 {
-    JSObject* obj = JS::CurrentGlobalOrNull(aCx);
+    JS::Rooted<JSObject*> obj(aCx, JS::CurrentGlobalOrNull(aCx));
 
     JSObject* array = JS_NewUint8Array(aCx, mMessage->mSize);
     if (!array) {
         return false;
     }
+    JS::Rooted<JS::Value> arrayVal(aCx, JS::ObjectValue(*array));
 
     memcpy(JS_GetArrayBufferViewData(array), mMessage->mData, mMessage->mSize);
-    JS::Value argv[] = { OBJECT_TO_JSVAL(array) };
-    return JS_CallFunctionName(aCx, obj, "onNfcMessage", NS_ARRAY_LENGTH(argv),
-                               argv, argv);
+    JS::Rooted<JS::Value> rval(aCx);
+    return JS_CallFunctionName(aCx, obj, "onNfcMessage", arrayVal, &rval);
 }
 
 class NfcConnector : public mozilla::ipc::UnixSocketConnector
@@ -241,7 +242,7 @@ NfcConnector::CreateAddr(bool aIsServer,
     case AF_INET:
         aAddr.in.sin_family = af;
         aAddr.in.sin_port = htons(NFC_TEST_PORT);
-        aAddr.in.sin_addr.s_addr = htons(INADDR_LOOPBACK);
+        aAddr.in.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         aAddrSize = sizeof(sockaddr_in);
         break;
     default:
@@ -310,9 +311,11 @@ NfcConsumer::Shutdown()
 {
     MOZ_ASSERT(NS_IsMainThread());
 
-    sNfcConsumer->mShutdown = true;
-    sNfcConsumer->CloseSocket();
-    sNfcConsumer = nullptr;
+    if (sNfcConsumer) {
+        sNfcConsumer->mShutdown = true;
+        sNfcConsumer->CloseSocket();
+        sNfcConsumer = nullptr;
+    }
 }
 
 void
@@ -343,7 +346,8 @@ NfcConsumer::OnDisconnect()
 {
     CHROMIUM_LOG("NFC: %s\n", __FUNCTION__);
     if (!mShutdown) {
-        ConnectSocket(new NfcConnector(), mAddress.get(), 1000);
+        ConnectSocket(new NfcConnector(), mAddress.get(),
+                      GetSuggestedConnectDelayMs());
     }
 }
 

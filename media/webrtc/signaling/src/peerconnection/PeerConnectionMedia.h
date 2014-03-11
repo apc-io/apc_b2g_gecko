@@ -94,6 +94,7 @@ Fake_AudioGenerator(DOMMediaStream* aStream) : mStream(aStream), mCount(0) {
 class Fake_VideoGenerator {
  public:
   typedef mozilla::DOMMediaStream DOMMediaStream;
+  typedef mozilla::gfx::IntSize IntSize;
 
   Fake_VideoGenerator(DOMMediaStream* aStream) {
     mStream = aStream;
@@ -117,11 +118,11 @@ class Fake_VideoGenerator {
     const uint32_t HEIGHT = 480;
 
     // Allocate a single blank Image
-    mozilla::ImageFormat format = mozilla::PLANAR_YCBCR;
     nsRefPtr<mozilla::layers::ImageContainer> container =
       mozilla::layers::LayerManager::CreateImageContainer();
 
-    nsRefPtr<mozilla::layers::Image> image = container->CreateImage(&format, 1);
+    nsRefPtr<mozilla::layers::Image> image =
+      container->CreateImage(mozilla::ImageFormat::PLANAR_YCBCR);
 
     int len = ((WIDTH * HEIGHT) * 3 / 2);
     mozilla::layers::PlanarYCbCrImage* planar =
@@ -135,16 +136,16 @@ class Fake_VideoGenerator {
 
     mozilla::layers::PlanarYCbCrData data;
     data.mYChannel = frame;
-    data.mYSize = gfxIntSize(WIDTH, HEIGHT);
+    data.mYSize = IntSize(WIDTH, HEIGHT);
     data.mYStride = (int32_t) (WIDTH * lumaBpp / 8.0);
     data.mCbCrStride = (int32_t) (WIDTH * chromaBpp / 8.0);
     data.mCbChannel = frame + HEIGHT * data.mYStride;
     data.mCrChannel = data.mCbChannel + HEIGHT * data.mCbCrStride / 2;
-    data.mCbCrSize = gfxIntSize(WIDTH / 2, HEIGHT / 2);
+    data.mCbCrSize = IntSize(WIDTH / 2, HEIGHT / 2);
     data.mPicX = 0;
     data.mPicY = 0;
-    data.mPicSize = gfxIntSize(WIDTH, HEIGHT);
-    data.mStereoMode = mozilla::STEREO_MODE_MONO;
+    data.mPicSize = IntSize(WIDTH, HEIGHT);
+    data.mStereoMode = mozilla::StereoMode::MONO;
 
     // SetData copies data, so we can free the frame
     planar->SetData(data);
@@ -153,7 +154,8 @@ class Fake_VideoGenerator {
     // AddTrack takes ownership of segment
     mozilla::VideoSegment *segment = new mozilla::VideoSegment();
     // 10 fps.
-    segment->AppendFrame(image.forget(), mozilla::USECS_PER_S / 10, gfxIntSize(WIDTH, HEIGHT));
+    segment->AppendFrame(image.forget(), mozilla::USECS_PER_S / 10,
+                         IntSize(WIDTH, HEIGHT));
 
     gen->mStream->GetStream()->AsSourceStream()->AppendToTrack(1, segment);
   }
@@ -188,6 +190,7 @@ public:
   // It allows visibility into the pipelines and flows.
   const std::map<mozilla::TrackID, mozilla::RefPtr<mozilla::MediaPipeline>>&
   GetPipelines() const { return mPipelines; }
+  mozilla::RefPtr<mozilla::MediaPipeline> GetPipelineByLevel_m(int level);
 
 protected:
   std::map<mozilla::TrackID, mozilla::RefPtr<mozilla::MediaPipeline>> mPipelines;
@@ -242,6 +245,8 @@ class RemoteSourceStreamInfo : public SourceStreamInfo {
   void StorePipeline(int aTrack, bool aIsVideo,
                      mozilla::RefPtr<mozilla::MediaPipeline> aPipeline);
 
+  bool SetUsingBundle_m(int aLevel, bool decision);
+
   void DetachTransport_s();
   void DetachMedia_m();
 
@@ -293,6 +298,11 @@ class PeerConnectionMedia : public sigslot::has_slots<> {
     return mRemoteSourceStreams.Length();
   }
   RemoteSourceStreamInfo* GetRemoteStream(int index);
+
+  bool SetUsingBundle_m(int level, bool decision);
+  bool UpdateFilterFromRemoteDescription_m(
+      int level,
+      nsAutoPtr<mozilla::MediaPipelineFilter> filter);
 
   // Add a remote stream. Returns the index in index
   nsresult AddRemoteStream(nsRefPtr<RemoteSourceStreamInfo> aInfo, int *aIndex);

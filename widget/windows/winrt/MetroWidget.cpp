@@ -4,6 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "ContentHelper.h"
 #include "LayerManagerD3D10.h"
 #include "MetroWidget.h"
 #include "MetroApp.h"
@@ -25,6 +26,7 @@
 #include "ClientLayerManager.h"
 #include "BasicLayers.h"
 #include "FrameMetrics.h"
+#include <windows.devices.input.h>
 #include "Windows.Graphics.Display.h"
 #include "DisplayInfo_sdk81.h"
 #include "nsNativeDragTarget.h"
@@ -54,6 +56,7 @@ using namespace ABI::Windows::Devices::Input;
 using namespace ABI::Windows::UI::Core;
 using namespace ABI::Windows::System;
 using namespace ABI::Windows::Foundation;
+using namespace ABI::Windows::Foundation::Collections;
 using namespace ABI::Windows::Graphics::Display;
 
 #ifdef PR_LOGGING
@@ -65,7 +68,7 @@ extern PRLogModuleInfo* gWindowsLog;
 #endif
 
 static uint32_t gInstanceCount = 0;
-const PRUnichar* kMetroSubclassThisProp = L"MetroSubclassThisProp";
+const char16_t* kMetroSubclassThisProp = L"MetroSubclassThisProp";
 HWND MetroWidget::sICoreHwnd = nullptr;
 
 namespace mozilla {
@@ -79,6 +82,7 @@ UINT sDefaultBrowserMsgId = RegisterWindowMessageW(L"DefaultBrowserClosing");
 namespace mozilla {
 namespace widget {
 namespace winrt {
+extern ComPtr<MetroApp> sMetroApp;
 extern ComPtr<IUIABridge> gProviderRoot;
 } } }
 
@@ -250,7 +254,7 @@ MetroWidget::Create(nsIWidget *aParent,
 
   // the main widget gets created first
   gTopLevelAssigned = true;
-  MetroApp::SetBaseWidget(this);
+  sMetroApp->SetWidget(this);
   WinUtils::SetNSWindowBasePtr(mWnd, this);
 
   if (mWidgetListener) {
@@ -323,6 +327,52 @@ NS_IMETHODIMP
 MetroWidget::Show(bool bState)
 {
   return NS_OK;
+}
+
+uint32_t
+MetroWidget::GetMaxTouchPoints() const
+{
+  ComPtr<IPointerDeviceStatics> deviceStatics;
+
+  HRESULT hr = GetActivationFactory(
+    HStringReference(RuntimeClass_Windows_Devices_Input_PointerDevice).Get(),
+    deviceStatics.GetAddressOf());
+
+  if (FAILED(hr)) {
+    return 0;
+  }
+
+  ComPtr< IVectorView<PointerDevice*> > deviceList;
+  hr = deviceStatics->GetPointerDevices(&deviceList);
+
+  if (FAILED(hr)) {
+    return 0;
+  }
+
+  uint32_t deviceNum = 0;
+  deviceList->get_Size(&deviceNum);
+
+  uint32_t maxTouchPoints = 0;
+  for (uint32_t index = 0; index < deviceNum; ++index) {
+    ComPtr<IPointerDevice> device;
+    PointerDeviceType deviceType;
+
+    if (FAILED(deviceList->GetAt(index, device.GetAddressOf()))) {
+      continue;
+    }
+
+    if (FAILED(device->get_PointerDeviceType(&deviceType)))  {
+      continue;
+    }
+
+    if (deviceType == PointerDeviceType_Touch) {
+      uint32_t deviceMaxTouchPoints = 0;
+      device->get_MaxContacts(&deviceMaxTouchPoints);
+      maxTouchPoints = std::max(maxTouchPoints, deviceMaxTouchPoints);
+    }
+  }
+
+  return maxTouchPoints;
 }
 
 NS_IMETHODIMP
@@ -686,7 +736,7 @@ MetroWidget::DeliverNextKeyboardEvent()
     delete event;
     return;
   }
-  
+
   if (DispatchWindowEvent(event) && event->message == NS_KEY_DOWN) {
     // keydown events may be followed by multiple keypress events which
     // shouldn't be sent if preventDefault is called on keydown.
@@ -742,19 +792,12 @@ MetroWidget::WindowProcedure(HWND aWnd, UINT aMsg, WPARAM aWParam, LPARAM aLPara
     return processResult;
   }
 
-  switch (aMsg) {
-    case WM_PAINT:
-    {
-      HRGN rgn = CreateRectRgn(0, 0, 0, 0);
-      GetUpdateRgn(mWnd, rgn, false);
-      nsIntRegion region = WinUtils::ConvertHRGNToRegion(rgn);
-      DeleteObject(rgn);
-      if (region.IsEmpty())
-        break;
-      Paint(region);
-      break;
-    }
+  nsTextStore::ProcessMessage(this, aMsg, aWParam, aLParam, msgResult);
+  if (msgResult.mConsumed) {
+    return processResult;
+  }
 
+  switch (aMsg) {
     case WM_POWERBROADCAST:
     {
       switch (aWParam)
@@ -835,6 +878,10 @@ MetroWidget::WindowProcedure(HWND aWnd, UINT aMsg, WPARAM aWParam, LPARAM aLPara
       break;
     }
 
+    case WM_APPCOMMAND:
+      processDefault = HandleAppCommandMsg(aWParam, aLParam, &processResult);
+      break;
+
     case WM_GETOBJECT:
     {
       DWORD dwObjId = (LPARAM)(DWORD) aLParam;
@@ -862,9 +909,6 @@ MetroWidget::WindowProcedure(HWND aWnd, UINT aMsg, WPARAM aWParam, LPARAM aLPara
 
     default:
     {
-      if (aWParam == WM_USER_TSF_TEXTCHANGE) {
-        nsTextStore::OnTextChangeMsg();
-      }
       break;
     }
   }
@@ -1017,6 +1061,31 @@ CompositorParent* MetroWidget::NewCompositorParent(int aSurfaceWidth, int aSurfa
   return compositor;
 }
 
+MetroWidget::TouchBehaviorFlags
+MetroWidget::ContentGetAllowedTouchBehavior(const nsIntPoint& aPoint)
+{
+  return ContentHelper::GetAllowedTouchBehavior(this, aPoint);
+}
+
+void
+MetroWidget::ApzcGetAllowedTouchBehavior(WidgetInputEvent* aTransformedEvent,
+                                         nsTArray<TouchBehaviorFlags>& aOutBehaviors)
+{
+  LogFunction();
+  return APZController::sAPZC->GetAllowedTouchBehavior(aTransformedEvent, aOutBehaviors);
+}
+
+void
+MetroWidget::ApzcSetAllowedTouchBehavior(const ScrollableLayerGuid& aGuid,
+                                         nsTArray<TouchBehaviorFlags>& aBehaviors)
+{
+  LogFunction();
+  if (!APZController::sAPZC) {
+    return;
+  }
+  APZController::sAPZC->SetAllowedTouchBehavior(aGuid, aBehaviors);
+}
+
 void
 MetroWidget::ApzContentConsumingTouch(const ScrollableLayerGuid& aGuid)
 {
@@ -1103,7 +1172,7 @@ MetroWidget::GetLayerManager(PLayerTransactionChild* aShadowManager,
 
   // If the backend device has changed, create a new manager (pulled from nswindow)
   if (mLayerManager) {
-    if (mLayerManager->GetBackendType() == LAYERS_D3D10) {
+    if (mLayerManager->GetBackendType() == LayersBackend::LAYERS_D3D10) {
       LayerManagerD3D10 *layerManagerD3D10 =
         static_cast<LayerManagerD3D10*>(mLayerManager.get());
       if (layerManagerD3D10->device() !=
@@ -1403,9 +1472,7 @@ MetroWidget::Activated(bool aActiveated)
 NS_IMETHODIMP
 MetroWidget::Move(double aX, double aY)
 {
-  if (mWidgetListener) {
-    mWidgetListener->WindowMoved(this, aX, aY);
-  }
+  NotifyWindowMoved(aX, aY);
   return NS_OK;
 }
 
@@ -1506,9 +1573,9 @@ MetroWidget::GetInputContext()
 }
 
 NS_IMETHODIMP
-MetroWidget::NotifyIME(NotificationToIME aNotification)
+MetroWidget::NotifyIME(const IMENotification& aIMENotification)
 {
-  switch (aNotification) {
+  switch (aIMENotification.mMessage) {
     case REQUEST_TO_COMMIT_COMPOSITION:
       nsTextStore::CommitComposition(false);
       return NS_OK;
@@ -1523,6 +1590,10 @@ MetroWidget::NotifyIME(NotificationToIME aNotification)
                                         mInputContext.mIMEState.mEnabled);
     case NOTIFY_IME_OF_SELECTION_CHANGE:
       return nsTextStore::OnSelectionChange();
+    case NOTIFY_IME_OF_TEXT_CHANGE:
+      return nsTextStore::OnTextChange(aIMENotification);
+    case NOTIFY_IME_OF_POSITION_CHANGE:
+      return nsTextStore::OnLayoutChange();
     default:
       return NS_ERROR_NOT_IMPLEMENTED;
   }
@@ -1534,14 +1605,6 @@ MetroWidget::GetToggledKeyState(uint32_t aKeyCode, bool* aLEDState)
   NS_ENSURE_ARG_POINTER(aLEDState);
   *aLEDState = (::GetKeyState(aKeyCode) & 1) != 0;
   return NS_OK;
-}
-
-NS_IMETHODIMP
-MetroWidget::NotifyIMEOfTextChange(uint32_t aStart,
-                                   uint32_t aOldEnd,
-                                   uint32_t aNewEnd)
-{
-  return nsTextStore::OnTextChange(aStart, aOldEnd, aNewEnd);
 }
 
 nsIMEUpdatePreference
@@ -1586,7 +1649,7 @@ MetroWidget::HasPendingInputEvent()
 }
 
 NS_IMETHODIMP
-MetroWidget::Observe(nsISupports *subject, const char *topic, const PRUnichar *data)
+MetroWidget::Observe(nsISupports *subject, const char *topic, const char16_t *data)
 {
   NS_ENSURE_ARG_POINTER(topic);
   if (!strcmp(topic, "apzc-zoom-to-rect")) {
@@ -1615,7 +1678,8 @@ MetroWidget::Observe(nsISupports *subject, const char *topic, const PRUnichar *d
     }
 
     ScrollableLayerGuid guid = ScrollableLayerGuid(mRootLayerTreeId, presShellId, viewId);
-    APZController::sAPZC->UpdateZoomConstraints(guid, false, CSSToScreenScale(1.0f), CSSToScreenScale(1.0f));
+    APZController::sAPZC->UpdateZoomConstraints(guid,
+      ZoomConstraints(false, false, CSSToScreenScale(1.0f), CSSToScreenScale(1.0f)));
   }
   return NS_OK;
 }

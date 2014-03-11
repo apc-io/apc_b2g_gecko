@@ -5,13 +5,8 @@
 
 #include "mozilla/dom/HTMLTrackElement.h"
 #include "mozilla/dom/TextTrackCue.h"
-#include "nsIFrame.h"
-#include "nsVideoFrame.h"
 #include "nsComponentManagerUtils.h"
 #include "mozilla/ClearOnShutdown.h"
-
-// Alternate value for the 'auto' keyword.
-#define WEBVTT_AUTO -1
 
 namespace mozilla {
 namespace dom {
@@ -36,11 +31,13 @@ void
 TextTrackCue::SetDefaultCueSettings()
 {
   mPosition = 50;
+  mPositionAlign = AlignSetting::Middle;
   mSize = 100;
   mPauseOnExit = false;
   mSnapToLines = true;
-  mLine = WEBVTT_AUTO;
+  mLineIsAutoKeyword = true;
   mAlign = AlignSetting::Middle;
+  mLineAlign = AlignSetting::Start;
   mVertical = DirectionSetting::_empty;
 }
 
@@ -82,8 +79,8 @@ TextTrackCue::TextTrackCue(nsISupports* aGlobal,
   }
 }
 
-/** Save a reference to our creating document so it's available
- *  even when unlinked during discard/teardown.
+/** Save a reference to our creating document so we don't have to
+ *  keep getting it from our window.
  */
 nsresult
 TextTrackCue::StashDocument(nsISupports* aGlobal)
@@ -99,61 +96,14 @@ TextTrackCue::StashDocument(nsISupports* aGlobal)
   return NS_OK;
 }
 
-void
-TextTrackCue::CreateCueOverlay()
-{
-  mDocument->CreateElem(NS_LITERAL_STRING("div"), nullptr,
-                        kNameSpaceID_XHTML,
-                        getter_AddRefs(mDisplayState));
-  nsGenericHTMLElement* cueDiv =
-    static_cast<nsGenericHTMLElement*>(mDisplayState.get());
-  cueDiv->SetClassName(NS_LITERAL_STRING("caption-text"));
-}
-
-void
-TextTrackCue::RenderCue()
-{
-  nsRefPtr<DocumentFragment> frag = GetCueAsHTML();
-  if (!frag || !mTrackElement) {
-    return;
-  }
-
-  if (!mDisplayState) {
-    CreateCueOverlay();
-  }
-
-  HTMLMediaElement* parent = mTrackElement->mMediaParent;
-  if (!parent) {
-    return;
-  }
-
-  nsIFrame* frame = parent->GetPrimaryFrame();
-  if (!frame) {
-    return;
-  }
-
-  nsVideoFrame* videoFrame = do_QueryFrame(frame);
-  if (!videoFrame) {
-    return;
-  }
-
-  nsIContent* overlay =  videoFrame->GetCaptionOverlay();
-  if (!overlay) {
-    return;
-  }
-
-  ErrorResult rv;
-  nsContentUtils::SetNodeTextContent(overlay, EmptyString(), true);
-  nsContentUtils::SetNodeTextContent(mDisplayState, EmptyString(), true);
-
-  mDisplayState->AppendChild(*frag, rv);
-  overlay->AppendChild(*mDisplayState, rv);
-}
-
 already_AddRefed<DocumentFragment>
 TextTrackCue::GetCueAsHTML()
 {
-  MOZ_ASSERT(mDocument);
+  // mDocument may be null during cycle collector shutdown.
+  // See bug 941701.
+  if (!mDocument) {
+    return nullptr;
+  }
 
   if (!sParserWrapper) {
     nsresult rv;

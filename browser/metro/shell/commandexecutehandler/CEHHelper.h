@@ -9,15 +9,11 @@
 #define _WIN32_WINNT 0x602
 
 #include <windows.h>
-#include <d3d10_1.h>
-#include <dxgi.h>
-#include <d3d10misc.h>
 #include <atlbase.h>
 #include <shlobj.h>
 
 //#define SHOW_CONSOLE 1
 extern HANDLE sCon;
-extern LPCWSTR metroDX10Available;
 
 void Log(const wchar_t *fmt, ...);
 
@@ -31,4 +27,5 @@ bool IsDX10Available();
 bool GetDWORDRegKey(LPCWSTR name, DWORD &value);
 bool SetDWORDRegKey(LPCWSTR name, DWORD value);
 bool IsImmersiveProcessDynamic(HANDLE process);
-bool IsProcessRunning(const wchar_t *processName, bool bCheckIfMetro);
+bool IsMetroProcessRunning();
+bool IsDesktopProcessRunning();

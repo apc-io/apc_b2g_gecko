@@ -201,13 +201,10 @@ menulist {
   -moz-box-align: center;
   font-weight: 600;
 }
-
 .menu-popup > richlistbox > richlistitem {
-  padding-right: 50px;
+  -moz-padding-end: 50px;
 }
-
 /* Additional styles applied to popups for form <select> elements. */
-
 #select-container {
   padding: 0;
   position: absolute;
@@ -238,11 +235,6 @@ menulist {
   min-height: @touch_button_small@;
   min-width: @touch_action_minwidth@; /* keep the button from being too narrow */
   border: 0 none;
-}
-
-.option-command.selected {
-  background-color: #ff8000;
-  color: white;
 }
 
 .option-command.optgroup {
@@ -621,6 +613,15 @@ tabmodalprompt:not([promptType="promptUserAndPass"]) .infoContainer {
   border-color: @metro_orange@ !important;
 }
 
+#stack[keyboardVisible] tabmodalprompt > spacer {
+  min-height: 20px;
+  max-height: 20px;
+}
+
+#stack[keyboardVisible] tabmodalprompt .info\.body {
+  max-height: 15vh;
+}
+
 @media (max-width: 600px) {
   .mainContainer {
     padding: 5vh 5vw;
@@ -636,10 +637,6 @@ tabmodalprompt:not([promptType="promptUserAndPass"]) .infoContainer {
 
 .meta {
   background-color: @panel_light_color@;
-  background-image: url("chrome://browser/skin/images/firefox-watermark.png");
-  background-repeat: no-repeat;
-  background-position: center center;
-  background-attachment: fixed;
 }
 
 /* needs to observe the viewstate */
@@ -678,12 +675,8 @@ tabmodalprompt:not([promptType="promptUserAndPass"]) .infoContainer {
   margin-bottom: calc(40px - @tile_side_margin@);
 }
 
-.meta-section:not([expanded]) > .meta-section-title.narrow-title:-moz-locale-dir(ltr):after {
+.meta-section:not([expanded]) > .meta-section-title.narrow-title:after {
   content: ">";
-}
-
-.meta-section:not([expanded]) > .meta-section-title.narrow-title:-moz-locale-dir(rtl):before {
-  content: "<";
 }
 
 .meta-section-container:not([viewstate="snapped"]) .meta-section-title.narrow-title,
@@ -724,6 +717,45 @@ tabmodalprompt:not([promptType="promptUserAndPass"]) .infoContainer {
   transition-property: none;
 }
 
+/* Autocomplete ----------------------------------------------------------------- */
+
+#urlbar-autocomplete-scroll:not([autocomplete]) {
+  transform: translateY(calc(3 * @grid_row_height@ + 64px));
+  visibility: collapse;
+}
+
+#urlbar-autocomplete-scroll[autocomplete] {
+  height: calc(3 * @grid_row_height@ + 64px);
+  max-height: calc(3 * @grid_row_height@ + 64px);
+  transform: translateY(0);
+  transition-timing-function: @metro_animation_easing@;
+  transition-property: transform;
+  transition-duration: @metro_animation_duration@;
+  transition-delay: 0s;
+  visibility: visible;
+}
+
+#urlbar-autocomplete-scroll:not([autocomplete]) > .meta-section-container > .meta-section {
+  opacity: 0;
+}
+
+#urlbar-autocomplete > .meta-section {
+  opacity: 1;
+  transition-property: opacity;
+  transition-timing-function: @metro_animation_easing@;
+  transition-duration: @metro_animation_duration@;
+  transition-delay: 0s;
+  visibility: visible;
+}
+
+#urlbar-autocomplete[nomatch] > .meta-section[anonid="results-container"] {
+  opacity: 0;
+  visibility: collapse;
+}
+
+#urlbar-autocomplete richgriditem:not([value]) {
+  visibility: collapse;
+}
 
 /* App bars ----------------------------------------------------------------- */
 
@@ -886,4 +918,9 @@ appbar toolbar[labelled] toolbarbutton > .toolbarbutton-text {
  * Setting max-width on the element or a child fixes it. */
 .flyout-narrow .flyoutpanel-hack {
   max-width: calc(346px - 2 * 40px);
+}
+
+.console-row-code {
+   padding-top: 2px;
+   font-size: small;
 }

@@ -4,11 +4,10 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-TEST_DIRS += ['tests']
+XPCSHELL_TESTS_MANIFESTS += ['tests/unit/xpcshell.ini']
 
 XPIDL_SOURCES += [
     'nsITelemetry.idl',
-    'nsITelemetryPing.idl',
 ]
 
 XPIDL_MODULE = 'telemetry'
@@ -24,11 +23,8 @@ SOURCES += [
 ]
 
 EXTRA_COMPONENTS += [
-    'TelemetryPing.manifest',
-]
-
-EXTRA_PP_COMPONENTS += [
-    'TelemetryPing.js',
+    'TelemetryStartup.js',
+    'TelemetryStartup.manifest'
 ]
 
 EXTRA_JS_MODULES += [
@@ -38,6 +34,7 @@ EXTRA_JS_MODULES += [
 ]
 
 EXTRA_PP_JS_MODULES += [
+    'TelemetryPing.jsm',
     'UITelemetry.jsm',
 ]
 
@@ -55,3 +52,9 @@ GENERATED_FILES = [
 
 if CONFIG['MOZILLA_OFFICIAL']:
     DEFINES['MOZILLA_OFFICIAL'] = True
+
+LOCAL_INCLUDES += [
+    '/xpcom/build',
+    '/xpcom/threads',
+]
+

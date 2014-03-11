@@ -42,6 +42,7 @@ import android.view.View;
 import android.view.View.OnClickListener;
 import android.view.ViewGroup;
 import android.view.ViewStub;
+import android.view.WindowManager;
 import android.view.WindowManager.LayoutParams;
 import android.view.animation.AccelerateInterpolator;
 import android.view.animation.Animation;
@@ -53,7 +54,6 @@ import android.widget.TextView;
 
 import java.util.ArrayList;
 import java.util.EnumSet;
-import java.util.List;
 
 /**
  * Fragment that displays frecency search results in a ListView.
@@ -95,7 +95,6 @@ public class BrowserSearch extends HomeFragment
     private HomeListView mList;
 
     // Client that performs search suggestion queries
-    @RobocopTarget
     private volatile SuggestClient mSuggestClient;
 
     // List of search engines from gecko
@@ -109,9 +108,6 @@ public class BrowserSearch extends HomeFragment
 
     // Callbacks used for the search suggestion loader
     private SuggestionLoaderCallbacks mSuggestionLoaderCallbacks;
-
-    // Inflater used by the adapter
-    private LayoutInflater mInflater;
 
     // Autocomplete handler used when filtering results
     private AutocompleteHandler mAutocompleteHandler;
@@ -177,15 +173,12 @@ public class BrowserSearch extends HomeFragment
             throw new ClassCastException(activity.toString()
                     + " must implement BrowserSearch.OnEditSuggestionListener");
         }
-
-        mInflater = (LayoutInflater) activity.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
     }
 
     @Override
     public void onDetach() {
         super.onDetach();
 
-        mInflater = null;
         mAutocompleteHandler = null;
         mUrlOpenListener = null;
         mSearchListener = null;
@@ -204,6 +197,23 @@ public class BrowserSearch extends HomeFragment
         super.onDestroy();
 
         mSearchEngines = null;
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+
+        // Adjusting the window size when showing the keyboard results in the underlying
+        // activity being painted when the keyboard is hidden (bug 933422). This can be
+        // prevented by not resizing the window.
+        getActivity().getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
+    }
+
+    @Override
+    public void onStop() {
+        super.onStop();
+
+        getActivity().getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
     }
 
     @Override
@@ -508,8 +518,8 @@ public class BrowserSearch extends HomeFragment
                     // set yet. e.g. Robocop tests might set it directly before search
                     // engines are loaded.
                     if (mSuggestClient == null && !isPrivate) {
-                        mSuggestClient = new SuggestClient(getActivity(), suggestTemplate,
-                                SUGGESTION_TIMEOUT, SUGGESTION_MAX);
+                        setSuggestClient(new SuggestClient(getActivity(), suggestTemplate,
+                                    SUGGESTION_TIMEOUT, SUGGESTION_MAX));
                     }
                 } else {
                     searchEngines.add(engine);
@@ -522,9 +532,9 @@ public class BrowserSearch extends HomeFragment
                 mAdapter.notifyDataSetChanged();
             }
 
-            // Show suggestions opt-in prompt only if user hasn't been prompted
-            // and we're not on a private browsing tab.
-            if (!suggestionsPrompted && mSuggestClient != null) {
+            // Show suggestions opt-in prompt only if suggestions are not enabled yet,
+            // user hasn't been prompted and we're not on a private browsing tab.
+            if (!mSuggestionsEnabled && !suggestionsPrompted && mSuggestClient != null) {
                 showSuggestionsOptIn();
             }
         } catch (JSONException e) {
@@ -532,6 +542,20 @@ public class BrowserSearch extends HomeFragment
         }
 
         filterSuggestions();
+    }
+
+    /**
+     * Sets the private SuggestClient instance. Should only be called if the suggestClient is
+     * null (i.e. has not yet been initialized or has been nulled). Non-private access is
+     * for testing purposes only.
+     */
+    @RobocopTarget
+    public void setSuggestClient(final SuggestClient client) {
+        if (mSuggestClient != null) {
+            throw new IllegalStateException("Can only set the SuggestClient if it has not " +
+                    "yet been initialized!");
+        }
+        mSuggestClient = client;
     }
 
     private void showSuggestionsOptIn() {

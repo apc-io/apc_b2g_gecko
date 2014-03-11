@@ -219,40 +219,6 @@ js_ThrowStopIteration(JSContext *cx);
 namespace js {
 
 /*
- * Convenience class for imitating a JS level for-of loop. Typical usage:
- *
- *     ForOfIterator it(cx, iterable);
- *     while (it.next()) {
- *        if (!DoStuff(cx, it.value()))
- *            return false;
- *     }
- *     if (!it.close())
- *         return false;
- *
- * The final it.close() check is needed in order to check for cases where
- * any of the iterator operations fail.
- *
- * it.close() may be skipped only if something in the body of the loop fails
- * and the failure is allowed to propagate on cx, as in this example if DoStuff
- * fails. In that case, ForOfIterator's destructor does all necessary cleanup.
- */
-class ForOfIterator
-{
-  private:
-    JSContext *cx;
-    RootedObject iterator;
-
-    ForOfIterator(const ForOfIterator &) MOZ_DELETE;
-    ForOfIterator &operator=(const ForOfIterator &) MOZ_DELETE;
-
-  public:
-    ForOfIterator(JSContext *cx) : cx(cx), iterator(cx) { }
-
-    bool init(HandleValue iterable);
-    bool next(MutableHandleValue val, bool *done);
-};
-
-/*
  * Create an object of the form { value: VALUE, done: DONE }.
  * ES6 draft from 2013-09-05, section 25.4.3.4.
  */
@@ -277,14 +243,14 @@ struct JSGenerator
 {
     js::HeapPtrObject   obj;
     JSGeneratorState    state;
-    js::FrameRegs       regs;
+    js::InterpreterRegs regs;
     JSGenerator         *prevGenerator;
     js::StackFrame      *fp;
     js::HeapValue       stackSnapshot[1];
 };
 
 extern JSObject *
-js_NewGenerator(JSContext *cx, const js::FrameRegs &regs);
+js_NewGenerator(JSContext *cx, const js::InterpreterRegs &regs);
 
 extern JSObject *
 js_InitIteratorClasses(JSContext *cx, js::HandleObject obj);

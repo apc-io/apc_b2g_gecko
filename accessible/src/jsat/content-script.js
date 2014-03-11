@@ -20,111 +20,15 @@ XPCOMUtils.defineLazyModuleGetter(this, 'Utils',
   'resource://gre/modules/accessibility/Utils.jsm');
 XPCOMUtils.defineLazyModuleGetter(this, 'EventManager',
   'resource://gre/modules/accessibility/EventManager.jsm');
-XPCOMUtils.defineLazyModuleGetter(this, 'ObjectWrapper',
-  'resource://gre/modules/ObjectWrapper.jsm');
+XPCOMUtils.defineLazyModuleGetter(this, 'ContentControl',
+  'resource://gre/modules/accessibility/ContentControl.jsm');
 XPCOMUtils.defineLazyModuleGetter(this, 'Roles',
   'resource://gre/modules/accessibility/Constants.jsm');
 
 Logger.debug('content-script.js');
 
 let eventManager = null;
-
-function moveCursor(aMessage) {
-  if (Logger.logLevel >= Logger.DEBUG) {
-    Logger.debug(aMessage.name, JSON.stringify(aMessage.json, null, ' '));
-  }
-
-  let vc = Utils.getVirtualCursor(content.document);
-  let origin = aMessage.json.origin;
-  let action = aMessage.json.action;
-  let rule = TraversalRules[aMessage.json.rule];
-
-  function moveCursorInner() {
-    try {
-      if (origin == 'parent' &&
-          !Utils.isAliveAndVisible(vc.position)) {
-        // We have a bad position in this frame, move vc to last or first item.
-        if (action == 'moveNext') {
-          return vc.moveFirst(rule);
-        } else if (action == 'movePrevious') {
-          return vc.moveLast(rule);
-        }
-      }
-
-      return vc[action](rule);
-    } catch (x) {
-      if (action == 'moveNext' || action == 'movePrevious') {
-        // If we are trying to move next/prev put the vc on the focused item.
-        let acc = Utils.AccRetrieval.
-          getAccessibleFor(content.document.activeElement);
-        return vc.moveNext(rule, acc, true);
-      } else {
-        throw x;
-      }
-    }
-
-    return false;
-  }
-
-  try {
-    if (origin != 'child' &&
-        forwardToChild(aMessage, moveCursor, vc.position)) {
-      // We successfully forwarded the move to the child document.
-      return;
-    }
-
-    if (moveCursorInner()) {
-      // If we moved, try forwarding the message to the new position,
-      // it may be a frame with a vc of its own.
-      forwardToChild(aMessage, moveCursor, vc.position);
-    } else {
-      // If we did not move, we probably reached the end or start of the
-      // document, go back to parent content and move us out of the iframe.
-      if (origin == 'parent') {
-        vc.position = null;
-      }
-      forwardToParent(aMessage);
-    }
-  } catch (x) {
-    Logger.logException(x, 'Cursor move failed');
-  }
-}
-
-function moveToPoint(aMessage) {
-  if (Logger.logLevel >= Logger.DEBUG) {
-    Logger.debug(aMessage.name, JSON.stringify(aMessage.json, null, ' '));
-  }
-
-  let vc = Utils.getVirtualCursor(content.document);
-  let details = aMessage.json;
-  let rule = TraversalRules[details.rule];
-
-  try {
-    let dpr = content.devicePixelRatio;
-    vc.moveToPoint(rule, details.x * dpr, details.y * dpr, true);
-    forwardToChild(aMessage, moveToPoint, vc.position);
-  } catch (x) {
-    Logger.logException(x, 'Failed move to point');
-  }
-}
-
-function showCurrent(aMessage) {
-  if (Logger.logLevel >= Logger.DEBUG) {
-    Logger.debug(aMessage.name, JSON.stringify(aMessage.json, null, ' '));
-  }
-
-  let vc = Utils.getVirtualCursor(content.document);
-
-  if (!forwardToChild(vc, showCurrent, aMessage)) {
-    if (!vc.position && aMessage.json.move) {
-      vc.moveFirst(TraversalRules.Simple);
-    } else {
-      sendAsyncMessage('AccessFu:Present', Presentation.pivotChanged(
-                         vc.position, null, Ci.nsIAccessiblePivot.REASON_NONE,
-                         vc.startOffset, vc.endOffset));
-    }
-  }
-}
+let contentControl = null;
 
 function forwardToParent(aMessage) {
   // XXX: This is a silly way to make a deep copy
@@ -140,13 +44,17 @@ function forwardToChild(aMessage, aListener, aVCPosition) {
     return false;
   }
 
-  if (Logger.logLevel >= Logger.DEBUG) {
-    Logger.debug('forwardToChild', Logger.accessibleToString(acc),
-                 aMessage.name, JSON.stringify(aMessage.json, null, '  '));
-  }
+  Logger.debug(() => {
+    return ['forwardToChild', Logger.accessibleToString(acc),
+            aMessage.name, JSON.stringify(aMessage.json, null, '  ')];
+  });
 
   let mm = Utils.getMessageManager(acc.DOMNode);
-  mm.addMessageListener(aMessage.name, aListener);
+
+  if (aListener) {
+    mm.addMessageListener(aMessage.name, aListener);
+  }
+
   // XXX: This is a silly way to make a deep copy
   let newJSON = JSON.parse(JSON.stringify(aMessage.json));
   newJSON.origin = 'parent';
@@ -163,9 +71,14 @@ function forwardToChild(aMessage, aListener, aVCPosition) {
 function activateCurrent(aMessage) {
   Logger.debug('activateCurrent');
   function activateAccessible(aAccessible) {
-    if (aMessage.json.activateIfKey &&
-        aAccessible.role != Roles.KEY) {
-      // Only activate keys, don't do anything on other objects.
+    try {
+      if (aMessage.json.activateIfKey &&
+          aAccessible.role != Roles.KEY) {
+        // Only activate keys, don't do anything on other objects.
+        return;
+      }
+    } catch (e) {
+      // accessible is invalid. Silently fail.
       return;
     }
 
@@ -338,13 +251,22 @@ function scroll(aMessage) {
 
 function adjustRange(aMessage) {
   function sendUpDownKey(aAccessible) {
-    let evt = content.document.createEvent('KeyboardEvent');
-    let keycode = aMessage.json.direction == 'forward' ?
-      content.KeyEvent.DOM_VK_DOWN : content.KeyEvent.DOM_VK_UP;
-    evt.initKeyEvent(
-      "keypress", false, true, null, false, false, false, false, keycode, 0);
-    if (aAccessible.DOMNode) {
-      aAccessible.DOMNode.dispatchEvent(evt);
+    let acc = Utils.getEmbeddedControl(aAccessible) || aAccessible;
+    let elem = acc.DOMNode;
+    if (elem) {
+      if (elem.tagName === 'INPUT' && elem.type === 'range') {
+        elem[aMessage.json.direction === 'forward' ? 'stepDown' : 'stepUp']();
+        let changeEvent = content.document.createEvent('UIEvent');
+        changeEvent.initEvent('change', true, true);
+        elem.dispatchEvent(changeEvent);
+      } else {
+        let evt = content.document.createEvent('KeyboardEvent');
+        let keycode = aMessage.json.direction == 'forward' ?
+              content.KeyEvent.DOM_VK_DOWN : content.KeyEvent.DOM_VK_UP;
+        evt.initKeyEvent(
+          "keypress", false, true, null, false, false, false, false, keycode, 0);
+        elem.dispatchEvent(evt);
+      }
     }
   }
 
@@ -360,9 +282,6 @@ addMessageListener(
     if (m.json.buildApp)
       Utils.MozBuildApp = m.json.buildApp;
 
-    addMessageListener('AccessFu:MoveToPoint', moveToPoint);
-    addMessageListener('AccessFu:MoveCursor', moveCursor);
-    addMessageListener('AccessFu:ShowCurrent', showCurrent);
     addMessageListener('AccessFu:Activate', activateCurrent);
     addMessageListener('AccessFu:ContextMenu', activateContextMenu);
     addMessageListener('AccessFu:Scroll', scroll);
@@ -374,6 +293,13 @@ addMessageListener(
       eventManager = new EventManager(this);
     }
     eventManager.start();
+
+    if (!contentControl) {
+      contentControl = new ContentControl(this);
+    }
+    contentControl.start();
+
+    sendAsyncMessage('AccessFu:ContentStarted');
   });
 
 addMessageListener(
@@ -381,9 +307,6 @@ addMessageListener(
   function(m) {
     Logger.debug('AccessFu:Stop');
 
-    removeMessageListener('AccessFu:MoveToPoint', moveToPoint);
-    removeMessageListener('AccessFu:MoveCursor', moveCursor);
-    removeMessageListener('AccessFu:ShowCurrent', showCurrent);
     removeMessageListener('AccessFu:Activate', activateCurrent);
     removeMessageListener('AccessFu:ContextMenu', activateContextMenu);
     removeMessageListener('AccessFu:Scroll', scroll);
@@ -391,6 +314,7 @@ addMessageListener(
     removeMessageListener('AccessFu:MoveByGranularity', moveByGranularity);
 
     eventManager.stop();
+    contentControl.stop();
   });
 
 sendAsyncMessage('AccessFu:Ready');

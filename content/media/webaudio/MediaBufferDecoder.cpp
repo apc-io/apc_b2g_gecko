@@ -141,8 +141,10 @@ private:
   void Cleanup()
   {
     MOZ_ASSERT(NS_IsMainThread());
-    mBufferDecoder = nullptr;
+    // MediaDecoderReader expects that BufferDecoder is alive.
+    // Destruct MediaDecoderReader first.
     mDecoderReader = nullptr;
+    mBufferDecoder = nullptr;
   }
 
 private:
@@ -518,24 +520,12 @@ bool
 MediaBufferDecoder::EnsureThreadPoolInitialized()
 {
   if (!mThreadPool) {
-    mThreadPool = do_CreateInstance(NS_THREADPOOL_CONTRACTID);
+    mThreadPool = SharedThreadPool::Get(NS_LITERAL_CSTRING("MediaBufferDecoder"));
     if (!mThreadPool) {
       return false;
     }
-    mThreadPool->SetName(NS_LITERAL_CSTRING("MediaBufferDecoder"));
   }
   return true;
-}
-
-void
-MediaBufferDecoder::Shutdown() {
-  if (mThreadPool) {
-    // Setting threadLimit to 0 causes threads to exit when all events have
-    // been run, like nsIThreadPool::Shutdown(), but doesn't run a nested event
-    // loop nor wait until this has happened.
-    mThreadPool->SetThreadLimit(0);
-    mThreadPool = nullptr;
-  }
 }
 
 WebAudioDecodeJob::WebAudioDecodeJob(const nsACString& aContentType,
@@ -630,6 +620,27 @@ WebAudioDecodeJob::OnFailure(ErrorCode aErrorCode)
   }
 
   mContext->RemoveFromDecodeQueue(this);
+}
+
+size_t
+WebAudioDecodeJob::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
+{
+  size_t amount = 0;
+  amount += mContentType.SizeOfExcludingThisMustBeUnshared(aMallocSizeOf);
+  if (mSuccessCallback) {
+    amount += mSuccessCallback->SizeOfIncludingThis(aMallocSizeOf);
+  }
+  if (mFailureCallback) {
+    amount += mFailureCallback->SizeOfIncludingThis(aMallocSizeOf);
+  }
+  if (mOutput) {
+    amount += mOutput->SizeOfIncludingThis(aMallocSizeOf);
+  }
+  amount += mChannelBuffers.SizeOfExcludingThis(aMallocSizeOf);
+  for (uint32_t i = 0; i < mChannelBuffers.Length(); ++i) {
+    amount += mChannelBuffers[i].SizeOfExcludingThis(aMallocSizeOf);
+  }
+  return amount;
 }
 
 }

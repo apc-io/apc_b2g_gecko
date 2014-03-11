@@ -11,9 +11,9 @@
 #include "mozilla/dom/EventTarget.h"
 #include "nsCOMPtr.h"
 #include "nsIAtom.h"
+#include "nsISupportsImpl.h"
 #include "nsIWidget.h"
 #include "nsString.h"
-#include "nsTraceRefcnt.h"
 #include "Units.h"
 
 /******************************************************************************
@@ -49,7 +49,6 @@ enum nsEventStructType
   NS_TOUCH_EVENT,                    // WidgetTouchEvent
 
   // ContentEvents.h
-  NS_SCRIPT_ERROR_EVENT,             // InternalScriptErrorEvent
   NS_SCROLLPORT_EVENT,               // InternalScrollPortEvent
   NS_SCROLLAREA_EVENT,               // InternalScrollAreaEvent
   NS_FORM_EVENT,                     // InternalFormEvent
@@ -63,7 +62,7 @@ enum nsEventStructType
   NS_CONTENT_COMMAND_EVENT,          // WidgetContentCommandEvent
   NS_PLUGIN_EVENT,                   // WidgetPluginEvent
 
-  // MutationEvent.h (content/events/public)
+  // InternalMutationEvent.h (dom/events)
   NS_MUTATION_EVENT,                 // InternalMutationEvent
 
   // Follwoing struct type values are ugly.  They indicate other struct type
@@ -500,20 +499,20 @@ public:
   // If mInSystemGroup is true, the event is being dispatched in system group.
   bool    mInSystemGroup: 1;
   // If mCancelable is true, the event can be consumed.  I.e., calling
-  // nsDOMEvent::PreventDefault() can prevent the default action.
+  // dom::Event::PreventDefault() can prevent the default action.
   bool    mCancelable : 1;
   // If mBubbles is true, the event can bubble.  Otherwise, cannot be handled
   // in bubbling phase.
   bool    mBubbles : 1;
-  // If mPropagationStopped is true, nsDOMEvent::StopPropagation() or
-  // nsDOMEvent::StopImmediatePropagation() has been called.
+  // If mPropagationStopped is true, dom::Event::StopPropagation() or
+  // dom::Event::StopImmediatePropagation() has been called.
   bool    mPropagationStopped : 1;
   // If mImmediatePropagationStopped is true,
-  // nsDOMEvent::StopImmediatePropagation() has been called.
+  // dom::Event::StopImmediatePropagation() has been called.
   // Note that mPropagationStopped must be true when this is true.
   bool    mImmediatePropagationStopped : 1;
   // If mDefaultPrevented is true, the event has been consumed.
-  // E.g., nsDOMEvent::PreventDefault() has been called or
+  // E.g., dom::Event::PreventDefault() has been called or
   // the default action has been performed.
   bool    mDefaultPrevented : 1;
   // If mDefaultPreventedByContent is true, the event has been
@@ -650,6 +649,16 @@ public:
     *this = aOther;
   }
 
+  virtual WidgetEvent* Duplicate() const
+  {
+    MOZ_ASSERT(eventStructType == NS_EVENT,
+               "Duplicate() must be overridden by sub class");
+    WidgetEvent* result = new WidgetEvent(false, message);
+    result->AssignEventData(*this, true);
+    result->mFlags = mFlags;
+    return result;
+  }
+
   // See event struct types
   nsEventStructType eventStructType;
   // See GUI MESSAGES,
@@ -677,7 +686,11 @@ public:
 
   void AssignEventData(const WidgetEvent& aEvent, bool aCopyTargets)
   {
-    // eventStructType, message should be initialized with the constructor.
+    // eventStructType should be initialized with the constructor.
+    // However, NS_SVGZOOM_EVENT and NS_SMIL_TIME_EVENT are set after that.
+    // Therefore, we need to copy eventStructType here.
+    eventStructType = aEvent.eventStructType;
+    // message should be initialized with the constructor.
     refPoint = aEvent.refPoint;
     // lastRefPoint doesn't need to be copied.
     time = aEvent.time;
@@ -828,6 +841,18 @@ public:
   {
   }
 
+  virtual WidgetEvent* Duplicate() const MOZ_OVERRIDE
+  {
+    MOZ_ASSERT(eventStructType == NS_GUI_EVENT ||
+                 eventStructType == NS_SVGZOOM_EVENT,
+               "Duplicate() must be overridden by sub class");
+    // Not copying widget, it is a weak reference.
+    WidgetGUIEvent* result = new WidgetGUIEvent(false, message, nullptr);
+    result->AssignGUIEventData(*this, true);
+    result->mFlags = mFlags;
+    return result;
+  }
+
   /// Originator of the event
   nsCOMPtr<nsIWidget> widget;
 
@@ -915,6 +940,17 @@ public:
     WidgetGUIEvent(aIsTrusted, aMessage, aWidget, NS_INPUT_EVENT),
     modifiers(0)
   {
+  }
+
+  virtual WidgetEvent* Duplicate() const MOZ_OVERRIDE
+  {
+    MOZ_ASSERT(eventStructType == NS_INPUT_EVENT,
+               "Duplicate() must be overridden by sub class");
+    // Not copying widget, it is a weak reference.
+    WidgetInputEvent* result = new WidgetInputEvent(false, message, nullptr);
+    result->AssignInputEventData(*this, true);
+    result->mFlags = mFlags;
+    return result;
   }
 
   // true indicates the shift key is down
@@ -1018,19 +1054,30 @@ class InternalUIEvent : public WidgetGUIEvent
 {
 protected:
   InternalUIEvent(bool aIsTrusted, uint32_t aMessage,
-                  nsEventStructType aStructType, int32_t aDetail) :
-    WidgetGUIEvent(aIsTrusted, aMessage, nullptr, aStructType),
-    detail(aDetail)
+                  nsEventStructType aStructType)
+    : WidgetGUIEvent(aIsTrusted, aMessage, nullptr, aStructType)
+    , detail(0)
   {
   }
 
 public:
   virtual InternalUIEvent* AsUIEvent() MOZ_OVERRIDE { return this; }
 
-  InternalUIEvent(bool aIsTrusted, uint32_t aMessage, int32_t aDetail) :
-    WidgetGUIEvent(aIsTrusted, aMessage, nullptr, NS_UI_EVENT),
-    detail(aDetail)
+  InternalUIEvent(bool aIsTrusted, uint32_t aMessage)
+    : WidgetGUIEvent(aIsTrusted, aMessage, nullptr, NS_UI_EVENT)
+    , detail(0)
   {
+  }
+
+  virtual WidgetEvent* Duplicate() const MOZ_OVERRIDE
+  {
+    MOZ_ASSERT(eventStructType == NS_UI_EVENT ||
+                 eventStructType == NS_SMIL_TIME_EVENT,
+               "Duplicate() must be overridden by sub class");
+    InternalUIEvent* result = new InternalUIEvent(false, message);
+    result->AssignUIEventData(*this, true);
+    result->mFlags = mFlags;
+    return result;
   }
 
   int32_t detail;
@@ -1039,7 +1086,7 @@ public:
   {
     AssignGUIEventData(aEvent, aCopyTargets);
 
-    // detail must have been initialized with the constructor.
+    detail = aEvent.detail;
   }
 };
 

@@ -6,12 +6,12 @@
 <merge xmlns:android="http://schemas.android.com/apk/res/android">
 
     <ViewStub android:id="@+id/home_empty_view_stub"
-              android:layout="@layout/home_empty_page"
+              android:layout="@layout/home_empty_panel"
               android:layout_width="fill_parent"
               android:layout_height="fill_parent"/>
 
     <TextView android:id="@+id/title"
-              style="@style/Widget.Home.HistoryPageTitle"
+              style="@style/Widget.Home.HistoryPanelTitle"
               android:visibility="gone"/>
 
     <org.mozilla.gecko.home.HomeListView

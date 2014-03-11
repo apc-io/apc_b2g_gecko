@@ -380,7 +380,7 @@ nsCacheProfilePrefObserver::SetDiskCacheCapacity(int32_t capacity)
 NS_IMETHODIMP
 nsCacheProfilePrefObserver::Observe(nsISupports *     subject,
                                     const char *      topic,
-                                    const PRUnichar * data_unicode)
+                                    const char16_t * data_unicode)
 {
     nsresult rv;
     NS_ConvertUTF16toUTF8 data(data_unicode);
@@ -3053,6 +3053,23 @@ nsCacheService::GetClearingEntries()
     return gService->mClearingEntries;
 }
 
+// static
+void nsCacheService::GetDiskCacheDirectory(nsIFile ** result) {
+    *result = nullptr;
+    if (gService && gService->mObserver) {
+        nsCOMPtr<nsIFile> directory =
+            gService->mObserver->DiskCacheParentDirectory();
+        if (!directory)
+            return;
+
+        nsresult rv = directory->AppendNative(NS_LITERAL_CSTRING("Cache"));
+        if (NS_FAILED(rv))
+            return;
+
+        directory.forget(result);
+    }
+}
+
 
 #if defined(PR_LOGGING)
 void
@@ -3150,13 +3167,15 @@ nsCacheService::MoveOrRemoveDiskCache(nsIFile *aOldCacheDir,
     if (NS_SUCCEEDED(aNewCacheSubdir->Exists(&exists)) && !exists) {
         // New cache directory does not exist, try to move the old one here
         // rename needs an empty target directory
-        rv = aNewCacheSubdir->Create(nsIFile::DIRECTORY_TYPE, 0777); 
-        if (NS_SUCCEEDED(rv)) {
+
+        // Make sure the parent of the target sub-dir exists
+        rv = aNewCacheDir->Create(nsIFile::DIRECTORY_TYPE, 0777);
+        if (NS_SUCCEEDED(rv) || NS_ERROR_FILE_ALREADY_EXISTS == rv) {
             nsAutoCString oldPath;
             rv = aOldCacheSubdir->GetNativePath(oldPath);
             if (NS_FAILED(rv))
                 return;
-            if(rename(oldPath.get(), newPath.get()) == 0)
+            if (rename(oldPath.get(), newPath.get()) == 0)
                 return;
         }
     }

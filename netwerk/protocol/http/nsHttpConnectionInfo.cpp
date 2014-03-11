@@ -7,17 +7,23 @@
 // HttpLog.h should generally be included first
 #include "HttpLog.h"
 
+// Log on level :5, instead of default :4.
+#undef LOG
+#define LOG(args) LOG5(args)
+#undef LOG_ENABLED
+#define LOG_ENABLED() LOG5_ENABLED()
+
 #include "nsHttpConnectionInfo.h"
 #include "mozilla/net/DNS.h"
 #include "prnetdb.h"
 
-using namespace mozilla::net;
+namespace mozilla {
+namespace net {
 
 nsHttpConnectionInfo::nsHttpConnectionInfo(const nsACString &host, int32_t port,
                                            nsProxyInfo* proxyInfo,
                                            bool usingSSL)
-    : mRef(0)
-    , mProxyInfo(proxyInfo)
+    : mProxyInfo(proxyInfo)
     , mUsingSSL(usingSSL)
     , mUsingConnect(false)
 {
@@ -133,3 +139,6 @@ nsHttpConnectionInfo::HostIsLocalIPLiteral() const
     PRNetAddrToNetAddr(&prAddr, &netAddr);
     return IsIPAddrLocal(&netAddr);
 }
+
+} // namespace mozilla::net
+} // namespace mozilla

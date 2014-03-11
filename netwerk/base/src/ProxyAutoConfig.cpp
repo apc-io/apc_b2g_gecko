@@ -395,13 +395,15 @@ bool PACResolveToString(const nsCString &aHostName,
 static
 bool PACDnsResolve(JSContext *cx, unsigned int argc, JS::Value *vp)
 {
+  JS::CallArgs args = CallArgsFromVp(argc, vp);
+
   if (NS_IsMainThread()) {
     NS_WARNING("DNS Resolution From PAC on Main Thread. How did that happen?");
     return false;
   }
 
   JS::Rooted<JSString*> arg1(cx);
-  if (!JS_ConvertArguments(cx, argc, JS_ARGV(cx, vp), "S", arg1.address()))
+  if (!JS_ConvertArguments(cx, args, "S", arg1.address()))
     return false;
 
   nsDependentJSString hostName;
@@ -411,10 +413,10 @@ bool PACDnsResolve(JSContext *cx, unsigned int argc, JS::Value *vp)
     return false;
   if (PACResolveToString(NS_ConvertUTF16toUTF8(hostName), dottedDecimal, 0)) {
     JSString *dottedDecimalString = JS_NewStringCopyZ(cx, dottedDecimal.get());
-    JS_SET_RVAL(cx, vp, STRING_TO_JSVAL(dottedDecimalString));
+    args.rval().setString(dottedDecimalString);
   }
   else {
-    JS_SET_RVAL(cx, vp, JSVAL_NULL);
+    args.rval().setNull();
   }
 
   return true;
@@ -441,8 +443,10 @@ bool PACMyIpAddress(JSContext *cx, unsigned int argc, JS::Value *vp)
 static
 bool PACProxyAlert(JSContext *cx, unsigned int argc, JS::Value *vp)
 {
+  JS::CallArgs args = CallArgsFromVp(argc, vp);
+
   JS::Rooted<JSString*> arg1(cx);
-  if (!JS_ConvertArguments(cx, argc, JS_ARGV(cx, vp), "S", arg1.address()))
+  if (!JS_ConvertArguments(cx, args, "S", arg1.address()))
     return false;
 
   nsDependentJSString message;
@@ -455,7 +459,7 @@ bool PACProxyAlert(JSContext *cx, unsigned int argc, JS::Value *vp)
   alertMessage += message;
   PACLogToConsole(alertMessage);
 
-  JS_SET_RVAL(cx, vp, JSVAL_VOID);  /* return undefined */
+  args.rval().setUndefined();  /* return undefined */
   return true;
 }
 
@@ -540,7 +544,7 @@ private:
     /*
      * Not setting this will cause JS_CHECK_RECURSION to report false
      * positives
-     */ 
+     */
     JS_SetNativeStackQuota(mRuntime, 128 * sizeof(size_t) * 1024); 
 
     mContext = JS_NewContext(mRuntime, 0);
@@ -554,18 +558,18 @@ private:
     mGlobal = JS_NewGlobalObject(mContext, &sGlobalClass, nullptr,
                                  JS::DontFireOnNewGlobalHook, options);
     NS_ENSURE_TRUE(mGlobal, NS_ERROR_OUT_OF_MEMORY);
+    JS::Rooted<JSObject*> global(mContext, mGlobal);
 
-    JSAutoCompartment ac(mContext, mGlobal);
-    js::SetDefaultObjectForContext(mContext, mGlobal);
-    JS_InitStandardClasses(mContext, mGlobal);
+    JSAutoCompartment ac(mContext, global);
+    js::SetDefaultObjectForContext(mContext, global);
+    JS_InitStandardClasses(mContext, global);
 
     JS_SetErrorReporter(mContext, PACErrorReporter);
 
-    if (!JS_DefineFunctions(mContext, mGlobal, PACGlobalFunctions))
+    if (!JS_DefineFunctions(mContext, global, PACGlobalFunctions))
       return NS_ERROR_FAILURE;
 
-    JS::Rooted<JSObject*> rootedGlobal(mContext, mGlobal);
-    JS_FireOnNewGlobalObject(mContext, rootedGlobal);
+    JS_FireOnNewGlobalObject(mContext, global);
 
     return NS_OK;
   }
@@ -681,13 +685,13 @@ ProxyAutoConfig::GetProxyForURI(const nsCString &aTestURI,
   JS::RootedString hostString(cx, JS_NewStringCopyZ(cx, aTestHost.get()));
 
   if (uriString && hostString) {
-    JS::RootedValue uriValue(cx, STRING_TO_JSVAL(uriString));
-    JS::RootedValue hostValue(cx, STRING_TO_JSVAL(hostString));
+    JS::AutoValueArray<2> args(cx);
+    args[0].setString(uriString);
+    args[1].setString(hostString);
 
-    JS::Value argv[2] = { uriValue, hostValue };
     JS::Rooted<JS::Value> rval(cx);
-    bool ok = JS_CallFunctionName(cx, mJSRuntime->Global(),
-                                    "FindProxyForURL", 2, argv, rval.address());
+    JS::Rooted<JSObject*> global(cx, mJSRuntime->Global());
+    bool ok = JS_CallFunctionName(cx, global, "FindProxyForURL", args, &rval);
 
     if (ok && rval.isString()) {
       nsDependentJSString pacString;

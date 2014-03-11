@@ -15,7 +15,6 @@
 #include "nsNodeInfoManager.h"      // for use in NodePrincipal()
 #include "nsPropertyTable.h"        // for typedefs
 #include "nsTObserverArray.h"       // for member
-#include "nsWindowMemoryReporter.h" // for NS_DECL_SIZEOF_EXCLUDING_THIS
 #include "mozilla/ErrorResult.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/dom/EventTarget.h" // for base class
@@ -56,7 +55,7 @@ namespace dom {
  * @return true if aChar is what the DOM spec defines as 'space character'.
  * http://dom.spec.whatwg.org/#space-character
  */
-inline bool IsSpaceCharacter(PRUnichar aChar) {
+inline bool IsSpaceCharacter(char16_t aChar) {
   return aChar == ' ' || aChar == '\t' || aChar == '\n' || aChar == '\r' ||
          aChar == '\f';
 }
@@ -244,12 +243,20 @@ private:
   // ever passed to Mutated().
   enum { eMaxMutations = 300 };
 
-  
+
   // sMutationCount is a global mutation counter which is decreased by one at
   // every mutation. It is capped at 0 to avoid wrapping.
   // Its value is always between 0 and 300, inclusive.
   static uint32_t sMutationCount;
 };
+
+// This should be used for any nsINode sub-class that has fields of its own
+// that it needs to measure;  any sub-class that doesn't use it will inherit
+// SizeOfExcludingThis from its super-class.  SizeOfIncludingThis() need not be
+// defined, it is inherited from nsINode.
+// This macro isn't actually specific to nodes, and bug 956400 will move it into MFBT.
+#define NS_DECL_SIZEOF_EXCLUDING_THIS \
+  virtual size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
 // Categories of node properties
 // 0 is global.
@@ -1546,7 +1553,6 @@ public:
     return ReplaceOrInsertBefore(true, &aNode, &aChild, aError);
   }
   nsINode* RemoveChild(nsINode& aChild, mozilla::ErrorResult& aError);
-  already_AddRefed<nsINode> CloneNode(mozilla::ErrorResult& aError);
   already_AddRefed<nsINode> CloneNode(bool aDeep, mozilla::ErrorResult& aError);
   bool IsEqualNode(nsINode* aNode);
   void GetNamespaceURI(nsAString& aNamespaceURI) const

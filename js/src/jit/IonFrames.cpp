@@ -21,7 +21,7 @@
 #include "jit/ParallelFunctions.h"
 #include "jit/PcScriptCache.h"
 #include "jit/Safepoints.h"
-#include "jit/SnapshotReader.h"
+#include "jit/Snapshots.h"
 #include "jit/VMFunctions.h"
 #include "vm/ForkJoin.h"
 #include "vm/Interpreter.h"
@@ -512,7 +512,7 @@ HandleExceptionBaseline(JSContext *cx, const IonFrameIterator &frame, ResumeFrom
 
         // Unwind scope chain (pop block objects).
         if (cx->isExceptionPending())
-            UnwindScope(cx, si, tn->stackDepth);
+            UnwindScope(cx, si, script->main() + tn->start);
 
         // Compute base pointer and stack pointer.
         rfe->framePointer = frame.fp() - BaselineFrame::FramePointerOffset;
@@ -571,7 +571,7 @@ HandleExceptionBaseline(JSContext *cx, const IonFrameIterator &frame, ResumeFrom
 void
 HandleException(ResumeFromException *rfe)
 {
-    JSContext *cx = GetIonContext()->cx;
+    JSContext *cx = GetJSContextFromJitCode();
 
     rfe->kind = ResumeFromException::RESUME_ENTRY_FRAME;
 
@@ -619,7 +619,7 @@ HandleException(ResumeFromException *rfe)
                 // the function has exited, so invoke the probe that a function
                 // is exiting.
                 JSScript *script = frames.script();
-                probes::ExitScript(cx, script, script->function(), popSPSFrame);
+                probes::ExitScript(cx, script, script->functionNonDelazifying(), popSPSFrame);
                 if (!frames.more())
                     break;
                 ++frames;
@@ -638,7 +638,7 @@ HandleException(ResumeFromException *rfe)
 
             // Unwind profiler pseudo-stack
             JSScript *script = iter.script();
-            probes::ExitScript(cx, script, script->function(),
+            probes::ExitScript(cx, script, script->functionNonDelazifying(),
                                iter.baselineFrame()->hasPushedSPSFrame());
             // After this point, any pushed SPS frame would have been popped if it needed
             // to be.  Unset the flag here so that if we call DebugEpilogue below,
@@ -688,15 +688,15 @@ HandleException(ResumeFromException *rfe)
 void
 HandleParallelFailure(ResumeFromException *rfe)
 {
-    ForkJoinSlice *slice = ForkJoinSlice::Current();
-    IonFrameIterator iter(slice->perThreadData->ionTop, ParallelExecution);
+    ForkJoinContext *cx = ForkJoinContext::current();
+    IonFrameIterator iter(cx->perThreadData->ionTop, ParallelExecution);
 
     parallel::Spew(parallel::SpewBailouts, "Bailing from VM reentry");
 
     while (!iter.isEntry()) {
         if (iter.isScripted()) {
-            slice->bailoutRecord->updateCause(ParallelBailoutUnsupportedVM,
-                                              iter.script(), iter.script(), nullptr);
+            cx->bailoutRecord->updateCause(ParallelBailoutUnsupportedVM,
+                                           iter.script(), iter.script(), nullptr);
             break;
         }
         ++iter;
@@ -887,27 +887,54 @@ MarkIonJSFrame(JSTracer *trc, const IonFrameIterator &frame)
         }
     }
 #endif
+}
 
 #ifdef JSGC_GENERATIONAL
-    if (trc->runtime->isHeapMinorCollecting()) {
-        // Minor GCs may move slots/elements allocated in the nursery. Update
-        // any slots/elements pointers stored in this frame.
+static void
+UpdateIonJSFrameForMinorGC(JSTracer *trc, const IonFrameIterator &frame)
+{
+    // Minor GCs may move slots/elements allocated in the nursery. Update
+    // any slots/elements pointers stored in this frame.
 
-        GeneralRegisterSet slotsRegs = safepoint.slotsOrElementsSpills();
-        spill = frame.spillBase();
-        for (GeneralRegisterBackwardIterator iter(safepoint.allGprSpills()); iter.more(); iter++) {
-            --spill;
-            if (slotsRegs.has(*iter))
-                trc->runtime->gcNursery.forwardBufferPointer(reinterpret_cast<HeapSlot **>(spill));
-        }
+    IonJSFrameLayout *layout = (IonJSFrameLayout *)frame.fp();
 
-        while (safepoint.getSlotsOrElementsSlot(&slot)) {
-            HeapSlot **slots = reinterpret_cast<HeapSlot **>(layout->slotRef(slot));
-            trc->runtime->gcNursery.forwardBufferPointer(slots);
-        }
+    IonScript *ionScript = nullptr;
+    if (frame.checkInvalidation(&ionScript)) {
+        // This frame has been invalidated, meaning that its IonScript is no
+        // longer reachable through the callee token (JSFunction/JSScript->ion
+        // is now nullptr or recompiled).
+    } else if (CalleeTokenIsFunction(layout->calleeToken())) {
+        ionScript = CalleeTokenToFunction(layout->calleeToken())->nonLazyScript()->ionScript();
+    } else {
+        ionScript = CalleeTokenToScript(layout->calleeToken())->ionScript();
     }
+
+    const SafepointIndex *si = ionScript->getSafepointIndex(frame.returnAddressToFp());
+    SafepointReader safepoint(ionScript, si);
+
+    GeneralRegisterSet slotsRegs = safepoint.slotsOrElementsSpills();
+    uintptr_t *spill = frame.spillBase();
+    for (GeneralRegisterBackwardIterator iter(safepoint.allGprSpills()); iter.more(); iter++) {
+        --spill;
+        if (slotsRegs.has(*iter))
+            trc->runtime->gcNursery.forwardBufferPointer(reinterpret_cast<HeapSlot **>(spill));
+    }
+
+    // Skip to the right place in the safepoint
+    uint32_t slot;
+    while (safepoint.getGcSlot(&slot));
+    while (safepoint.getValueSlot(&slot));
+#ifdef JS_NUNBOX32
+    LAllocation type, payload;
+    while (safepoint.getNunboxSlot(&type, &payload));
 #endif
+
+    while (safepoint.getSlotsOrElementsSlot(&slot)) {
+        HeapSlot **slots = reinterpret_cast<HeapSlot **>(layout->slotRef(slot));
+        trc->runtime->gcNursery.forwardBufferPointer(slots);
+    }
 }
+#endif
 
 static void
 MarkBaselineStubFrame(JSTracer *trc, const IonFrameIterator &frame)
@@ -1103,6 +1130,17 @@ MarkJitExitFrame(JSTracer *trc, const IonFrameIterator &frame)
 }
 
 static void
+MarkRectifierFrame(JSTracer *trc, const IonFrameIterator &frame)
+{
+    // Mark thisv.
+    //
+    // Baseline JIT code generated as part of the ICCall_Fallback stub may use
+    // it if we're calling a constructor that returns a primitive value.
+    IonRectifierFrameLayout *layout = (IonRectifierFrameLayout *)frame.fp();
+    gc::MarkValueRoot(trc, &layout->argv()[0], "ion-thisv");
+}
+
+static void
 MarkJitActivation(JSTracer *trc, const JitActivationIterator &activations)
 {
 #ifdef CHECK_OSIPOINT_REGISTERS
@@ -1121,7 +1159,7 @@ MarkJitActivation(JSTracer *trc, const JitActivationIterator &activations)
             MarkJitExitFrame(trc, frames);
             break;
           case IonFrame_BaselineJS:
-            frames.baselineFrame()->trace(trc);
+            frames.baselineFrame()->trace(trc, frames);
             break;
           case IonFrame_BaselineStub:
             MarkBaselineStubFrame(trc, frames);
@@ -1132,6 +1170,8 @@ MarkJitActivation(JSTracer *trc, const JitActivationIterator &activations)
           case IonFrame_Unwound_OptimizedJS:
             MOZ_ASSUME_UNREACHABLE("invalid");
           case IonFrame_Rectifier:
+            MarkRectifierFrame(trc, frames);
+            break;
           case IonFrame_Unwound_Rectifier:
             break;
           case IonFrame_Osr:
@@ -1151,6 +1191,20 @@ MarkJitActivations(JSRuntime *rt, JSTracer *trc)
     for (JitActivationIterator activations(rt); !activations.done(); ++activations)
         MarkJitActivation(trc, activations);
 }
+
+#ifdef JSGC_GENERATIONAL
+void
+UpdateJitActivationsForMinorGC(JSRuntime *rt, JSTracer *trc)
+{
+    JS_ASSERT(trc->runtime->isHeapMinorCollecting());
+    for (JitActivationIterator activations(rt); !activations.done(); ++activations) {
+        for (IonFrameIterator frames(activations); !frames.done(); ++frames) {
+            if (frames.type() == IonFrame_OptimizedJS)
+                UpdateIonJSFrameForMinorGC(trc, frames);
+        }
+    }
+}
+#endif
 
 void
 AutoTempAllocatorRooter::trace(JSTracer *trc)
@@ -1191,7 +1245,7 @@ GetPcScript(JSContext *cx, JSScript **scriptRes, jsbytecode **pcRes)
     JS_ASSERT(retAddr != nullptr);
 
     // Lazily initialize the cache. The allocation may safely fail and will not GC.
-    if (JS_UNLIKELY(rt->ionPcScriptCache == nullptr)) {
+    if (MOZ_UNLIKELY(rt->ionPcScriptCache == nullptr)) {
         rt->ionPcScriptCache = (PcScriptCache *)js_malloc(sizeof(struct PcScriptCache));
         if (rt->ionPcScriptCache)
             rt->ionPcScriptCache->clear(rt->gcNumber);
@@ -1265,17 +1319,28 @@ SnapshotIterator::SnapshotIterator()
 }
 
 bool
-SnapshotIterator::hasLocation(const SnapshotReader::Location &loc)
+SnapshotIterator::hasRegister(const Location &loc)
 {
-    return loc.isStackSlot() || machine_.has(loc.reg());
+    return machine_.has(loc.reg());
 }
 
 uintptr_t
-SnapshotIterator::fromLocation(const SnapshotReader::Location &loc)
+SnapshotIterator::fromRegister(const Location &loc)
 {
-    if (loc.isStackSlot())
-        return ReadFrameSlot(fp_, loc.stackSlot());
     return machine_.read(loc.reg());
+}
+
+bool
+SnapshotIterator::hasStack(const Location &loc)
+{
+    JS_ASSERT(loc.isStackOffset());
+    return true;
+}
+
+uintptr_t
+SnapshotIterator::fromStack(const Location &loc)
+{
+    return ReadFrameSlot(fp_, loc.stackOffset());
 }
 
 static Value
@@ -1308,20 +1373,29 @@ FromTypedPayload(JSValueType type, uintptr_t payload)
 }
 
 bool
-SnapshotIterator::slotReadable(const Slot &slot)
+SnapshotIterator::allocationReadable(const RValueAllocation &alloc)
 {
-    switch (slot.mode()) {
-      case SnapshotReader::DOUBLE_REG:
-        return machine_.has(slot.floatReg());
+    switch (alloc.mode()) {
+      case RValueAllocation::DOUBLE_REG:
+        return machine_.has(alloc.floatReg());
 
-      case SnapshotReader::TYPED_REG:
-        return machine_.has(slot.reg());
+      case RValueAllocation::TYPED_REG:
+        return machine_.has(alloc.reg());
 
-      case SnapshotReader::UNTYPED:
 #if defined(JS_NUNBOX32)
-          return hasLocation(slot.type()) && hasLocation(slot.payload());
+      case RValueAllocation::UNTYPED_REG_REG:
+        return hasRegister(alloc.type()) && hasRegister(alloc.payload());
+      case RValueAllocation::UNTYPED_REG_STACK:
+        return hasRegister(alloc.type()) && hasStack(alloc.payload());
+      case RValueAllocation::UNTYPED_STACK_REG:
+        return hasStack(alloc.type()) && hasRegister(alloc.payload());
+      case RValueAllocation::UNTYPED_STACK_STACK:
+        return hasStack(alloc.type()) && hasStack(alloc.payload());
 #elif defined(JS_PUNBOX64)
-          return hasLocation(slot.value());
+      case RValueAllocation::UNTYPED_REG:
+        return hasRegister(alloc.value());
+      case RValueAllocation::UNTYPED_STACK:
+        return hasStack(alloc.value());
 #endif
 
       default:
@@ -1330,71 +1404,107 @@ SnapshotIterator::slotReadable(const Slot &slot)
 }
 
 Value
-SnapshotIterator::slotValue(const Slot &slot)
+SnapshotIterator::allocationValue(const RValueAllocation &alloc)
 {
-    switch (slot.mode()) {
-      case SnapshotReader::DOUBLE_REG:
-        return DoubleValue(machine_.read(slot.floatReg()));
+    switch (alloc.mode()) {
+      case RValueAllocation::DOUBLE_REG:
+        return DoubleValue(machine_.read(alloc.floatReg()));
 
-      case SnapshotReader::FLOAT32_REG:
+      case RValueAllocation::FLOAT32_REG:
       {
         union {
             double d;
             float f;
         } pun;
-        pun.d = machine_.read(slot.floatReg());
+        pun.d = machine_.read(alloc.floatReg());
         // The register contains the encoding of a float32. We just read
         // the bits without making any conversion.
         return Float32Value(pun.f);
       }
 
-      case SnapshotReader::FLOAT32_STACK:
-        return Float32Value(ReadFrameFloat32Slot(fp_, slot.stackSlot()));
+      case RValueAllocation::FLOAT32_STACK:
+        return Float32Value(ReadFrameFloat32Slot(fp_, alloc.stackOffset()));
 
-      case SnapshotReader::TYPED_REG:
-        return FromTypedPayload(slot.knownType(), machine_.read(slot.reg()));
+      case RValueAllocation::TYPED_REG:
+        return FromTypedPayload(alloc.knownType(), machine_.read(alloc.reg()));
 
-      case SnapshotReader::TYPED_STACK:
+      case RValueAllocation::TYPED_STACK:
       {
-        switch (slot.knownType()) {
+        switch (alloc.knownType()) {
           case JSVAL_TYPE_DOUBLE:
-            return DoubleValue(ReadFrameDoubleSlot(fp_, slot.stackSlot()));
+            return DoubleValue(ReadFrameDoubleSlot(fp_, alloc.stackOffset()));
           case JSVAL_TYPE_INT32:
-            return Int32Value(ReadFrameInt32Slot(fp_, slot.stackSlot()));
+            return Int32Value(ReadFrameInt32Slot(fp_, alloc.stackOffset()));
           case JSVAL_TYPE_BOOLEAN:
-            return BooleanValue(ReadFrameBooleanSlot(fp_, slot.stackSlot()));
+            return BooleanValue(ReadFrameBooleanSlot(fp_, alloc.stackOffset()));
           case JSVAL_TYPE_STRING:
-            return FromStringPayload(ReadFrameSlot(fp_, slot.stackSlot()));
+            return FromStringPayload(ReadFrameSlot(fp_, alloc.stackOffset()));
           case JSVAL_TYPE_OBJECT:
-            return FromObjectPayload(ReadFrameSlot(fp_, slot.stackSlot()));
+            return FromObjectPayload(ReadFrameSlot(fp_, alloc.stackOffset()));
           default:
             MOZ_ASSUME_UNREACHABLE("Unexpected type");
         }
       }
 
-      case SnapshotReader::UNTYPED:
-      {
-          jsval_layout layout;
 #if defined(JS_NUNBOX32)
-          layout.s.tag = (JSValueTag)fromLocation(slot.type());
-          layout.s.payload.word = fromLocation(slot.payload());
-#elif defined(JS_PUNBOX64)
-          layout.asBits = fromLocation(slot.value());
-#endif
-          return IMPL_TO_JSVAL(layout);
+      case RValueAllocation::UNTYPED_REG_REG:
+      {
+        jsval_layout layout;
+        layout.s.tag = (JSValueTag) fromRegister(alloc.type());
+        layout.s.payload.word = fromRegister(alloc.payload());
+        return IMPL_TO_JSVAL(layout);
       }
 
-      case SnapshotReader::JS_UNDEFINED:
+      case RValueAllocation::UNTYPED_REG_STACK:
+      {
+        jsval_layout layout;
+        layout.s.tag = (JSValueTag) fromRegister(alloc.type());
+        layout.s.payload.word = fromStack(alloc.payload());
+        return IMPL_TO_JSVAL(layout);
+      }
+
+      case RValueAllocation::UNTYPED_STACK_REG:
+      {
+        jsval_layout layout;
+        layout.s.tag = (JSValueTag) fromStack(alloc.type());
+        layout.s.payload.word = fromRegister(alloc.payload());
+        return IMPL_TO_JSVAL(layout);
+      }
+
+      case RValueAllocation::UNTYPED_STACK_STACK:
+      {
+        jsval_layout layout;
+        layout.s.tag = (JSValueTag) fromStack(alloc.type());
+        layout.s.payload.word = fromStack(alloc.payload());
+        return IMPL_TO_JSVAL(layout);
+      }
+#elif defined(JS_PUNBOX64)
+      case RValueAllocation::UNTYPED_REG:
+      {
+        jsval_layout layout;
+        layout.asBits = fromRegister(alloc.value());
+        return IMPL_TO_JSVAL(layout);
+      }
+
+      case RValueAllocation::UNTYPED_STACK:
+      {
+        jsval_layout layout;
+        layout.asBits = fromStack(alloc.value());
+        return IMPL_TO_JSVAL(layout);
+      }
+#endif
+
+      case RValueAllocation::JS_UNDEFINED:
         return UndefinedValue();
 
-      case SnapshotReader::JS_NULL:
+      case RValueAllocation::JS_NULL:
         return NullValue();
 
-      case SnapshotReader::JS_INT32:
-        return Int32Value(slot.int32Value());
+      case RValueAllocation::JS_INT32:
+        return Int32Value(alloc.int32Value());
 
-      case SnapshotReader::CONSTANT:
-        return ionScript_->getConstant(slot.constantIndex());
+      case RValueAllocation::CONSTANT:
+        return ionScript_->getConstant(alloc.constantIndex());
 
       default:
         MOZ_ASSUME_UNREACHABLE("huh?");
@@ -1485,14 +1595,14 @@ InlineFrameIteratorMaybeGC<allowGC>::findNextFrame()
         JS_ASSERT(numActualArgs_ != 0xbadbad);
 
         // Skip over non-argument slots, as well as |this|.
-        unsigned skipCount = (si_.slots() - 1) - numActualArgs_ - 1;
+        unsigned skipCount = (si_.allocations() - 1) - numActualArgs_ - 1;
         for (unsigned j = 0; j < skipCount; j++)
             si_.skip();
 
         Value funval = si_.read();
 
-        // Skip extra slots.
-        while (si_.moreSlots())
+        // Skip extra value allocations.
+        while (si_.moreAllocations())
             si_.skip();
 
         si_.nextFrame();
@@ -1541,7 +1651,7 @@ InlineFrameIteratorMaybeGC<allowGC>::isConstructing() const
 {
     // Skip the current frame and look at the caller's.
     if (more()) {
-        InlineFrameIteratorMaybeGC<allowGC> parent(GetIonContext()->cx, this);
+        InlineFrameIteratorMaybeGC<allowGC> parent(GetJSContextFromJitCode(), this);
         ++parent;
 
         // Inlined Getters and Setters are never constructing.
@@ -1571,7 +1681,7 @@ IonFrameIterator::isConstructing() const
 
     if (parent.isOptimizedJS()) {
         // In the case of a JS frame, look up the pc from the snapshot.
-        InlineFrameIterator inlinedParent(GetIonContext()->cx, &parent);
+        InlineFrameIterator inlinedParent(GetJSContextFromJitCode(), &parent);
 
         //Inlined Getters and Setters are never constructing.
         if (IsGetPropPC(inlinedParent.pc()) || IsSetPropPC(inlinedParent.pc()))
@@ -1611,9 +1721,9 @@ IonFrameIterator::numActualArgs() const
 }
 
 void
-SnapshotIterator::warnUnreadableSlot()
+SnapshotIterator::warnUnreadableAllocation()
 {
-    fprintf(stderr, "Warning! Tried to access unreadable IonMonkey slot (possible f.arguments).\n");
+    fprintf(stderr, "Warning! Tried to access unreadable value allocation (possible f.arguments).\n");
 }
 
 struct DumpOp {
@@ -1651,7 +1761,7 @@ IonFrameIterator::dumpBaseline() const
     fprintf(stderr, "  file %s line %u\n",
             script()->filename(), (unsigned) script()->lineno());
 
-    JSContext *cx = GetIonContext()->cx;
+    JSContext *cx = GetJSContextFromJitCode();
     RootedScript script(cx);
     jsbytecode *pc;
     baselineScriptAndPc(script.address(), &pc);
@@ -1707,8 +1817,8 @@ InlineFrameIteratorMaybeGC<allowGC>::dump() const
     }
 
     SnapshotIterator si = snapshotIterator();
-    fprintf(stderr, "  slots: %u\n", si.slots() - 1);
-    for (unsigned i = 0; i < si.slots() - 1; i++) {
+    fprintf(stderr, "  slots: %u\n", si.allocations() - 1);
+    for (unsigned i = 0; i < si.allocations() - 1; i++) {
         if (isFunction) {
             if (i == 0)
                 fprintf(stderr, "  scope chain: ");
@@ -1719,7 +1829,7 @@ InlineFrameIteratorMaybeGC<allowGC>::dump() const
             else {
                 if (i - 2 == callee()->nargs() && numActualArgs() > callee()->nargs()) {
                     DumpOp d(callee()->nargs());
-                    forEachCanonicalActualArg(GetIonContext()->cx, d, d.i_, numActualArgs() - d.i_);
+                    unaliasedForEachActual(GetJSContextFromJitCode(), d, ReadFrame_Overflown);
                 }
 
                 fprintf(stderr, "  slot %d: ", int(i - 2 - callee()->nargs()));
@@ -1756,7 +1866,7 @@ IonFrameIterator::dump() const
         break;
       case IonFrame_OptimizedJS:
       {
-        InlineFrameIterator frames(GetIonContext()->cx, this);
+        InlineFrameIterator frames(GetJSContextFromJitCode(), this);
         for (;;) {
             frames.dump();
             if (!frames.more())

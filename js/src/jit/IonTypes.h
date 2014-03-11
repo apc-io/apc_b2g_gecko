@@ -17,6 +17,14 @@ namespace jit {
 typedef uint32_t SnapshotOffset;
 typedef uint32_t BailoutId;
 
+// The maximum size of any buffer associated with an assembler or code object.
+// This is chosen to not overflow a signed integer, leaving room for an extra
+// bit on offsets.
+static const uint32_t MAX_BUFFER_SIZE = (1 << 30) - 1;
+
+// Maximum number of scripted arg slots.
+static const uint32_t SNAPSHOT_MAX_NARGS = 127;
+
 static const SnapshotOffset INVALID_SNAPSHOT_OFFSET = uint32_t(-1);
 
 // Different kinds of bailouts. When extending this enum, make sure to check
@@ -41,7 +49,9 @@ enum BailoutKind
     Bailout_BaselineInfo
 };
 
-#ifdef DEBUG
+static const uint32_t BAILOUT_KIND_BITS = 3;
+static const uint32_t BAILOUT_RESUME_BITS = 1;
+
 inline const char *
 BailoutKindString(BailoutKind kind)
 {
@@ -60,7 +70,13 @@ BailoutKindString(BailoutKind kind)
         MOZ_ASSUME_UNREACHABLE("Invalid BailoutKind");
     }
 }
-#endif
+
+static const uint32_t ELEMENT_TYPE_BITS = 4;
+static const uint32_t ELEMENT_TYPE_SHIFT = 0;
+static const uint32_t ELEMENT_TYPE_MASK = (1 << ELEMENT_TYPE_BITS) - 1;
+static const uint32_t VECTOR_SCALE_BITS = 2;
+static const uint32_t VECTOR_SCALE_SHIFT = ELEMENT_TYPE_BITS + ELEMENT_TYPE_SHIFT;
+static const uint32_t VECTOR_SCALE_MASK = (1 << VECTOR_SCALE_BITS) - 1;
 
 // The ordering of this enumeration is important: Anything < Value is a
 // specialized type. Furthermore, anything < String has trivial conversion to
@@ -77,13 +93,30 @@ enum MIRType
     MIRType_Object,
     MIRType_Magic,
     MIRType_Value,
-    MIRType_None,         // Invalid, used as a placeholder.
-    MIRType_Slots,        // A slots vector
-    MIRType_Elements,     // An elements vector
-    MIRType_Pointer,      // An opaque pointer that receives no special treatment
-    MIRType_Shape,        // A Shape pointer.
-    MIRType_ForkJoinSlice // js::ForkJoinSlice*
+    MIRType_None,          // Invalid, used as a placeholder.
+    MIRType_Slots,         // A slots vector
+    MIRType_Elements,      // An elements vector
+    MIRType_Pointer,       // An opaque pointer that receives no special treatment
+    MIRType_Shape,         // A Shape pointer.
+    MIRType_ForkJoinContext, // js::ForkJoinContext*
+    MIRType_Last = MIRType_ForkJoinContext,
+    MIRType_Float32x4 = MIRType_Float32 | (2 << VECTOR_SCALE_SHIFT),
+    MIRType_Int32x4   = MIRType_Int32   | (2 << VECTOR_SCALE_SHIFT),
+    MIRType_Doublex2  = MIRType_Double  | (1 << VECTOR_SCALE_SHIFT)
 };
+
+static inline MIRType
+ElementType(MIRType type)
+{
+    JS_STATIC_ASSERT(MIRType_Last <= ELEMENT_TYPE_MASK);
+    return static_cast<MIRType>((type >> ELEMENT_TYPE_SHIFT) & ELEMENT_TYPE_MASK);
+}
+
+static inline uint32_t
+VectorSize(MIRType type)
+{
+    return 1 << ((type >> VECTOR_SCALE_SHIFT) & VECTOR_SCALE_MASK);
+}
 
 static inline MIRType
 MIRTypeFromValueType(JSValueType type)
@@ -175,8 +208,8 @@ StringFromMIRType(MIRType type)
       return "Elements";
     case MIRType_Pointer:
       return "Pointer";
-    case MIRType_ForkJoinSlice:
-      return "ForkJoinSlice";
+    case MIRType_ForkJoinContext:
+      return "ForkJoinContext";
     default:
       MOZ_ASSUME_UNREACHABLE("Unknown MIRType.");
   }
@@ -219,6 +252,64 @@ IsNullOrUndefined(MIRType type)
 #    define CHECK_OSIPOINT_REGISTERS 1
 #  endif
 #endif
+
+enum {
+    ArgType_General = 0x1,
+    ArgType_Double  = 0x2,
+    ArgType_Float32 = 0x3,
+
+    RetType_Shift   = 0x0,
+    ArgType_Shift   = 0x2,
+    ArgType_Mask    = 0x3
+};
+
+enum ABIFunctionType
+{
+    // VM functions that take 0-9 non-double arguments
+    // and return a non-double value.
+    Args_General0 = ArgType_General << RetType_Shift,
+    Args_General1 = Args_General0 | (ArgType_General << (ArgType_Shift * 1)),
+    Args_General2 = Args_General1 | (ArgType_General << (ArgType_Shift * 2)),
+    Args_General3 = Args_General2 | (ArgType_General << (ArgType_Shift * 3)),
+    Args_General4 = Args_General3 | (ArgType_General << (ArgType_Shift * 4)),
+    Args_General5 = Args_General4 | (ArgType_General << (ArgType_Shift * 5)),
+    Args_General6 = Args_General5 | (ArgType_General << (ArgType_Shift * 6)),
+    Args_General7 = Args_General6 | (ArgType_General << (ArgType_Shift * 7)),
+    Args_General8 = Args_General7 | (ArgType_General << (ArgType_Shift * 8)),
+
+    // double f()
+    Args_Double_None = ArgType_Double << RetType_Shift,
+
+    // int f(double)
+    Args_Int_Double = Args_General0 | (ArgType_Double << ArgType_Shift),
+
+    // float f(float)
+    Args_Float32_Float32 = (ArgType_Float32 << RetType_Shift) | (ArgType_Float32 << ArgType_Shift),
+
+    // double f(double)
+    Args_Double_Double = Args_Double_None | (ArgType_Double << ArgType_Shift),
+
+    // double f(int)
+    Args_Double_Int = Args_Double_None | (ArgType_General << ArgType_Shift),
+
+    // double f(double, int)
+    Args_Double_DoubleInt = Args_Double_None |
+        (ArgType_General << (ArgType_Shift * 1)) |
+        (ArgType_Double << (ArgType_Shift * 2)),
+
+    // double f(double, double)
+    Args_Double_DoubleDouble = Args_Double_Double | (ArgType_Double << (ArgType_Shift * 2)),
+
+    // double f(int, double)
+    Args_Double_IntDouble = Args_Double_None |
+        (ArgType_Double << (ArgType_Shift * 1)) |
+        (ArgType_General << (ArgType_Shift * 2)),
+
+    // int f(int, double)
+    Args_Int_IntDouble = Args_General0 |
+        (ArgType_Double << (ArgType_Shift * 1)) |
+        (ArgType_General << (ArgType_Shift * 2))
+};
 
 } // namespace jit
 } // namespace js

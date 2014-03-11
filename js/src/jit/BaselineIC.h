@@ -835,8 +835,7 @@ class ICFallbackStub : public ICStub
     }
 
     // Add a new stub to the IC chain terminated by this fallback stub.
-    void addNewStub(JSContext *cx, ICStub *stub) {
-        AutoLockForCompilation lock(cx);
+    void addNewStub(ICStub *stub) {
         JS_ASSERT(*lastStubPtrAddr_ == this);
         JS_ASSERT(stub->next() == nullptr);
         stub->setNext(this);
@@ -917,7 +916,7 @@ class ICMonitoredFallbackStub : public ICFallbackStub
 
   public:
     bool initMonitoringChain(JSContext *cx, ICStubSpace *space);
-    bool addMonitorStubForValue(JSContext *cx, HandleScript script, HandleValue val);
+    bool addMonitorStubForValue(JSContext *cx, JSScript *script, HandleValue val);
 
     inline ICTypeMonitor_Fallback *fallbackMonitorStub() const {
         return fallbackMonitorStub_;
@@ -1049,13 +1048,13 @@ class ICStubCompiler
     inline GeneralRegisterSet availableGeneralRegs(size_t numInputs) const {
         GeneralRegisterSet regs(GeneralRegisterSet::All());
         JS_ASSERT(!regs.has(BaselineStackReg));
-#ifdef JS_CPU_ARM
+#ifdef JS_CODEGEN_ARM
         JS_ASSERT(!regs.has(BaselineTailCallReg));
         regs.take(BaselineSecondScratchReg);
 #endif
         regs.take(BaselineFrameReg);
         regs.take(BaselineStubReg);
-#ifdef JS_CPU_X64
+#ifdef JS_CODEGEN_X64
         regs.take(ExtractTemp0);
         regs.take(ExtractTemp1);
 #endif
@@ -1078,8 +1077,8 @@ class ICStubCompiler
     }
 
 #ifdef JSGC_GENERATIONAL
-    inline bool emitPostWriteBarrierSlot(MacroAssembler &masm, Register obj, Register scratch,
-                                         GeneralRegisterSet saveRegs);
+    inline bool emitPostWriteBarrierSlot(MacroAssembler &masm, Register obj, ValueOperand val,
+                                         Register scratch, GeneralRegisterSet saveRegs);
 #endif
 
   public:
@@ -1453,7 +1452,7 @@ class ICTypeMonitor_Fallback : public ICStub
 
     // Create a new monitor stub for the type of the given value, and
     // add it to this chain.
-    bool addMonitorStubForValue(JSContext *cx, HandleScript script, HandleValue val);
+    bool addMonitorStubForValue(JSContext *cx, JSScript *script, HandleValue val);
 
     void resetMonitorStubChain(Zone *zone);
 
@@ -2442,15 +2441,13 @@ class ICBinaryArith_Fallback : public ICFallbackStub
     bool sawDoubleResult() const {
         return extra_ & SAW_DOUBLE_RESULT_BIT;
     }
-    void setSawDoubleResult(JSContext *cx) {
-        AutoLockForCompilation lock(cx);
+    void setSawDoubleResult() {
         extra_ |= SAW_DOUBLE_RESULT_BIT;
     }
     bool hadUnoptimizableOperands() const {
         return extra_ & UNOPTIMIZABLE_OPERANDS_BIT;
     }
-    void noteUnoptimizableOperands(JSContext *cx) {
-        AutoLockForCompilation lock(cx);
+    void noteUnoptimizableOperands() {
         extra_ |= UNOPTIMIZABLE_OPERANDS_BIT;
     }
 
@@ -2851,16 +2848,14 @@ class ICGetElem_Fallback : public ICMonitoredFallbackStub
         return space->allocate<ICGetElem_Fallback>(code);
     }
 
-    void noteNonNativeAccess(JSContext *cx) {
-        AutoLockForCompilation lock(cx);
+    void noteNonNativeAccess() {
         extra_ |= EXTRA_NON_NATIVE;
     }
     bool hasNonNativeAccess() const {
         return extra_ & EXTRA_NON_NATIVE;
     }
 
-    void noteNegativeIndex(JSContext *cx) {
-        AutoLockForCompilation lock(cx);
+    void noteNegativeIndex() {
         extra_ |= EXTRA_NEGATIVE_INDEX;
     }
     bool hasNegativeIndex() const {
@@ -3448,8 +3443,7 @@ class ICSetElem_Fallback : public ICFallbackStub
         return space->allocate<ICSetElem_Fallback>(code);
     }
 
-    void noteArrayWriteHole(JSContext *cx) {
-        AutoLockForCompilation lock(cx);
+    void noteArrayWriteHole() {
         extra_ = 1;
     }
     bool hasArrayWriteHole() const {
@@ -4024,16 +4018,14 @@ class ICGetProp_Fallback : public ICMonitoredFallbackStub
     static const size_t UNOPTIMIZABLE_ACCESS_BIT = 0;
     static const size_t ACCESSED_GETTER_BIT = 1;
 
-    void noteUnoptimizableAccess(JSContext *cx) {
-        AutoLockForCompilation lock(cx);
+    void noteUnoptimizableAccess() {
         extra_ |= (1u << UNOPTIMIZABLE_ACCESS_BIT);
     }
     bool hadUnoptimizableAccess() const {
         return extra_ & (1u << UNOPTIMIZABLE_ACCESS_BIT);
     }
 
-    void noteAccessedGetter(JSContext *cx) {
-        AutoLockForCompilation lock(cx);
+    void noteAccessedGetter() {
         extra_ |= (1u << ACCESSED_GETTER_BIT);
     }
     bool hasAccessedGetter() const {
@@ -4840,8 +4832,7 @@ class ICSetProp_Fallback : public ICFallbackStub
     }
 
     static const size_t UNOPTIMIZABLE_ACCESS_BIT = 0;
-    void noteUnoptimizableAccess(JSContext *cx) {
-        AutoLockForCompilation lock(cx);
+    void noteUnoptimizableAccess() {
         extra_ |= (1u << UNOPTIMIZABLE_ACCESS_BIT);
     }
     bool hadUnoptimizableAccess() const {
@@ -5414,6 +5405,10 @@ class ICCall_Native : public ICMonitoredStub
     HeapPtrObject templateObject_;
     uint32_t pcOffset_;
 
+#ifdef JS_ARM_SIMULATOR
+    void *native_;
+#endif
+
     ICCall_Native(JitCode *stubCode, ICStub *firstMonitorStub,
                   HandleFunction callee, HandleObject templateObject,
                   uint32_t pcOffset);
@@ -5442,6 +5437,12 @@ class ICCall_Native : public ICMonitoredStub
     static size_t offsetOfPCOffset() {
         return offsetof(ICCall_Native, pcOffset_);
     }
+
+#ifdef JS_ARM_SIMULATOR
+    static size_t offsetOfNative() {
+        return offsetof(ICCall_Native, native_);
+    }
+#endif
 
     // Compiler for this stub kind.
     class Compiler : public ICCallStubCompiler {
@@ -5732,8 +5733,7 @@ class ICIteratorNext_Fallback : public ICFallbackStub
         return space->allocate<ICIteratorNext_Fallback>(code);
     }
 
-    void setHasNonStringResult(JSContext *cx) {
-        AutoLockForCompilation lock(cx);
+    void setHasNonStringResult() {
         JS_ASSERT(extra_ == 0);
         extra_ = 1;
     }

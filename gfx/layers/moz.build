@@ -34,7 +34,6 @@ EXPORTS += [
     'LayerTreeInvalidation.h',
     'opengl/Composer2D.h',
     'opengl/OGLShaderProgram.h',
-    'opengl/OGLShaders.h',
     'opengl/TexturePoolOGL.h',
     'ReadbackLayer.h',
     'SharedTextureImage.h',
@@ -60,13 +59,13 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
             'd3d9/ContainerLayerD3D9.cpp',
             'd3d9/ImageLayerD3D9.cpp',
             'd3d9/LayerManagerD3D9.cpp',
-            'd3d9/Nv3DVUtils.cpp',
             'd3d9/TextureD3D9.cpp',
             'd3d9/ThebesLayerD3D9.cpp',
         ]
         SOURCES += [
             'd3d9/CompositorD3D9.cpp',
             'd3d9/DeviceManagerD3D9.cpp',
+            'd3d9/Nv3DVUtils.cpp',
         ]
     if CONFIG['MOZ_ENABLE_D3D10_LAYER']:
         EXPORTS += [
@@ -107,6 +106,7 @@ EXPORTS.mozilla.layers += [
     'client/ContentClient.h',
     'client/ImageClient.h',
     'client/TextureClient.h',
+    'client/TextureClientPool.h',
     'client/TiledContentClient.h',
     'composite/APZCTreeManager.h',
     'composite/AsyncCompositionManager.h',
@@ -130,6 +130,7 @@ EXPORTS.mozilla.layers += [
     'ipc/CompositableTransactionParent.h',
     'ipc/CompositorChild.h',
     'ipc/CompositorParent.h',
+    'ipc/FenceUtils.h',
     'ipc/GeckoContentController.h',
     'ipc/GestureEventListener.h',
     'ipc/ImageBridgeChild.h',
@@ -157,10 +158,18 @@ EXPORTS.mozilla.layers += [
 
 if CONFIG['MOZ_X11']:
     EXPORTS.mozilla.layers += [
+        'basic/TextureClientX11.h',
+        'basic/X11TextureSourceBasic.h',
+        'composite/X11TextureHost.h',
         'ipc/ShadowLayerUtilsX11.h',
+        'opengl/X11TextureSourceOGL.h',
     ]
     SOURCES += [
-        'ipc/ShadowLayerUtilsX11.cpp'
+        'basic/TextureClientX11.cpp',
+        'basic/X11TextureSourceBasic.cpp',
+        'composite/X11TextureHost.cpp',
+        'ipc/ShadowLayerUtilsX11.cpp',
+        'opengl/X11TextureSourceOGL.cpp',
     ]
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
@@ -195,6 +204,14 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
         'ipc/ShadowLayerUtilsGralloc.cpp',
     ]
 
+    if CONFIG['ANDROID_VERSION'] >= '17':
+        EXPORTS.mozilla.layers += [
+            'ipc/FenceUtilsGonk.h',
+        ]
+        SOURCES += [
+            'ipc/FenceUtilsGonk.cpp',
+        ]
+
 UNIFIED_SOURCES += [
     'basic/BasicCanvasLayer.cpp',
     'basic/BasicColorLayer.cpp',
@@ -218,6 +235,7 @@ UNIFIED_SOURCES += [
     'client/ContentClient.cpp',
     'client/ImageClient.cpp',
     'client/TextureClient.cpp',
+    'client/TextureClientPool.cpp',
     'client/TiledContentClient.cpp',
     'composite/APZCTreeManager.cpp',
     'composite/AsyncCompositionManager.cpp',
@@ -257,6 +275,7 @@ UNIFIED_SOURCES += [
     'LayerScope.cpp',
     'LayersLogging.cpp',
     'LayerSorter.cpp',
+    'LayerUtils.cpp',
     'opengl/CompositingRenderTargetOGL.cpp',
     'opengl/CompositorOGL.cpp',
     'opengl/OGLShaderProgram.cpp',
@@ -303,6 +322,8 @@ IPDL_SOURCES = [
     'ipc/PTexture.ipdl',
 ]
 
+FAIL_ON_WARNINGS = True
+
 MSVC_ENABLE_PGO = True
 
 include('/ipc/chromium/chromium-config.mozbuild')
@@ -310,7 +331,7 @@ include('/ipc/chromium/chromium-config.mozbuild')
 FINAL_LIBRARY = 'thebes'
 
 LOCAL_INCLUDES += [
-    '/content/events/src',
+    '/dom/events',
 ]
 
 if CONFIG['MOZ_DEBUG']:
@@ -318,3 +339,7 @@ if CONFIG['MOZ_DEBUG']:
 
 if CONFIG['MOZ_ENABLE_D3D10_LAYER']:
     DEFINES['MOZ_ENABLE_D3D10_LAYER'] = True
+
+GENERATED_FILES = [
+    'PremultiplyTables.h',
+]

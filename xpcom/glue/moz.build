@@ -55,7 +55,6 @@ EXPORTS += [
     'nsThreadUtils.h',
     'nsTObserverArray.h',
     'nsTPriorityQueue.h',
-    'nsTraceRefcnt.h',
     'nsTWeakRef.h',
     'nsVersionComparator.h',
     'nsVoidArray.h',
@@ -108,6 +107,10 @@ if CONFIG['_MSC_VER']:
 
 if CONFIG['TARGET_XPCOM_ABI']:
     DEFINES['TARGET_XPCOM_ABI'] = '"%s"' % CONFIG['TARGET_XPCOM_ABI']
+
+LOCAL_INCLUDES += [
+    '../build',
+]
 
 if CONFIG['ENABLE_TESTS']:
     DIRS += ['tests/gtest']

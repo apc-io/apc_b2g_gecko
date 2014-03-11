@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 
+#include "TextComposition.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Selection.h"
@@ -36,10 +37,9 @@
 #include "nsIDOMNodeList.h"
 #include "nsIDocumentEncoder.h"
 #include "nsIEditorIMESupport.h"
-#include "nsINameSpaceManager.h"
+#include "nsNameSpaceManager.h"
 #include "nsINode.h"
 #include "nsIPresShell.h"
-#include "nsIPrivateTextRange.h"
 #include "nsISelection.h"
 #include "nsISelectionController.h"
 #include "nsISelectionPrivate.h"
@@ -386,7 +386,6 @@ nsPlaintextEditor::HandleKeyPressEvent(nsIDOMKeyEvent* aKeyEvent)
       return TypedText(NS_LITERAL_STRING("\t"), eTypedText);
     }
     case nsIDOMKeyEvent::DOM_VK_RETURN:
-    case nsIDOMKeyEvent::DOM_VK_ENTER:
       if (IsSingleLineEditor() || nativeKeyEvent->IsControl() ||
           nativeKeyEvent->IsAlt() || nativeKeyEvent->IsMeta() ||
           nativeKeyEvent->IsOS()) {
@@ -695,8 +694,7 @@ NS_IMETHODIMP nsPlaintextEditor::InsertText(const nsAString &aStringToInsert)
   nsCOMPtr<nsIEditRules> kungFuDeathGrip(mRules);
 
   EditAction opID = EditAction::insertText;
-  if (mInIMEMode) 
-  {
+  if (mComposition) {
     opID = EditAction::insertIMEText;
   }
   nsAutoPlaceHolderBatch batch(this, nullptr); 
@@ -811,9 +809,9 @@ NS_IMETHODIMP nsPlaintextEditor::InsertLineBreak()
 }
 
 nsresult
-nsPlaintextEditor::BeginIMEComposition()
+nsPlaintextEditor::BeginIMEComposition(WidgetCompositionEvent* aEvent)
 {
-  NS_ENSURE_TRUE(!mInIMEMode, NS_OK);
+  NS_ENSURE_TRUE(!mComposition, NS_OK);
 
   if (IsPasswordEditor()) {
     NS_ENSURE_TRUE(mRules, NS_ERROR_NULL_POINTER);
@@ -825,14 +823,19 @@ nsPlaintextEditor::BeginIMEComposition()
     textEditRules->ResetIMETextPWBuf();
   }
 
-  return nsEditor::BeginIMEComposition();
+  return nsEditor::BeginIMEComposition(aEvent);
 }
 
 nsresult
-nsPlaintextEditor::UpdateIMEComposition(const nsAString& aCompositionString,
-                                        nsIPrivateTextRangeList* aTextRangeList)
+nsPlaintextEditor::UpdateIMEComposition(nsIDOMEvent* aDOMTextEvent)
 {
-  NS_ABORT_IF_FALSE(aTextRangeList, "aTextRangeList must not be nullptr");
+  NS_ABORT_IF_FALSE(aDOMTextEvent, "aDOMTextEvent must not be nullptr");
+
+  WidgetTextEvent* widgetTextEvent =
+    aDOMTextEvent->GetInternalNSEvent()->AsTextEvent();
+  NS_ENSURE_TRUE(widgetTextEvent, NS_ERROR_INVALID_ARG);
+
+  EnsureComposition(widgetTextEvent);
 
   nsCOMPtr<nsIPresShell> ps = GetPresShell();
   NS_ENSURE_TRUE(ps, NS_ERROR_NOT_INITIALIZED);
@@ -843,19 +846,13 @@ nsPlaintextEditor::UpdateIMEComposition(const nsAString& aCompositionString,
 
   nsRefPtr<nsCaret> caretP = ps->GetCaret();
 
-  // Update information of clauses in the new composition string.
-  // This will be refered by followed methods.
-  mIMETextRangeList = aTextRangeList;
-
-  // We set mIsIMEComposing properly.
-  SetIsIMEComposing();
-
   {
+    TextComposition::TextEventHandlingMarker
+      textEventHandlingMarker(mComposition, widgetTextEvent);
+
     nsAutoPlaceHolderBatch batch(this, nsGkAtoms::IMETxnName);
 
-    rv = InsertText(aCompositionString);
-
-    mIMEBufferLength = aCompositionString.Length();
+    rv = InsertText(widgetTextEvent->theText);
 
     if (caretP) {
       caretP->SetCaretDOMSelection(selection);
@@ -866,7 +863,7 @@ nsPlaintextEditor::UpdateIMEComposition(const nsAString& aCompositionString,
   // Note that if committed, we don't need to notify it since it will be
   // notified at followed compositionend event.
   // NOTE: We must notify after the auto batch will be gone.
-  if (mIsIMEComposing) {
+  if (IsIMEComposing()) {
     NotifyEditorObservers();
   }
 
@@ -1379,8 +1376,8 @@ nsPlaintextEditor::InsertAsQuotation(const nsAString& aQuotedText,
 
   // It's best to put a blank line after the quoted text so that mails
   // written without thinking won't be so ugly.
-  if (!aQuotedText.IsEmpty() && (aQuotedText.Last() != PRUnichar('\n')))
-    quotedStuff.Append(PRUnichar('\n'));
+  if (!aQuotedText.IsEmpty() && (aQuotedText.Last() != char16_t('\n')))
+    quotedStuff.Append(char16_t('\n'));
 
   // get selection
   nsRefPtr<Selection> selection = GetSelection();

@@ -7,8 +7,6 @@
 let navbar;
 let skippedItem;
 
-Services.prefs.setBoolPref("browser.uiCustomization.skipSourceNodeCheck", true);
-
 // Attempting to drag a skipintoolbarset item should work.
 add_task(function() {
   navbar = document.getElementById("nav-bar");
@@ -16,6 +14,7 @@ add_task(function() {
   skippedItem.id = "test-skipintoolbarset-item";
   skippedItem.setAttribute("label", "Test");
   skippedItem.setAttribute("skipintoolbarset", "true");
+  skippedItem.setAttribute("removable", "true");
   navbar.customizationTarget.appendChild(skippedItem);
   let downloadsButton = document.getElementById("downloads-button");
   yield startCustomizing();
@@ -35,6 +34,5 @@ add_task(function() {
 add_task(function asyncCleanup() {
   yield endCustomizing();
   skippedItem.remove();
-  Services.prefs.clearUserPref("browser.uiCustomization.skipSourceNodeCheck");
   yield resetCustomization();
 });
