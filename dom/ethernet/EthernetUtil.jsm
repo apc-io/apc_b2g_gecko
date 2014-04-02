@@ -3,12 +3,15 @@
  */
 // "use strict";
 
-this.EXPORTED_SYMBOLS = ["EthernetManager"];
+this.EXPORTED_SYMBOLS = ["EthernetUtil"];
 
 const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/NetUtil.jsm");
+Cu.import("resource://gre/modules/FileUtils.jsm");
+// Cu.import("resource::/gre/modules/systemlibs.js");
 
 const kEthernetWorkerWorkerPath = "resource://gre/modules/ethernet_worker.js";
 
@@ -47,7 +50,7 @@ var DEBUG = true; // set to true to show debug messages
 let debug;
 if (DEBUG) {
   debug = function (s) {
-    dump("-*- EthernetManager.js component: " + s + "\n");
+    dump("-*- EthernetUtil.js component: " + s + "\n");
   };
 } else {
   debug = function (s) {};
@@ -60,10 +63,10 @@ let dumpObj = function(obj) {
   }
 }
 
-// we'll use EthernetManager to manage thing
-this.EthernetManager = {
-  init: function EthernetManager_init() {
-  	debug("EthernetManager_init");
+// we'll use EthernetUtil to manage thing
+this.EthernetUtil = {
+  init: function EthernetUtil_init() {
+  	debug("EthernetUtil_init");
 
   	this.controlWorker = null;
   	this.networkInterfaces = {};
@@ -91,6 +94,9 @@ this.EthernetManager = {
         this.enableInterface(iface.name);
 
         return true; // no way it is connected to go further
+      } else {
+        debug("FIXME: just _setEnabled(true) here but is it ok in all cases? pls note that we did not get ip yet");
+        this._setEnabled(true);
       }
 
       if (iface.name == kDefaultEthernetNetworkIface &&
@@ -108,7 +114,7 @@ this.EthernetManager = {
     Services.obs.addObserver(this, kNetdInterfaceChangedTopic, false);
   },
 
-  shutdown: function EthernetManager_shutdown() {
+  shutdown: function EthernetUtil_shutdown() {
     debug("shutdown");
     for (ifname in this.networkInterfaces) {
       let iface = this.networkInterfaces[ifname];
@@ -120,11 +126,11 @@ this.EthernetManager = {
     // how to stop controlWorker?
   },
 
-  enable: function EthernetManager_enable() {
+  enable: function EthernetUtil_enable() {
     return this.initInterface(kDefaultEthernetNetworkIface);
   },
 
-  disable: function EthernetManager_disable() {
+  disable: function EthernetUtil_disable() {
     return this.shutdown();
   },
 
@@ -143,15 +149,15 @@ this.EthernetManager = {
 
   // worker related
   // OK, a note here, with onmessage and onerror, this will be the worker
-  // => this must be specific as EthernetManager or other kind of id
+  // => this must be specific as EthernetUtil or other kind of id
   onmessage: function ControlWorker_onmessage(e) {
     debug("ControlWorker_onmessage");
     let data = e.data;
     let id = data.id;
-    let callback = EthernetManager.controlCallbacks[id];
+    let callback = EthernetUtil.controlCallbacks[id];
     if (callback) {
       callback(data);
-      delete EthernetManager.controlCallbacks[id];
+      delete EthernetUtil.controlCallbacks[id];
     }
   },
 
@@ -170,17 +176,17 @@ this.EthernetManager = {
     this.controlWorker.postMessage(params);
   },
   // callback object, this is called by EthernetWorker
-  setCallbackObject: function EthernetManager_setCallbackObject(obj) {
+  setCallbackObject: function EthernetUtil_setCallbackObject(obj) {
     this.callbackObj = obj;
   },
 
   // preferences
-  getStartupPreferences: function EthernetManager_getStartupPerferences() {
-    debug("EthernetManager_getStartupPerferences");
+  getStartupPreferences: function EthernetUtil_getStartupPerferences() {
+    debug("EthernetUtil_getStartupPerferences");
     this.settingEnabled = true;
   },
 
-  getInterfacePreferences: function EthernetManager_getInterfacePreferences(ifname) {
+  getInterfacePreferences: function EthernetUtil_getInterfacePreferences(ifname) {
     let pref = {
       useDhcp: true,
     };
@@ -191,29 +197,30 @@ this.EthernetManager = {
   },
 
   // enable/disable status
-  getEnabled: function EthernetManager_getEnabled() {
+  getEnabled: function EthernetUtil_getEnabled() {
+    debug("getEnabled, this.enabled = " + this.enabled);
     return this.enabled;
   },
 
-  _setEnabled: function EthernetManager_setEnabled(enabled) {
+  _setEnabled: function EthernetUtil_setEnabled(enabled) {
     this.enabled = enabled;
     this.callbackObj.onEnabledChanged(enabled);
   },
 
   // network interface related
-  initInterface: function EthernetManager_initInterface(ifname) {
-  	debug("EthernetManager_initInterface: " + ifname);
-  	gNetworkService.getEthernetStats(ifname, this);
+  initInterface: function EthernetUtil_initInterface(ifname) {
+  	debug("EthernetUtil_initInterface: " + ifname);
+  	EthernetBackend.getEthernetStats(ifname, this);
   },
 
-  // checkEthernetState: function EthernetManager_checkEthernetStats(ifname) {
-  //   debug("EthernetManager_checkEthernetStats: " + ifname);
+  // checkEthernetState: function EthernetUtil_checkEthernetStats(ifname) {
+  //   debug("EthernetUtil_checkEthernetStats: " + ifname);
   // },
 
-  addInterface: function EthernetManager_addInterface(iface) {
+  addInterface: function EthernetUtil_addInterface(iface) {
     debug("Well, the board has only one ethernet interface, but just prepare this for the advance case :)");
     if (!iface || !iface.name) {
-    	debug("EthernetManager_addInterface: invalid interface");
+    	debug("EthernetUtil_addInterface: invalid interface");
       dumpObj(iface);
     	return false;
     }
@@ -242,35 +249,35 @@ this.EthernetManager = {
     return false;
   },
 
-  getInterface: function EthernetManager_getInterface(ifname) {
-    debug("EthernetManager_getInterface: " + ifname);
+  getInterface: function EthernetUtil_getInterface(ifname) {
+    debug("EthernetUtil_getInterface: " + ifname);
     return this.networkInterfaces[ifname];
   },
 
-  removeInterface: function EthernetManager_removeInterface(ifname) {
-    debug("EthernetManager_removeInterface: " + ifname);
+  removeInterface: function EthernetUtil_removeInterface(ifname) {
+    debug("EthernetUtil_removeInterface: " + ifname);
     if (ifname in this.networkInterfaces) {
       delete this.networkInterfaces[ifname];
     }
   },
 
-  getCurrentInterface: function EthernetManager_getCurrentInterface() {
-    debug("EthernetManager_getCurrentInterface");
+  getCurrentInterface: function EthernetUtil_getCurrentInterface() {
+    debug("EthernetUtil_getCurrentInterface");
     return this.getInterface(this.currentIfname);
   },
   
-  setConnected: function EthernetManager_setConnected(isConnected) {
+  setConnected: function EthernetUtil_setConnected(isConnected) {
     this._isConnected = isConnected;
     this.callbackObj.onConnectedChanged(isConnected);
   },
   
-  getConnected: function EthernetManager_getConnected() {
+  getConnected: function EthernetUtil_getConnected() {
     debug("get connected== " + this._isConnected);
     return this._isConnected;
   },
 
-  enableInterface: function EthernetManager_enableInterface(ifname) {
-    debug("EthernetManager_enableInterface: " + ifname);
+  enableInterface: function EthernetUtil_enableInterface(ifname) {
+    debug("EthernetUtil_enableInterface: " + ifname);
 
     let workParams = {
       cmd: "ifc_enable",
@@ -280,8 +287,8 @@ this.EthernetManager = {
     this.controlMessage(workParams, NetUtilsCallbacks.onIfcEnableResult);
   },
 
-  disableInterface: function EthernetManager_disableInterface(ifname) {
-    debug("EthernetManager_disableInterface: " + ifname);
+  disableInterface: function EthernetUtil_disableInterface(ifname) {
+    debug("EthernetUtil_disableInterface: " + ifname);
 
     let workParams = {
       cmd: "ifc_disable",
@@ -291,8 +298,8 @@ this.EthernetManager = {
     this.controlMessage(workParams, NetUtilsCallbacks.onIfcDisableResult);
   },
 
-  connectInterface: function EthernetManager_connect(ifname) {
-    debug("EthernetManager_connect: " + ifname);
+  connectInterface: function EthernetUtil_connect(ifname) {
+    debug("EthernetUtil_connect: " + ifname);
     let iface = this.getInterface(ifname);
     if (!iface) {
       debug("Unknown interface: " + ifname);
@@ -304,14 +311,14 @@ this.EthernetManager = {
     if (iface.useDhcp) {
       this.dhcpDoRequest(ifname, NetUtilsCallbacks.onDhcpConnected);
     } else {
-      debug("EthernetManager_connect: we do not support static ip for now");
+      debug("EthernetUtil_connect: we do not support static ip for now");
     }
 
     return true;
   },
 
-  disconnectInterface: function EthernetManager_disconnect(ifname) {
-    debug("EthernetManager_disconnect: " + ifname);
+  disconnectInterface: function EthernetUtil_disconnect(ifname) {
+    debug("EthernetUtil_disconnect: " + ifname);
     let iface = this.getInterface(ifname);
     if (!iface) {
       debug("Unknown interface: " + ifname);
@@ -323,14 +330,14 @@ this.EthernetManager = {
     if (iface.useDhcp) {
       this.dhcpStop(ifname, NetUtilsCallbacks.onDhcpDisconnected);
     } else {
-      debug("EthernetManager_disconnect: we do not support static ip for now");
+      debug("EthernetUtil_disconnect: we do not support static ip for now");
     }
 
     return true;
   },
 
-  renewInterface: function EthernetManager_renew(ifname) {
-    debug("EthernetManager_renew: " + ifname);
+  renewInterface: function EthernetUtil_renew(ifname) {
+    debug("EthernetUtil_renew: " + ifname);
     let iface = this.getInterface(ifname);
     if (!iface) {
       debug("Unknown interface: " + ifname);
@@ -342,14 +349,14 @@ this.EthernetManager = {
     if (iface.useDhcp) {
       this.dhcpDoRenew(ifname, NetUtilsCallbacks.onDhcpConnected);
     } else {
-      debug("EthernetManager_renew: we do not support static ip for now. Btw, do we need renew for static ip?");
+      debug("EthernetUtil_renew: we do not support static ip for now. Btw, do we need renew for static ip?");
     }
 
     return true;
   },
 
-  dhcpDoRequest: function EthernetManager_dhcpDoRequest(ifname, callback) {
-    debug("EthernetManager_dhcpDoRequest: " + ifname);
+  dhcpDoRequest: function EthernetUtil_dhcpDoRequest(ifname, callback) {
+    debug("EthernetUtil_dhcpDoRequest: " + ifname);
     let workParams = {
       cmd: "dhcp_do_request",
       ifname: ifname
@@ -358,8 +365,8 @@ this.EthernetManager = {
     this.controlMessage(workParams, callback);
   },
 
-  dhcpStop: function EthernetManager_dhcpStop(ifname, callback) {
-    debug("EthernetManager_dhcpStop: " + ifname);
+  dhcpStop: function EthernetUtil_dhcpStop(ifname, callback) {
+    debug("EthernetUtil_dhcpStop: " + ifname);
     let workParams = {
       cmd: "dhcp_stop",
       ifname: ifname
@@ -368,38 +375,38 @@ this.EthernetManager = {
     this.controlMessage(workParams, callback);
   },
 
-  dhcpDoRenew: function EthernetManager_dhcpDoRenew(ifname, callback) {
-    debug("EthernetManager_dhcpDoRenew: " + ifname);
+  dhcpDoRenew: function EthernetUtil_dhcpDoRenew(ifname, callback) {
+    debug("EthernetUtil_dhcpDoRenew: " + ifname);
     this.dhcpStop(ifname, function(data) {
-      debug("EthernetManager_dhcpDoRenew: " + ifname + " - stop step");
+      debug("EthernetUtil_dhcpDoRenew: " + ifname + " - stop step");
       // TODO: should we validate status here?
       if (Utils.validateStatus(data)) {
-        EthernetManager.dhcpDoRequest(ifname, callback);
+        EthernetUtil.dhcpDoRequest(ifname, callback);
       }
     });
   },
 
   /* process network interface data */
-  updateInterface: function EthernetManager_updateInterface(ifname, data) {
+  updateInterface: function EthernetUtil_updateInterface(ifname, data) {
     if (!data) {
-      debug("EthernetManager_updateInterface - invalid data");
+      debug("EthernetUtil_updateInterface - invalid data");
       return;
     }
 
     let iface = this.getInterface(ifname);
     if (!iface) {
-      debug("EthernetManager_updateInterface: unknown interface: " + ifname);
+      debug("EthernetUtil_updateInterface: unknown interface: " + ifname);
       return false;
     }
 
     updateProperty = function(targetProp, srcProp) {
       if (srcProp in data) {
-        debug("EthernetManager_updateInterface: updating iface." + targetProp + " with data." + srcProp);
+        debug("EthernetUtil_updateInterface: updating iface." + targetProp + " with data." + srcProp);
         iface[targetProp] = data[srcProp];
         return true;
       }
 
-      debug("EthernetManager_updateInterface: no new data for iface." + targetProp);
+      debug("EthernetUtil_updateInterface: no new data for iface." + targetProp);
       false;
     }
 
@@ -423,7 +430,7 @@ this.EthernetManager = {
     return true;
   },
 
-  createInterface: function EthernetManager_createInterface(ifname, data) {
+  createInterface: function EthernetUtil_createInterface(ifname, data) {
     let iface = {
       QueryInterface: XPCOMUtils.generateQI([Ci.nsINetworkInterface]),
       type: Ci.nsINetworkInterface.NETWORK_TYPE_ETHERNET,
@@ -453,8 +460,8 @@ this.EthernetManager = {
   },
 
   /* process netd message */
-  onInterfaceLinkStateChanged: function EthernetManager_onInterfaceLinkstateChanged(data) {
-    debug("EthernetManager_onInterfaceLinkstateChanged: " + data);
+  onInterfaceLinkStateChanged: function EthernetUtil_onInterfaceLinkstateChanged(data) {
+    debug("EthernetUtil_onInterfaceLinkstateChanged: " + data);
     if (data.indexOf(kNetdIfaceLinkStateMsg) < 0) {
       debug("Invalid message format");
       return false;
@@ -464,7 +471,7 @@ this.EthernetManager = {
     debug("We got paramStr: " + paramStr);
     let params = paramStr.split(" ");
     if (params.length != 2) {
-      debug("EthernetManager_onInterfaceLinkstateChanged - I don't know these param format: " + paramStr);
+      debug("EthernetUtil_onInterfaceLinkstateChanged - I don't know these param format: " + paramStr);
       return false;
     }
 
@@ -472,7 +479,7 @@ this.EthernetManager = {
     let iface = this.getInterface(ifname);
     debug("Ok, so we got the ifname: " + ifname + ", and inteface object is: " + iface);
     if (!iface) {
-      debug("EthernetManager_onInterfaceLinkstateChanged - unknown interface: " + ifname);
+      debug("EthernetUtil_onInterfaceLinkstateChanged - unknown interface: " + ifname);
       return false;
     }
 
@@ -504,13 +511,105 @@ this.EthernetManager = {
                         ? Ci.nsINetworkInterface.NETWORK_STATE_CONNECTED
                         : Ci.nsINetworkInterface.NETWORK_STATE_DISCONNECTED;
     // TODO: integrate this with nsINetworkInterface so that we can register this with the NetworkManager
+    debug("here, we have the state = " + details.state);
   	var iface = this.createInterface(details.ifname, details);
 
     this.addInterface(iface);
   },
 };
 
-this.EthernetManager.init();
+this.EthernetBackend = {
+  getEthernetStats: function getEthernetStats(ifname, callback) {
+    if (!ifname || !callback) {
+      debug("Invalid parameters");
+      return false;
+    }
+
+    let params = {
+      cmd: "getEthernetStats",
+      ifname: ifname,
+      up: false, // operstate
+      cableConnected: false, // carrier, but I could not open this :(
+      config: "",
+      hwaddr: "",
+      ip: "",
+      gateway_str: "",
+      dns1_str: "",
+      dns2_str: "",
+      date: new Date(),
+      resultCode: -1,
+    };
+
+    this._getCarrier(params, callback, this);
+
+    return true;
+  },
+
+  _getCarrier: function(params, callback, service) {
+    let carrierFile = "/sys/class/net/" + params.ifname + "/carrier";
+    debug("Let's open file " + carrierFile);
+    let file = new FileUtils.File(carrierFile);
+
+    if (!file) {
+      debug("Unable to open file " + carrierFile);
+      callback.ethernetStatsAvailable(false, params);
+      return false;
+    }
+
+    NetUtil.asyncFetch(file, function(inputStream, status) {
+      debug("==== this is NetUtil.asyncFetch(status = " + status + ")")
+      if (Components.isSuccessCode(status)) {
+        let data = NetUtil.readInputStreamToString(inputStream, inputStream.available()).trim();
+        debug("We got the data ===== " + data + " ======");
+        if (data == "1") {
+          params.cableConnected = true;
+        } else {
+          params.cableConnected = false;
+        }
+      } else {
+        debug("isSuccessCode is " + status + ", this mean, cableConnected = false");
+        params.cableConnected = false;
+      }
+      service._getOperstate(params, callback);
+    });
+  },
+
+  _getOperstate: function(params, callback) {
+    let fileName = "/sys/class/net/" + params.ifname + "/operstate";
+    debug("Let's open file " + fileName);
+    let file = new FileUtils.File(fileName);
+
+    if (!file) {
+      debug("Unable to open file " + fileName);
+      callback.ethernetStatsAvailable(false, params);
+      return false;
+    }
+
+    NetUtil.asyncFetch(file, function(inputStream, status) {
+      debug("==== this is NetUtil.asyncFetch(status = " + status + ")");
+      if (Components.isSuccessCode(status)) {
+        let data = NetUtil.readInputStreamToString(inputStream, inputStream.available()).trim();
+        debug("We got the data ===== " + data + " ======");
+        if (data == "up") {
+          params.up = true;
+        } else {
+          params.up = false;
+        }
+        // let's get the ip address
+        EthernetBackend._getIpAddress(params, callback);
+      } else {
+        debug("isSuccessCode is " + status + ", no action :(");
+        callback.ethernetStatsAvailable(false, params);
+      }
+    });
+  },
+
+  _getIpAddress: function(params, callback) {
+    let propertyName = "dhcp." + params.ifname + ".ipaddress";
+    params.ip = libcutils.property_get(propertyName, "");
+    callback.ethernetStatsAvailable(true, params);
+  }
+};
 
 this.Utils = {
   /* the status is return from C function => 0 means Ok */
@@ -524,7 +623,7 @@ this.Utils = {
 };
 
 // Ok, so we separate these functions to a new Obj because inside them,
-// we can not access EthernetManager as this => safe to move them outside
+// we can not access EthernetUtil as this => safe to move them outside
 // to make stuff clear
 this.NetUtilsCallbacks = {
   /* process return result from ethernet_worker */
@@ -532,19 +631,19 @@ this.NetUtilsCallbacks = {
     debug("NetUtilsCallbacks_onIfcEnableResult: " + result.ifname);
     if (!Utils.validateStatus(result)) {
       debug("Well, error when enabling interface: " + result.ifname);
-      EthernetManager.removeInterface(result.ifname);
+      EthernetUtil.removeInterface(result.ifname);
       return;
     }
 
-    EthernetManager._setEnabled(true);
+    EthernetUtil._setEnabled(true);
   },
 
   onIfcDisableResult: function NetUtilsCallbacks_onIfcDisableResult(result) {
     debug("NetUtilsCallbacks_onIfcDisableResult: " + result.ifname);
     if (Utils.validateStatus(result)) {
       debug("Ok, interface is disabled: " + result.ifname);
-      // EthernetManager.removeInterface(result.ifname); // need this line?
-      EthernetManager._setEnabled(false);
+      // EthernetUtil.removeInterface(result.ifname); // need this line?
+      EthernetUtil._setEnabled(false);
     }
   },
 
@@ -555,7 +654,7 @@ this.NetUtilsCallbacks = {
       result.state = result.ipaddr_str != ""
                      ? Ci.nsINetworkInterface.NETWORK_STATE_CONNECTED
                      : Ci.nsINetworkInterface.NETWORK_STATE_DISCONNECTED;
-      EthernetManager.updateInterface(result.ifname, result);
+      EthernetUtil.updateInterface(result.ifname, result);
 
       if (result.state == Ci.nsINetworkInterface.NETWORK_STATE_CONNECTED) {
         NetUtilsCallbacks.onConnected(result.ifname);
@@ -571,16 +670,16 @@ this.NetUtilsCallbacks = {
     debug("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
     if (ifname == kDefaultEthernetNetworkIface) {
       debug("Ok, onConnected, prepare xxx ============");
-      EthernetManager.currentIfname = ifname;
-      let iface = EthernetManager.getCurrentInterface();
+      EthernetUtil.currentIfname = ifname;
+      let iface = EthernetUtil.getCurrentInterface();
       gNetworkManager.registerNetworkInterface(iface);
       // gNetworkManager.overrideActive(iface);
     } else {
-      if (EthernetManager.currentIfname == null) {
-        EthernetManager.currentIfname = ifname;
+      if (EthernetUtil.currentIfname == null) {
+        EthernetUtil.currentIfname = ifname;
       }
     }
-    EthernetManager.setConnected(true);
+    EthernetUtil.setConnected(true);
   },
 
   onDhcpDisconnected: function NetUtilsCallbacks_onDhcpDisconnected(result) {
@@ -588,7 +687,7 @@ this.NetUtilsCallbacks = {
     if (Utils.validateStatus(result)) {
       debug("NetUtilsCallbacks_onDhcpDisconnected: good, got disconnect for: " + result.ifname);
       result.state = Ci.nsINetworkInterface.NETWORK_STATE_DISCONNECTED;
-      EthernetManager.updateInterface(result.ifname, result);
+      EthernetUtil.updateInterface(result.ifname, result);
       // dumpObj(iface);
       NetUtilsCallbacks.onDisconnected(result.ifname);
     } else {
@@ -597,17 +696,18 @@ this.NetUtilsCallbacks = {
   },
 
   onDisconnected: function NetUtilsCallbacks_onDisconnected(ifname) {
-    if (ifname == EthernetManager.currentIfname) {
-      EthernetManager.currentIfname = null; // should we?
+    if (ifname == EthernetUtil.currentIfname) {
+      EthernetUtil.currentIfname = null; // should we?
     }
 
     if (ifname == kDefaultEthernetNetworkIface) {
       debug("Ok, onDisconnected, prepare xxx ================");
-      let iface = EthernetManager.getInterface(ifname);
+      let iface = EthernetUtil.getInterface(ifname);
       gNetworkManager.unregisterNetworkInterface(iface);
       // gNetworkManager.overrideActive(null); // ok, assume that only us using this feature
     }
-    EthernetManager.setConnected(false);
+    EthernetUtil.setConnected(false);
   },
 };
 
+this.EthernetUtil.init();

@@ -8,7 +8,7 @@ const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 // Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/EthernetManager.js");
+Cu.import("resource://gre/modules/EthernetUtil.jsm");
 
 var DEBUG = true; // set to true to show debug messages
 
@@ -33,7 +33,7 @@ var EthernetWorker = (function() {
     this._mm.addMessageListener(msgName, this);
   }).bind(this));
 
-  EthernetManager.setCallbackObject(this);
+  EthernetUtil.setCallbackObject(this);
 });
 
 EthernetWorker.prototype = {
@@ -83,6 +83,7 @@ EthernetWorker.prototype = {
         if ((i = this._domManagers.indexOf(msg.manager)) === -1) {
           this._domManagers.push(msg.manager);
         }
+        debug("ok, let's getEnabled");
         return this.getEnabled();
       }
       case "EthernetManager:getConnected": {
@@ -90,12 +91,12 @@ EthernetWorker.prototype = {
       }
       case "EthernetManager:enable": {
         debug("ok, let's enable");
-        EthernetManager.enable();
+        EthernetUtil.enable();
       }
       break;
       case "EthernetManager:disable": {
         debug("Ok, let's disable");
-        EthernetManager.disable();
+        EthernetUtil.disable();
       }
       break;
       default:
@@ -106,15 +107,16 @@ EthernetWorker.prototype = {
 
   shutdown: function nsIEthernet_shutdown() {
     debug("This is the nsIEthernet_shutdown function");
-    EthernetManager.shutdown();
+    EthernetUtil.shutdown();
   },
 
   getEnabled: function() {
-    return EthernetManager.getEnabled();
+    debug("getEnabled");
+    return EthernetUtil.getEnabled();
   },
   
   getConnected: function() {
-    return EthernetManager.getConnected();
+    return EthernetUtil.getConnected();
   },
 
   onEnabledChanged: function(enabled) {
