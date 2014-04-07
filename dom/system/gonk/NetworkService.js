@@ -34,7 +34,7 @@ const WIFI_CTRL_INTERFACE = "wl0.1";
 
 const MANUAL_PROXY_CONFIGURATION = 1;
 
-const DEBUG = false;
+const DEBUG = true;
 
 function netdResponseType(code) {
   return Math.floor(code / 100) * 100;
@@ -121,8 +121,40 @@ NetworkService.prototype = {
   },
 
   // nsINetworkService
+  getEthernetStats: function (iface, callback) {
+    debug("Here is getEthernetStats");
+    if (!iface || !callback) {
+      debug("Invalid parameters");
+      return false;
+    }
 
+    let params = {
+      cmd: "getEthernetStats",
+      ifname: iface
+    };
+
+    params.report = true; // what for?
+    params.isAsync = true;
+
+    this.controlMessage(params, function(result) {
+      debug("Got the result from net_worker for cable stats" + result);
+      for (let k in result) {
+        debug("--- result." + k + ": " + result[k]);
+      }
+      let success = result.resultCode >= NETD_COMMAND_OKAY && result.resultCode < NETD_COMMAND_ERROR;
+      callback.ethernetStatsAvailable(success, result);
+    });
+
+    return true;
+  },
+ 
   getNetworkInterfaceStats: function(networkName, callback) {
+    // debug("getNetworkInterfaceStats: " + networkName);
+    // if (networkName == "eth0") {
+    //   debug("Jump to getEthernetStats");
+    //   this.getEthernetStats(networkName, callback);
+    //   return;
+    // }
     if(DEBUG) debug("getNetworkInterfaceStats for " + networkName);
 
     if (this.shutdown) {

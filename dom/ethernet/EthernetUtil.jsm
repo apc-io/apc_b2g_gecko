@@ -9,9 +9,9 @@ const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/systemlibs.js");
 Cu.import("resource://gre/modules/NetUtil.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
-// Cu.import("resource::/gre/modules/systemlibs.js");
 
 const kEthernetWorkerWorkerPath = "resource://gre/modules/ethernet_worker.js";
 
@@ -73,6 +73,7 @@ this.EthernetUtil = {
   	this.currentIfname = null;
   	this.idgen = 0;
   	this.controlCallbacks = {};
+    this.commandParamas = {};
   	this.settingEnabled = false;
   	this._isConnected = false;
     this.callbackObj = null;
@@ -85,6 +86,8 @@ this.EthernetUtil = {
     this.controlWorker = new ChromeWorker(kEthernetWorkerWorkerPath);
     this.controlWorker.onmessage = this.onmessage;
     this.controlWorker.onerror = this.onerror;
+
+    this.initServices();
 
     // setup interfaces
     this._onInterfaceAdded = function(iface) {
@@ -112,6 +115,42 @@ this.EthernetUtil = {
 
     // setup observer
     Services.obs.addObserver(this, kNetdInterfaceChangedTopic, false);
+  },
+
+  initServices: function EthernetUtil_initServices() {
+    this.ethernetListener = {
+      onWaitEvent: function(event, iface) {
+        debug("...onWaitEvent");
+      },
+
+      onCommand: function(event, iface) {
+        debug("....onCommand() - " + iface);
+        dumpObj(event);
+        let id = event.id;
+        let callback = EthernetUtil.controlCallbacks[id];
+        if (callback) {
+          let params = EthernetUtil.commandParamas[id];
+          if (params) {
+            if (!event.ifname) {
+              event.ifname = params.ifname; // some callback require ifname to process
+            }
+            delete EthernetUtil.commandParamas[id];
+          }
+          callback(event);
+          delete EthernetUtil.controlCallbacks[id];
+        }
+      }
+    }
+
+    debug("=========== Getting ethernetService");
+    this.ethernetService = Cc["@mozilla.org/ethernet/service;1"];
+    if (this.ethernetService) {
+      this.ethernetService = this.ethernetService.getService(Ci.nsIEthernetProxyService);
+      let interfaces = [kDefaultEthernetNetworkIface];
+      this.ethernetService.start(this.ethernetListener, interfaces, interfaces.length);
+    } else {
+      debug("No Ethernet service component available!");
+    }
   },
 
   shutdown: function EthernetUtil_shutdown() {
@@ -152,13 +191,13 @@ this.EthernetUtil = {
   // => this must be specific as EthernetUtil or other kind of id
   onmessage: function ControlWorker_onmessage(e) {
     debug("ControlWorker_onmessage");
-    let data = e.data;
-    let id = data.id;
-    let callback = EthernetUtil.controlCallbacks[id];
-    if (callback) {
-      callback(data);
-      delete EthernetUtil.controlCallbacks[id];
-    }
+    // let data = e.data;
+    // let id = data.id;
+    // let callback = EthernetUtil.controlCallbacks[id];
+    // if (callback) {
+    //   callback(data);
+    //   delete EthernetUtil.controlCallbacks[id];
+    // }
   },
 
   onerror: function ControlWorker_onerror(e) {
@@ -173,7 +212,8 @@ this.EthernetUtil = {
     if (callback) {
       this.controlCallbacks[id] = callback;
     }
-    this.controlWorker.postMessage(params);
+    this.commandParamas[id] = params;
+    this.ethernetService.sendCommand(params, params.ifname);
   },
   // callback object, this is called by EthernetWorker
   setCallbackObject: function EthernetUtil_setCallbackObject(obj) {
@@ -210,7 +250,8 @@ this.EthernetUtil = {
   // network interface related
   initInterface: function EthernetUtil_initInterface(ifname) {
   	debug("EthernetUtil_initInterface: " + ifname);
-  	EthernetBackend.getEthernetStats(ifname, this);
+  	// EthernetBackend.getEthernetStats(ifname, this);
+    gNetworkService.getNetworkInterfaceStats(ifname, this);
   },
 
   // checkEthernetState: function EthernetUtil_checkEthernetStats(ifname) {
@@ -354,6 +395,16 @@ this.EthernetUtil = {
 
     return true;
   },
+
+  // getEthernetStats: function EthernetUtil_getEthernetStats(ifname, callback) {
+  //   debug("EthernetUtil_getEthernetStats: " + ifname);
+  //   let workParams = {
+  //     cmd: "get_ethernet_stats",
+  //     ifname: ifname
+  //   };
+
+  //   this.controlMessage(workParams, callback);
+  // },
 
   dhcpDoRequest: function EthernetUtil_dhcpDoRequest(ifname, callback) {
     debug("EthernetUtil_dhcpDoRequest: " + ifname);
@@ -507,7 +558,7 @@ this.EthernetUtil = {
   	if (details.hwaddress == kInvalidHWAddr) {
   	  debug("Well, the device " + details.ifname + " is not available");
   	}
-    details.state = (details.up == true && details.cableConnected == true && details.ip)
+    details.state = (details.up == true && details.cableConnected == true && details.ip && details.ip.trim() != "")
                         ? Ci.nsINetworkInterface.NETWORK_STATE_CONNECTED
                         : Ci.nsINetworkInterface.NETWORK_STATE_DISCONNECTED;
     // TODO: integrate this with nsINetworkInterface so that we can register this with the NetworkManager
@@ -590,13 +641,14 @@ this.EthernetBackend = {
       if (Components.isSuccessCode(status)) {
         let data = NetUtil.readInputStreamToString(inputStream, inputStream.available()).trim();
         debug("We got the data ===== " + data + " ======");
-        if (data == "up") {
+        if (data == kNetworkInterfaceUp) {
           params.up = true;
+          EthernetBackend._getIpAddress(params, callback);
         } else {
           params.up = false;
+          callback.ethernetStatsAvailable(true, params);
         }
         // let's get the ip address
-        EthernetBackend._getIpAddress(params, callback);
       } else {
         debug("isSuccessCode is " + status + ", no action :(");
         callback.ethernetStatsAvailable(false, params);

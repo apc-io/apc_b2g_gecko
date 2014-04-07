@@ -283,6 +283,7 @@ private:
   bool setUSBTethering(NetworkParams& aOptions);
   bool enableUsbRndis(NetworkParams& aOptions);
   bool updateUpStream(NetworkParams& aOptions);
+  bool getEthernetStats(NetworkParams& aOptions);
 
   /**
    * function pointer array holds all netd commands should be executed
@@ -303,6 +304,7 @@ private:
   static CommandFunc sNetworkInterfaceDisableAlarmChain[];
   static CommandFunc sNetworkInterfaceSetAlarmChain[];
   static CommandFunc sSetDnsChain[];
+  static CommandFunc sGetEthernetStatsChain[];
 
   /**
    * Individual netd command stored in command chain.
@@ -344,6 +346,8 @@ private:
   static void updateUpStreamSuccess(PARAMS);
   static void setDhcpServerSuccess(PARAMS);
   static void wifiOperationModeSuccess(PARAMS);
+  static void requestGetIfaceCfg(PARAMS);
+  static void getEthernetStatsSuccess(PARAMS);
 #undef PARAMS
 
   /**
@@ -358,6 +362,7 @@ private:
   static void networkInterfaceStatsFail(PARAMS);
   static void networkInterfaceAlarmFail(PARAMS);
   static void setDnsFail(PARAMS);
+  static void getEthernetStatsFail(PARAMS);
 #undef PARAMS
 
   /**
