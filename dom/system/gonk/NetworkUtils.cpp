@@ -13,72 +13,6 @@
  * limitations under the License.
  */
 
-//Slacker LOG
-
-#define SSLOG_ENABLED
-#ifdef SSLOG_ENABLED
-
-#ifdef __cplusplus
-#include <cstdio>
-#else
-#include <stdio.h>
-#endif
-
-#include <android/log.h>
-
-#define SSLOG_TAG_WARNING "W"
-#define SSLOG_TAG_INFO "I"
-#define SSLOG_TAG_DEBUG "D"
-
-#ifdef __cplusplus
-#define SSLOG(tag, args...) \
-{ \
-  std::printf("[%s] %s:%s", tag, __FILE__, __PRETTY_FUNCTION__); \
-  std::printf(args); \
-  std::printf("\n"); \
-}
-#else
-#define SSLOG(tag, args...) \
-{ \
-  printf("[%s] %s:%s", tag, __FILE__, __PRETTY_FUNCTION__); \
-  printf(args); \
-  printf("\n"); \
-}
-#endif
-
-#define ANDRTAG __PRETTY_FUNCTION__
-
-#define SSLOGI(...) { \
-  SSLOG(SSLOG_TAG_INFO, __VA_ARGS__); \
-  __android_log_print(ANDROID_LOG_INFO, ANDRTAG, __VA_ARGS__); \
-}
-
-#define SSLOGW(...) {\
-  SSLOG(SSLOG_TAG_WARNING, __VA_ARGS__); \
-  __android_log_print(ANDROID_LOG_WARN, ANDRTAG, __VA_ARGS__);\
-}
-
-#define SSLOGD(...) {\
-  SSLOG(SSLOG_TAG_DEBUG, __VA_ARGS__); \
-  __android_log_print(ANDROID_LOG_DEBUG, ANDRTAG, __VA_ARGS__);\
-}
-
-// just print the function signature and the file name
-#define SSLOGF() {\
-  SSLOG(SSLOG_TAG_INFO, " "); \
-  __android_log_print(ANDROID_LOG_INFO, __FILE__, "%s", __PRETTY_FUNCTION__); \
-}
-
-#else
-
-#define SSLOGI(...)
-#define SSLOGW(...)
-#define SSLOGD(...)
-#define SSLOGF(...)
-
-#endif
-
-
 #include "NetworkUtils.h"
 
 #include <android/log.h>
@@ -916,10 +850,8 @@ void NetworkUtils::networkInterfaceGetCfg(CommandChain* aChain,
                                       CommandCallback aCallback,
                                       NetworkResultOptions& aOptions)
 {
-  SSLOGF();
   char command[MAX_COMMAND_SIZE];
   snprintf(command, MAX_COMMAND_SIZE - 1, "interface getcfg %s", GET_CHAR(mIfname));
-  SSLOGI("command is '%s'", command);
 
   doCommand(command, aChain, aCallback);
 }
@@ -1063,7 +995,6 @@ void NetworkUtils::networkInterfaceGetCfgSuccess(CommandChain* aChain,
                                            CommandCallback aCallback,
                                            NetworkResultOptions& aResult)
 {
-  SSLOGI("we can do some futher processing here, e.g getIpAddr");
   postMessage(aChain->getParams(), aResult);
 }
 
@@ -1485,7 +1416,6 @@ bool NetworkUtils::getNetworkInterfaceStats(NetworkParams& aOptions)
 }
 
 bool NetworkUtils::getNetworkInterfaceCfg(NetworkParams& aOptions) {
-  SSLOGF();
   RUN_CHAIN(aOptions, sNetworkInterfaceGetCfgChain, networkInterfaceGetCfgFail);
   return true;
 }

@@ -34,7 +34,7 @@ const WIFI_CTRL_INTERFACE = "wl0.1";
 
 const MANUAL_PROXY_CONFIGURATION = 1;
 
-const DEBUG = true;
+const DEBUG = false;
 
 function netdResponseType(code) {
   return Math.floor(code / 100) * 100;

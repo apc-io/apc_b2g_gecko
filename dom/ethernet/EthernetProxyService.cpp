@@ -2,71 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-//Slacker LOG
-
-#define SSLOG_ENABLED
-#ifdef SSLOG_ENABLED
-
-#ifdef __cplusplus
-#include <cstdio>
-#else
-#include <stdio.h>
-#endif
-
-#include <android/log.h>
-
-#define SSLOG_TAG_WARNING "W"
-#define SSLOG_TAG_INFO "I"
-#define SSLOG_TAG_DEBUG "D"
-
-#ifdef __cplusplus
-#define SSLOG(tag, args...) \
-{ \
-  std::printf("[%s] %s:%s", tag, __FILE__, __PRETTY_FUNCTION__); \
-  std::printf(args); \
-  std::printf("\n"); \
-}
-#else
-#define SSLOG(tag, args...) \
-{ \
-  printf("[%s] %s:%s", tag, __FILE__, __PRETTY_FUNCTION__); \
-  printf(args); \
-  printf("\n"); \
-}
-#endif
-
-#define ANDRTAG __PRETTY_FUNCTION__
-
-#define SSLOGI(...) { \
-  SSLOG(SSLOG_TAG_INFO, __VA_ARGS__); \
-  __android_log_print(ANDROID_LOG_INFO, ANDRTAG, __VA_ARGS__); \
-}
-
-#define SSLOGW(...) {\
-  SSLOG(SSLOG_TAG_WARNING, __VA_ARGS__); \
-  __android_log_print(ANDROID_LOG_WARN, ANDRTAG, __VA_ARGS__);\
-}
-
-#define SSLOGD(...) {\
-  SSLOG(SSLOG_TAG_DEBUG, __VA_ARGS__); \
-  __android_log_print(ANDROID_LOG_DEBUG, ANDRTAG, __VA_ARGS__);\
-}
-
-// just print the function signature and the file name
-#define SSLOGF() {\
-  SSLOG(SSLOG_TAG_INFO, " "); \
-  __android_log_print(ANDROID_LOG_INFO, __FILE__, "%s", __PRETTY_FUNCTION__); \
-}
-
-#else
-
-#define SSLOGI(...)
-#define SSLOGW(...)
-#define SSLOGD(...)
-#define SSLOGF(...)
-
-#endif
-
 #include "EthernetProxyService.h"
 #include "nsServiceManagerUtils.h"
 #include "mozilla/ModuleUtils.h"
@@ -135,7 +70,6 @@ public:
   NS_IMETHOD Run()
   {
     MOZ_ASSERT(NS_IsMainThread());
-    SSLOGI("Let's dispatch ethernet result here");
     gEthernetProxyService->DispatchEthernetResult(mResult, mInterface);
     return NS_OK;
   }
@@ -158,7 +92,6 @@ public:
 
   NS_IMETHOD Run()
   {
-    SSLOGF();
     EthernetResultOptions result;
     if (gEthernetBackend->ExecuteCommand(mOptions, result, mInterface)) {
       nsCOMPtr<nsIRunnable> runnable = new EthernetResultDispatcher(result, mInterface);
@@ -175,7 +108,6 @@ NS_IMPL_ISUPPORTS1(EthernetProxyService, nsIEthernetProxyService)
 
 EthernetProxyService::EthernetProxyService()
 {
-  SSLOGF();
   /* member initializers and constructor code */
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(!gEthernetProxyService);
@@ -183,7 +115,6 @@ EthernetProxyService::EthernetProxyService()
 
 EthernetProxyService::~EthernetProxyService()
 {
-  SSLOGF();
   /* destructor code */
   MOZ_ASSERT(!gEthernetProxyService);
 }
@@ -191,7 +122,6 @@ EthernetProxyService::~EthernetProxyService()
 already_AddRefed<EthernetProxyService>
 EthernetProxyService::FactoryCreate()
 {
-  SSLOGF();
   if (XRE_GetProcessType() != GeckoProcessType_Default) {
     return nullptr;
   }
@@ -216,7 +146,6 @@ NS_IMETHODIMP EthernetProxyService::Start(nsIEthernetEventListener *aListener,
                                           const char * *aInterfaces,
                                           uint32_t aNumOfInterfaces)
 {
-  SSLOGF();
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aListener);
 
@@ -251,7 +180,6 @@ NS_IMETHODIMP EthernetProxyService::Start(nsIEthernetEventListener *aListener,
 /* void shutdown (); */
 NS_IMETHODIMP EthernetProxyService::Shutdown()
 {
-  SSLOGF();
     return NS_OK;
 }
 
@@ -260,7 +188,6 @@ NS_IMETHODIMP EthernetProxyService::SendCommand(JS::HandleValue aParameters,
                                                 const nsACString & aInterface,
                                                 JSContext* aCx)
 {
-  SSLOGF();
   MOZ_ASSERT(NS_IsMainThread());
   EthernetCommandOptions options;
 
@@ -271,7 +198,6 @@ NS_IMETHODIMP EthernetProxyService::SendCommand(JS::HandleValue aParameters,
 
   // Dispatch the command to the control thread.
   CommandOptions commandOptions(options);
-  SSLOGI("Command is %s", NS_ConvertUTF16toUTF8(commandOptions.mCmd).get());
   nsCOMPtr<nsIRunnable> runnable = new EthernetControlRunnable(commandOptions, aInterface);
   mControlThread->Dispatch(runnable, nsIEventTarget::DISPATCH_NORMAL);
   return NS_OK;
@@ -280,14 +206,12 @@ NS_IMETHODIMP EthernetProxyService::SendCommand(JS::HandleValue aParameters,
 /* void waitForEvent (in ACString aInterface); */
 NS_IMETHODIMP EthernetProxyService::WaitForEvent(const nsACString & aInterface)
 {
-  SSLOGF();
     return NS_OK;
 }
 
 void
 EthernetProxyService::DispatchEthernetResult(const EthernetResultOptions& aOptions, const nsACString& aInterface)
 {
-  SSLOGF();
   MOZ_ASSERT(NS_IsMainThread());
 
   mozilla::AutoSafeJSContext cx;

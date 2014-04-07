@@ -2,72 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-//Slacker LOG
-
-#define SSLOG_ENABLED
-#ifdef SSLOG_ENABLED
-
-#ifdef __cplusplus
-#include <cstdio>
-#else
-#include <stdio.h>
-#endif
-
-#include <android/log.h>
-
-#define SSLOG_TAG_WARNING "W"
-#define SSLOG_TAG_INFO "I"
-#define SSLOG_TAG_DEBUG "D"
-
-#ifdef __cplusplus
-#define SSLOG(tag, args...) \
-{ \
-  std::printf("[%s] %s:%s", tag, __FILE__, __PRETTY_FUNCTION__); \
-  std::printf(args); \
-  std::printf("\n"); \
-}
-#else
-#define SSLOG(tag, args...) \
-{ \
-  printf("[%s] %s:%s", tag, __FILE__, __PRETTY_FUNCTION__); \
-  printf(args); \
-  printf("\n"); \
-}
-#endif
-
-#define ANDRTAG __PRETTY_FUNCTION__
-
-#define SSLOGI(...) { \
-  SSLOG(SSLOG_TAG_INFO, __VA_ARGS__); \
-  __android_log_print(ANDROID_LOG_INFO, ANDRTAG, __VA_ARGS__); \
-}
-
-#define SSLOGW(...) {\
-  SSLOG(SSLOG_TAG_WARNING, __VA_ARGS__); \
-  __android_log_print(ANDROID_LOG_WARN, ANDRTAG, __VA_ARGS__);\
-}
-
-#define SSLOGD(...) {\
-  SSLOG(SSLOG_TAG_DEBUG, __VA_ARGS__); \
-  __android_log_print(ANDROID_LOG_DEBUG, ANDRTAG, __VA_ARGS__);\
-}
-
-// just print the function signature and the file name
-#define SSLOGF() {\
-  SSLOG(SSLOG_TAG_INFO, " "); \
-  __android_log_print(ANDROID_LOG_INFO, __FILE__, "%s", __PRETTY_FUNCTION__); \
-}
-
-#else
-
-#define SSLOGI(...)
-#define SSLOGW(...)
-#define SSLOGD(...)
-#define SSLOGF(...)
-
-#endif
-
-
 #include "EthernetUtils.h"
 
 #include <cutils/properties.h>
@@ -78,14 +12,12 @@
 
 EthernetBackendImpl::EthernetBackendImpl()
 {
-	SSLOGF();
 }
 
 int32_t
 EthernetBackendImpl::getEthernetStats(const char *ifname, mozilla::dom::EthernetResultOptions& result)
 {
-	SSLOGI("%s", ifname);
-	//
+  // nothing here right now
 	return 0;
 }
 
@@ -93,7 +25,6 @@ EthernetBackendImpl::getEthernetStats(const char *ifname, mozilla::dom::Ethernet
 
 EthernetBackend::EthernetBackend()
 {
-	SSLOGF();
 	mImpl = new EthernetBackendImpl();
   mNetUtils = new NetUtils();
 }
@@ -105,13 +36,9 @@ EthernetBackend::ExecuteCommand(CommandOptions aOptions,
                       			mozilla::dom::EthernetResultOptions& aResult,
                       			const nsCString& aInterface)
 {
-	SSLOGF();
   if (!mNetUtils->GetSharedLibrary()) {
-    SSLOGI("Could not get shared library");
     return false;
   }
-
-  SSLOGI("Ok, start ...");
 
   // Always correlate the opaque ids.
   aResult.mId = aOptions.mId;
@@ -119,14 +46,10 @@ EthernetBackend::ExecuteCommand(CommandOptions aOptions,
   if (aOptions.mCmd.EqualsLiteral("get_ethernet_stats")) {
     mImpl->getEthernetStats(aInterface.get(), aResult);
   } else if (aOptions.mCmd.EqualsLiteral("ifc_enable")) {
-    SSLOGI("do_ifc_enable");
     aResult.mStatus = mNetUtils->do_ifc_enable(aInterface.get());
   } else if (aOptions.mCmd.EqualsLiteral("ifc_disable")) {
-    SSLOGI("do_ifc_disable");
     aResult.mStatus = mNetUtils->do_ifc_disable(aInterface.get());
   } else if (aOptions.mCmd.EqualsLiteral("dhcp_do_request")) {
-    SSLOGI("dhcp_do_request");
-    // aResult.mStatus = mNetUtils->dhcp_do_request()
     char ipaddr[PROPERTY_VALUE_MAX];
     char gateway[PROPERTY_VALUE_MAX];
     uint32_t prefixLength;
@@ -192,17 +115,14 @@ EthernetBackend::ExecuteCommand(CommandOptions aOptions,
       aResult.mBroadcast_str = NS_ConvertUTF8toUTF16(inet_str);
     }
   } else if (aOptions.mCmd.EqualsLiteral("dhcp_stop")) {
-    SSLOGI("dhcp_stop");
     aResult.mStatus = mNetUtils->do_dhcp_stop(aInterface.get());
   } else {
-    SSLOGI("Unknown command");
     NS_WARNING("EthernetBackend::ExecuteCommand : Unknown command");
     printf_stderr("EthernetBackend::ExecuteCommand : Unknown command: %s",
       NS_ConvertUTF16toUTF8(aOptions.mCmd).get());
     return false;
   }
 
-  SSLOGI("Done :)");
 	return true;
 }
 

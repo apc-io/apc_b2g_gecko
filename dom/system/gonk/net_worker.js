@@ -15,7 +15,7 @@
 
 "use strict";
 
-const DEBUG = true;
+const DEBUG = false;
 
 const PERSIST_SYS_USB_CONFIG_PROPERTY = "persist.sys.usb.config";
 const SYS_USB_CONFIG_PROPERTY         = "sys.usb.config";

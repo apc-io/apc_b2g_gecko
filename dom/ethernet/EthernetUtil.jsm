@@ -13,8 +13,6 @@ Cu.import("resource://gre/modules/systemlibs.js");
 Cu.import("resource://gre/modules/NetUtil.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
 
-const kEthernetWorkerWorkerPath = "resource://gre/modules/ethernet_worker.js";
-
 const kNetdInterfaceChangedTopic         = "netd-interface-change";
 const kNetworkInterfaceStateChangedTopic = "network-interface-state-changed";
 const kNetworkInterfaceRegisteredTopic   = "network-interface-registered";
@@ -68,7 +66,7 @@ this.EthernetUtil = {
   init: function EthernetUtil_init() {
   	debug("EthernetUtil_init");
 
-  	this.controlWorker = null;
+  	// this.controlWorker = null;
   	this.networkInterfaces = {};
   	this.currentIfname = null;
   	this.idgen = 0;
@@ -82,10 +80,10 @@ this.EthernetUtil = {
     // preferences
     this.getStartupPreferences();
 
-    // setup worker(s)
-    this.controlWorker = new ChromeWorker(kEthernetWorkerWorkerPath);
-    this.controlWorker.onmessage = this.onmessage;
-    this.controlWorker.onerror = this.onerror;
+    // // setup worker(s)
+    // this.controlWorker = new ChromeWorker(kEthernetWorkerWorkerPath);
+    // this.controlWorker.onmessage = this.onmessage;
+    // this.controlWorker.onerror = this.onerror;
 
     this.initServices();
 
@@ -98,7 +96,6 @@ this.EthernetUtil = {
 
         return true; // no way it is connected to go further
       } else {
-        debug("FIXME: just _setEnabled(true) here but is it ok in all cases? pls note that we did not get ip yet");
         this._setEnabled(true);
       }
 
@@ -186,27 +183,7 @@ this.EthernetUtil = {
     }
   },
 
-  // worker related
-  // OK, a note here, with onmessage and onerror, this will be the worker
-  // => this must be specific as EthernetUtil or other kind of id
-  onmessage: function ControlWorker_onmessage(e) {
-    debug("ControlWorker_onmessage");
-    // let data = e.data;
-    // let id = data.id;
-    // let callback = EthernetUtil.controlCallbacks[id];
-    // if (callback) {
-    //   callback(data);
-    //   delete EthernetUtil.controlCallbacks[id];
-    // }
-  },
-
-  onerror: function ControlWorker_onerror(e) {
-    debug("eo`, error: " + e.data);
-    e.preventDefault();
-  },
-
-  controlMessage: function ControlWorker_controlMessage(params, callback) {
-    // debug("Let's make our worker do the work then: "+ this.controlWorker);
+  controlMessage: function EthernetUtil_controlMessage(params, callback) {
     let id = this.idgen++;
     params.id = id;
     if (callback) {
@@ -252,10 +229,6 @@ this.EthernetUtil = {
   	debug("EthernetUtil_initInterface: " + ifname);
   	EthernetBackend.getEthernetStats(ifname, this);
   },
-
-  // checkEthernetState: function EthernetUtil_checkEthernetStats(ifname) {
-  //   debug("EthernetUtil_checkEthernetStats: " + ifname);
-  // },
 
   addInterface: function EthernetUtil_addInterface(iface) {
     debug("Well, the board has only one ethernet interface, but just prepare this for the advance case :)");
@@ -394,16 +367,6 @@ this.EthernetUtil = {
 
     return true;
   },
-
-  // getEthernetStats: function EthernetUtil_getEthernetStats(ifname, callback) {
-  //   debug("EthernetUtil_getEthernetStats: " + ifname);
-  //   let workParams = {
-  //     cmd: "get_ethernet_stats",
-  //     ifname: ifname
-  //   };
-
-  //   this.controlMessage(workParams, callback);
-  // },
 
   dhcpDoRequest: function EthernetUtil_dhcpDoRequest(ifname, callback) {
     debug("EthernetUtil_dhcpDoRequest: " + ifname);
@@ -550,9 +513,6 @@ this.EthernetUtil = {
   ethernetStatsAvailable: function nsIEthernetStatsCallback_ethernetStatsAvailable(
     result, details) {
   	debug("Ok, good, got result");
-    dumpObj(details);
-    debug("this is the result");
-    dumpObj(result);
 
   	if (details.hwaddress == kInvalidHWAddr) {
   	  debug("Well, the device " + details.ifname + " is not available");
