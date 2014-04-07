@@ -258,6 +258,11 @@ CommandFunc NetworkUtils::sNetworkInterfaceStatsChain[] = {
   NetworkUtils::networkInterfaceStatsSuccess
 };
 
+CommandFunc NetworkUtils::sNetworkInterfaceGetCfgChain[] = {
+  NetworkUtils::networkInterfaceGetCfg,
+  NetworkUtils::networkInterfaceGetCfgSuccess
+};
+
 CommandFunc NetworkUtils::sNetworkInterfaceEnableAlarmChain[] = {
   NetworkUtils::enableAlarm,
   NetworkUtils::setQuota,
@@ -279,11 +284,6 @@ CommandFunc NetworkUtils::sNetworkInterfaceSetAlarmChain[] = {
 CommandFunc NetworkUtils::sSetDnsChain[] = {
   NetworkUtils::setDefaultInterface,
   NetworkUtils::setInterfaceDns
-};
-
-CommandFunc NetworkUtils::sGetEthernetStatsChain[] = {
-  NetworkUtils::requestGetIfaceCfg,
-  NetworkUtils::getEthernetStatsSuccess
 };
 
 /**
@@ -912,7 +912,7 @@ void NetworkUtils::setInterfaceDns(CommandChain* aChain,
   doCommand(command, aChain, aCallback);
 }
 
-void NetworkUtils::requestGetIfaceCfg(CommandChain* aChain,
+void NetworkUtils::networkInterfaceGetCfg(CommandChain* aChain,
                                       CommandCallback aCallback,
                                       NetworkResultOptions& aOptions)
 {
@@ -1059,15 +1059,15 @@ void NetworkUtils::setDnsFail(NetworkParams& aOptions, NetworkResultOptions& aRe
   postMessage(aOptions, aResult);
 }
 
-void NetworkUtils::getEthernetStatsSuccess(CommandChain* aChain,
+void NetworkUtils::networkInterfaceGetCfgSuccess(CommandChain* aChain,
                                            CommandCallback aCallback,
                                            NetworkResultOptions& aResult)
 {
-  SSLOGF();
+  SSLOGI("we can do some futher processing here, e.g getIpAddr");
   postMessage(aChain->getParams(), aResult);
 }
 
-void NetworkUtils::getEthernetStatsFail(NetworkParams& aOptions, NetworkResultOptions& aResult)
+void NetworkUtils::networkInterfaceGetCfgFail(NetworkParams& aOptions, NetworkResultOptions& aResult)
 {
   postMessage(aOptions, aResult);
 }
@@ -1136,8 +1136,8 @@ void NetworkUtils::ExecuteCommand(NetworkParams aOptions)
     enableUsbRndis(aOptions);
   } else if (aOptions.mCmd.EqualsLiteral("updateUpStream")) {
     updateUpStream(aOptions);
-  } else if (aOptions.mCmd.EqualsLiteral("getEthernetStats")) {
-    getEthernetStats(aOptions);
+  } else if (aOptions.mCmd.EqualsLiteral("getNetworkInterfaceCfg")) {
+    getNetworkInterfaceCfg(aOptions);
   } else {
     WARN("unknon message");
     return;
@@ -1484,6 +1484,12 @@ bool NetworkUtils::getNetworkInterfaceStats(NetworkParams& aOptions)
   return  true;
 }
 
+bool NetworkUtils::getNetworkInterfaceCfg(NetworkParams& aOptions) {
+  SSLOGF();
+  RUN_CHAIN(aOptions, sNetworkInterfaceGetCfgChain, networkInterfaceGetCfgFail);
+  return true;
+}
+
 bool NetworkUtils::setNetworkInterfaceAlarm(NetworkParams& aOptions)
 {
   DEBUG("setNetworkInterfaceAlarms: %s", GET_CHAR(mIfname));
@@ -1672,12 +1678,6 @@ bool NetworkUtils::enableUsbRndis(NetworkParams& aOptions)
 bool NetworkUtils::updateUpStream(NetworkParams& aOptions)
 {
   RUN_CHAIN(aOptions, sUpdateUpStreamChain, updateUpStreamFail)
-  return true;
-}
-
-bool NetworkUtils::getEthernetStats(NetworkParams& aOptions) {
-  SSLOGF();
-  RUN_CHAIN(aOptions, sGetEthernetStatsChain, getEthernetStatsFail)
   return true;
 }
 

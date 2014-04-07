@@ -250,8 +250,7 @@ this.EthernetUtil = {
   // network interface related
   initInterface: function EthernetUtil_initInterface(ifname) {
   	debug("EthernetUtil_initInterface: " + ifname);
-  	// EthernetBackend.getEthernetStats(ifname, this);
-    gNetworkService.getNetworkInterfaceStats(ifname, this);
+  	EthernetBackend.getEthernetStats(ifname, this);
   },
 
   // checkEthernetState: function EthernetUtil_checkEthernetStats(ifname) {
@@ -580,7 +579,7 @@ this.EthernetBackend = {
       cmd: "getEthernetStats",
       ifname: ifname,
       up: false, // operstate
-      cableConnected: false, // carrier, but I could not open this :(
+      cableConnected: false, // carrier
       config: "",
       hwaddr: "",
       ip: "",
@@ -596,7 +595,7 @@ this.EthernetBackend = {
     return true;
   },
 
-  _getCarrier: function(params, callback, service) {
+  _getCarrier: function(params, callback) {
     let carrierFile = "/sys/class/net/" + params.ifname + "/carrier";
     debug("Let's open file " + carrierFile);
     let file = new FileUtils.File(carrierFile);
@@ -621,39 +620,27 @@ this.EthernetBackend = {
         debug("isSuccessCode is " + status + ", this mean, cableConnected = false");
         params.cableConnected = false;
       }
-      service._getOperstate(params, callback);
+
+      // call to network service to get the config
+      gNetworkService.getNetworkInterfaceCfg(params.ifname, {
+        params: params,
+        callback: callback,
+        interfaceCfgAvailable: function(success, details) {
+          debug("interfaceCfgAvailable - " + success);
+          resultReason = details.resultReason;
+          params.up = resultReason.indexOf("up") >= 0;
+          if (params.up) {
+            EthernetBackend._getIpAddress(params, callback);
+          } else {
+            callback.ethernetStatsAvailable(true, params);
+          }
+        }
+      });
     });
   },
 
-  _getOperstate: function(params, callback) {
-    let fileName = "/sys/class/net/" + params.ifname + "/operstate";
-    debug("Let's open file " + fileName);
-    let file = new FileUtils.File(fileName);
-
-    if (!file) {
-      debug("Unable to open file " + fileName);
-      callback.ethernetStatsAvailable(false, params);
-      return false;
-    }
-
-    NetUtil.asyncFetch(file, function(inputStream, status) {
-      debug("==== this is NetUtil.asyncFetch(status = " + status + ")");
-      if (Components.isSuccessCode(status)) {
-        let data = NetUtil.readInputStreamToString(inputStream, inputStream.available()).trim();
-        debug("We got the data ===== " + data + " ======");
-        if (data == kNetworkInterfaceUp) {
-          params.up = true;
-          EthernetBackend._getIpAddress(params, callback);
-        } else {
-          params.up = false;
-          callback.ethernetStatsAvailable(true, params);
-        }
-        // let's get the ip address
-      } else {
-        debug("isSuccessCode is " + status + ", no action :(");
-        callback.ethernetStatsAvailable(false, params);
-      }
-    });
+  interfaceCfgAvailable: function(success, details) {
+    
   },
 
   _getIpAddress: function(params, callback) {
