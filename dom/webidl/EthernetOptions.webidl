@@ -19,7 +19,7 @@ dictionary EthernetCommandOptions
                           // "dhcp_do_request_renew".
   long route;             // for "ifc_add_host_route", "ifc_set_default_route".
   long ipaddr;            // for "ifc_configure".
-  long mask;              // for "ifc_configure".
+  long prefixLength;      // for "ifc_configure".
   long gateway;           // for "ifc_configure".
   long dns1;              // for "ifc_configure".
   long dns2;              // for "ifc_configure".

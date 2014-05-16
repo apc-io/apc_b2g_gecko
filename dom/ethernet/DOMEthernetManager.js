@@ -9,6 +9,7 @@ const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/DOMRequestHelper.jsm");
+Cu.import("resource://gre/modules/EthernetConstants.jsm");
 
 const DEBUG = true; // set to false to suppress debug messages
 
@@ -80,6 +81,9 @@ DOMEthernetManager.prototype = {
     Services.obs.addObserver(this, TOPIC_INTERFACE_UNREGISTERED, false);
     // Services.obs.addObserver(this, TOPIC_ACTIVE_CHANGED, false);
     debug("Init() with " + aWindow);
+
+    // TODO: fix the permission
+
     let principal = aWindow.document.nodePrincipal;
     // let secMan = Cc["@mozilla.org/scriptsecuritymanager;1"].getService(Ci.nsIScriptSecurityManager);
 
@@ -93,6 +97,7 @@ DOMEthernetManager.prototype = {
 
     // Maintain this state for synchronous APIs.
     // this._connectionStatus = "disconnected";
+    this._present = true;
     this._enabled = true;
     this._connected = false;
     this._connection = null;
@@ -101,26 +106,43 @@ DOMEthernetManager.prototype = {
     this._onConnectionUpdated = null;
 
     // this is the messages we used to communicate between this DOM Element and EthernetWorker (the manager backend)
-    const messages = ["EthernetManager:enable", "EthernetManager:disable",
-                      "EthernetManager:connect", "EthernetManager:disconnect",
-                      "EthernetManager:getEnabled", "EthernetManager:getConnected",
-                      "EthernetManager:onEnabled", "EthernetManager:onDisabled",
-                      "EthernetManager:onConnected", "EthernetManager:onDisconnected",
-                      "EthernetManager:getConnection"];
+    const messages = [EthernetMessage.GETPRESENT,         EthernetMessage.GETSTATS,
+                      EthernetMessage.ENABLE,             EthernetMessage.DISABLE,
+                      EthernetMessage.CONNECT,            EthernetMessage.DISCONNECT,
+                      EthernetMessage.RECONNECT,          EthernetMessage.SETDHCPCD,
+                      EthernetMessage.SETSTATICIPCONFIG,  EthernetMessage.SETADDR,
+                      EthernetMessage.SETMASK,            EthernetMessage.SETGATEWAY,
+                      EthernetMessage.SETDNS1,            EthernetMessage.SETDNS2,
+                      EthernetMessage.GETENABLED,         EthernetMessage.GETCONNECTED,
+                      EthernetMessage.ONENABLED,          EthernetMessage.ONDISABLED,
+                      EthernetMessage.ONCONNECTED,        EthernetMessage.ONDISCONNECTED,
+                      EthernetMessage.ONDHCPCHANGED,      EthernetMessage.GETCONNECTION];
     this.initDOMRequestHelper(aWindow, messages);
 
     this._mm = Cc["@mozilla.org/childprocessmessagemanager;1"].getService(Ci.nsISyncMessageSender);
+    // messages.forEach((function(msgName) {
+    //   this._mm.addMessageListener(msgName, this);
+    // }).bind(this));
 
-    this._enabled = this._mm.sendSyncMessage("EthernetManager:getEnabled");
-    debug("---- so, got the getEnabled: " + this._enabled);
-    for (let k in this._enabled) {
-      debug("----- enabled." + k + ": " + this._enabled[k]);
+    // this._present = this._mm.sendSyncMessage(EthernetMessage.GETPRESENT);
+
+    // this._enabled = this._mm.sendSyncMessage(EthernetMessage.GETENABLED);
+    // debug("---- so, got the getEnabled: " + this._enabled);
+    // for (let k in this._enabled) {
+    //   debug("----- enabled." + k + ": " + this._enabled[k]);
+    // }
+    // if (this._enabled) {
+    //   // this._connection = this._mm.sendSyncMessage("EthernetManager:getConnection");
+    //   this._connected = (this._mm.sendSyncMessage(EthernetMessage.GETCONNECTED) == "true") ? true : false;
+    //   debug("now connected == " + this._connected);
+    // }
+    let stats = this._mm.sendSyncMessage(EthernetMessage.GETSTATS);
+    if (0 in stats) {
+      stats = stats[0];
     }
-    if (this._enabled) {
-      // this._connection = this._mm.sendSyncMessage("EthernetManager:getConnection");
-      this._connected = (this._mm.sendSyncMessage("EthernetManager:getConnected") == "true") ? true : false;
-      debug("now connected == " + this._connected);
-    }
+    this._present = stats.present;
+    this._enabled = stats.enabled;
+    this._connected = stats.connected;
   },
 
   uninit: function() {
@@ -135,34 +157,28 @@ DOMEthernetManager.prototype = {
     debug("We got the message from " + subject + "(" + interfaceName + ") with topic " + topic + " and the data " + data);
   },
 
-  _sendMessageForRequest: function(name, data, request) {
-    debug("_sendMessageForRequest()" + name + "," + data + "," + request);
-    let id = this.getRequestId(request);
-    this._mm.sendAsyncMessage(name, { data: data, rid: id, mid: this._id });
-  },
-
   receiveMessage: function(aMessage) {
     debug("receiveMessage: " + aMessage.name);
     let msg = aMessage.json;
     if (msg.mid && msg.mid != this._id)
       return;
     switch (aMessage.name) {
-      case "EthernetManager:onConnected":
+      case EthernetMessage.ONCONNECTED:
         this._connected = true;
         var evt = new this._window.Event("EthernetConnected");
         this._onConnectedChanged.handleEvent(evt);
         break;
-      case "EthernetManager:onDisconnected":
+      case EthernetMessage.ONDISCONNECTED:
         this._connected = false;
         var evt = new this._window.Event("EthernetDisconnected");
         this._onConnectedChanged.handleEvent(evt);
         break;
-      case "EthernetManager:onEnabled":
+      case EthernetMessage.ONENABLED:
         this._enabled = true;
         var evt = new this._window.Event("EthernetEnabled");
         this._onEnabledChanged.handleEvent(evt);
         break;
-      case "EthernetManager:onDisabled":
+      case EthernetMessage.ONDISABLED:
         this._enabled = false;
         var evt = new this._window.Event("EthernetDisabled");
         this._onEnabledChanged.handleEvent(evt);
@@ -170,34 +186,95 @@ DOMEthernetManager.prototype = {
     }
   },
 
-  enable: function nsIDOMEthernetManager_enable() {
-    debug("enable");
+  _checkPermission: function() {
+    debug("Checking permission");
+    if (!this._hasPrivileges)
+      throw new Components.Exception("Denied", Cr.NS_ERROR_FAILURE);
+    return true;
+  },
+
+  _sendMessageForRequest: function(name, data, request) {
+    debug("_sendMessageForRequest()" + name + "," + data + "," + request);
+    let id = this.getRequestId(request);
+    this._mm.sendAsyncMessage(name, { data: data, rid: id, mid: this._id });
+  },
+
+  _createAndSendRequest: function(name, data) {
     var request = this.createRequest();
-    this._sendMessageForRequest("EthernetManager:enable", null, request);
+    this._sendMessageForRequest(name, data, request);
     return request;
+  },
+
+  enable: function nsIDOMEthernetManager_enable() {
+    debug(EthernetMessage.ENABLE);
+    this._checkPermission();
+    return this._createAndSendRequest(EthernetMessage.ENABLE, null);
   },
 
   disable: function nsIDOMEthernetManager_disable() {
-    debug("disable");
-    var request = this.createRequest();
-    this._sendMessageForRequest("EthernetManager:disable", null, request);
-    return request;
+    debug(EthernetMessage.DISABLE);
+    this._checkPermission();
+    return this._createAndSendRequest(EthernetMessage.DISABLE, null);
   },
 
-  connect: function nsIDOMEthernetManager_connect() {
-    debug("connect");
-    var request = this.createRequest();
-    this._sendMessageForRequest("EthernetManager:connect", null, request);
-    return request;
+  // connect: function nsIDOMEthernetManager_connect() {
+  //   debug(EthernetMessage.CONNECT);
+  //   this._checkPermission();
+  //   return this._createAndSendRequest(EthernetMessage.CONNECT, null);
+  // },
+
+  // disconnect: function nsIDOMEthernetManager_disconnect() {
+  //   debug(EthernetMessage.DISCONNECT);
+  //   this._checkPermission();    
+  //   return this._createAndSendRequest(EthernetMessage.DISCONNECT, null);
+  // },
+
+  // reconnect: function nsIDOMEthernetManager_reconnect() {
+  //   debug(EthernetMessage.RECONNECT);
+  //   this._checkPermission();
+  //   return this._createAndSendRequest(EthernetMessage.RECONNECT, null);
+  // },
+
+  setdhcp: function nsIDOMEthernetManager_setdhcp(enabled) {
+    debug(EthernetMessage.SETDHCPCD + " -> " + enabled);
+    this._checkPermission();
+    return this._createAndSendRequest(EthernetMessage.SETDHCPCD, enabled);
   },
 
-  disconnect: function nsIDOMEthernetManager_disconnect() {
-    debug("disconnect");
-    // if (!this._hasPrivileges)
-    //   throw new Components.Exception("Denied", Cr.NS_ERROR_FAILURE);
-    var request = this.createRequest();
-    this._sendMessageForRequest("EthernetManager:disconnect", null, request);
-    return request;
+  setstaticipconfig: function nsIDOMEthernetManager_setstaticipconfig(config) {
+    debug("Set static ip config to: " + config.ip + " - " + config.netmask + " - " + config.gateway + " - " + config.dns1 + " - " + config.dns2);
+    this._checkPermission();
+    return this._createAndSendRequest(EthernetMessage.SETSTATICIPCONFIG, config);
+  },
+
+  setaddr: function nsIDOMEthernetManager_setaddr(ip) {
+    debug("Set static ip address to : " + ip);
+    this._checkPermission();
+    return this._createAndSendRequest(EthernetMessage.SETADDR, ip);
+  },
+
+  setnetmask: function nsIDOMEthernetManager_setnetmask(mask) {
+    debug("Set static netmask to: " + mask);
+    this._checkPermission();
+    return this._createAndSendRequest(EthernetMessage.SETMASK, mask);
+  },
+
+  setgateway: function nsIDOMEthernetManager_setgateway(gw) {
+    debug("Set gateway to: " + gw);
+    this._checkPermission();
+    return this._createAndSendRequest(EthernetMessage.SETGATEWAY, gw);
+  },
+
+  setdns1: function nsIDOMEthernetManager_setdns1(dns1) {
+    debug("Set dns1 to: " + dns1);
+    this._checkPermission();
+    return this._createAndSendRequest(EthernetMessage.SETDNS1, dns1);
+  },
+
+  setdns2: function nsIDOMEthernetManager_setdns2(dns2) {
+    debug("Set dns2 to: " + dns2);
+    this._checkPermission();
+    return this._createAndSendRequest(EthernetMessage.SETDNS2, dns2);
   },
 
   // enabled: true,
@@ -225,6 +302,13 @@ DOMEthernetManager.prototype = {
     if (!this._hasPrivileges)
       throw new Components.Exception("Denied", Cr.NS_ERROR_FAILURE);
     return this._connection;
+  },
+
+  get present() {
+    debug("Get present");
+    if (!this._hasPrivileges)
+      throw new Components.Exception("Denied", Cr.NS_ERROR_FAILURE);
+    return this._present;
   },
 
   set onenabledchanged(callback) {

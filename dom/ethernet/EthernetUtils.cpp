@@ -2,6 +2,72 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+//Slacker LOG
+
+#define SSLOG_ENABLED
+#ifdef SSLOG_ENABLED
+
+#ifdef __cplusplus
+#include <cstdio>
+#else
+#include <stdio.h>
+#endif
+
+#include <android/log.h>
+
+#define SSLOG_TAG_WARNING "W"
+#define SSLOG_TAG_INFO "I"
+#define SSLOG_TAG_DEBUG "D"
+
+#ifdef __cplusplus
+#define SSLOG(tag, args...) \
+{ \
+  std::printf("[%s] %s:%s", tag, __FILE__, __PRETTY_FUNCTION__); \
+  std::printf(args); \
+  std::printf("\n"); \
+}
+#else
+#define SSLOG(tag, args...) \
+{ \
+  printf("[%s] %s:%s", tag, __FILE__, __PRETTY_FUNCTION__); \
+  printf(args); \
+  printf("\n"); \
+}
+#endif
+
+#define ANDRTAG __PRETTY_FUNCTION__
+
+#define SSLOGI(...) { \
+  SSLOG(SSLOG_TAG_INFO, __VA_ARGS__); \
+  __android_log_print(ANDROID_LOG_INFO, ANDRTAG, __VA_ARGS__); \
+}
+
+#define SSLOGW(...) {\
+  SSLOG(SSLOG_TAG_WARNING, __VA_ARGS__); \
+  __android_log_print(ANDROID_LOG_WARN, ANDRTAG, __VA_ARGS__);\
+}
+
+#define SSLOGD(...) {\
+  SSLOG(SSLOG_TAG_DEBUG, __VA_ARGS__); \
+  __android_log_print(ANDROID_LOG_DEBUG, ANDRTAG, __VA_ARGS__);\
+}
+
+// just print the function signature and the file name
+#define SSLOGF() {\
+  SSLOG(SSLOG_TAG_INFO, " "); \
+  __android_log_print(ANDROID_LOG_INFO, __FILE__, "%s", __PRETTY_FUNCTION__); \
+}
+
+#else
+
+#define SSLOGI(...)
+#define SSLOGW(...)
+#define SSLOGD(...)
+#define SSLOGF(...)
+
+#endif
+
+
 #include "EthernetUtils.h"
 
 #include <cutils/properties.h>
@@ -49,6 +115,27 @@ EthernetBackend::ExecuteCommand(CommandOptions aOptions,
     aResult.mStatus = mNetUtils->do_ifc_enable(aInterface.get());
   } else if (aOptions.mCmd.EqualsLiteral("ifc_disable")) {
     aResult.mStatus = mNetUtils->do_ifc_disable(aInterface.get());
+  } else if (aOptions.mCmd.EqualsLiteral("ifc_configure")) {
+    SSLOGI("Doing ifc_configure here!");
+    SSLOGI("-- Interface is %s", aInterface.get());
+    SSLOGI("-- address is %d", aOptions.mIpaddr);
+    SSLOGI("-- prefixLength is %d", aOptions.mPrefixLength);
+    SSLOGI("-- gateway is %d", aOptions.mGateway);
+    SSLOGI("-- dns1 is %d", aOptions.mDns1);
+    SSLOGI("-- dns2 is %d", aOptions.mDns2);
+    aResult.mStatus = mNetUtils->do_ifc_configure(aInterface.get(),
+                                                  aOptions.mIpaddr,
+                                                  aOptions.mPrefixLength,
+                                                  aOptions.mGateway,
+                                                  aOptions.mDns1,
+                                                  aOptions.mDns2);
+    aResult.mIpaddr = aOptions.mIpaddr;
+    aResult.mGateway = aOptions.mGateway;
+    // aResult.mPrefixLength = aOptions.mPrefixLength;
+    aResult.mMask = EthernetBackend::MakeMask(aOptions.mPrefixLength);
+    aResult.mDns1 = aOptions.mDns1;
+    aResult.mDns2 = aOptions.mDns2;
+    // aResult.mStatus = mNetUtils->do_ifc_configure(aInterface.get())
   } else if (aOptions.mCmd.EqualsLiteral("dhcp_do_request")) {
     char ipaddr[PROPERTY_VALUE_MAX];
     char gateway[PROPERTY_VALUE_MAX];

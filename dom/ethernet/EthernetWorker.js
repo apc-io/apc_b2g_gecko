@@ -9,6 +9,7 @@ const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 // Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/EthernetUtil.jsm");
+Cu.import("resource://gre/modules/EthernetConstants.jsm");
 
 var DEBUG = true; // set to true to show debug messages
 
@@ -21,12 +22,17 @@ var EthernetWorker = (function() {
   // setting up message listeners
   this._mm = Cc["@mozilla.org/parentprocessmessagemanager;1"]
              .getService(Ci.nsIMessageListenerManager);
-  const messages = ["EthernetManager:enable", "EthernetManager:disable",
-                    "EthernetManager:connect", "EthernetManager:disconnect",
-                    "EthernetManager:getEnabled", "EthernetManager:getConnected",
-                    "EthernetManager:onEnabled", "EthernetManager:onDisabled",
-                    "EthernetManager:onConnected", "EthernetManager:onDisconnected",
-                    "EthernetManager:getConnection",
+  const messages = [EthernetMessage.GETPRESENT,         EthernetMessage.GETSTATS,
+                    EthernetMessage.ENABLE,             EthernetMessage.DISABLE,
+                    EthernetMessage.CONNECT,            EthernetMessage.DISCONNECT,
+                    EthernetMessage.RECONNECT,          EthernetMessage.SETDHCPCD,
+                    EthernetMessage.SETSTATICIPCONFIG,  EthernetMessage.SETADDR,
+                    EthernetMessage.SETMASK,            EthernetMessage.SETGATEWAY,
+                    EthernetMessage.SETDNS1,            EthernetMessage.SETDNS2,
+                    EthernetMessage.GETENABLED,         EthernetMessage.GETCONNECTED,
+                    EthernetMessage.ONENABLED,          EthernetMessage.ONDISABLED,
+                    EthernetMessage.ONCONNECTED,        EthernetMessage.ONDISCONNECTED,
+                    EthernetMessage.ONDHCPCHANGED,      EthernetMessage.GETCONNECTION,
                     "child-process-shutdown"];
 
   messages.forEach((function(msgName) {
@@ -52,10 +58,12 @@ EthernetWorker.prototype = {
                                          Ci.nsISettingsServiceCallback]),
   _domManagers: [],
   _fireEvent: function(message, data) {
+    debug(">>>>>>>>> Sending message: " + message);
     this._domManagers.forEach(function(manager) {
+      debug(">>>>>>>>> Sending message: " + message + " to the manager " + manager);
       // Note: We should never have a dead message manager here because we
       // observe our child message managers shutting down, below.
-      manager.sendAsyncMessage("EthernetManager:" + message, data);
+      manager.sendAsyncMessage(message, data);
     });
   },
 
@@ -77,26 +85,79 @@ EthernetWorker.prototype = {
     for (let k in aMessage) {
       debug(",,,,,,,, aMessage." + k + ": " + aMessage[k]);
     }
+
+    debug("And here we go with the details of the data");
+    for (let k in msg) {
+      debug("......data." + k + ": " + msg[k]);
+    }
     switch (aMessage.name) {
-      case "EthernetManager:getEnabled": {
-        let i;
-        if ((i = this._domManagers.indexOf(msg.manager)) === -1) {
+      case EthernetMessage.GETSTATS: {
+        // init the manager for this worker :)
+        if (this._domManagers.indexOf(msg.manager) === -1) {
           this._domManagers.push(msg.manager);
         }
+        debug("Ok, we gonna get stats!");
+        var stats = {
+          present: true,
+          enabled: EthernetUtil.getEnabled(),
+          connected: EthernetUtil.getConnected()
+        };
+
+        return stats;
+      }
+      case EthernetMessage.GETENABLED: {
+        // let i;
+        // if ((i = this._domManagers.indexOf(msg.manager)) === -1) {
+        //   this._domManagers.push(msg.manager);
+        // }
         debug("ok, let's getEnabled");
         return this.getEnabled();
       }
-      case "EthernetManager:getConnected": {
+      case EthernetMessage.GETCONNECTED: {
         return this.getConnected();
       }
-      case "EthernetManager:enable": {
+      case EthernetMessage.ENABLE: {
         debug("ok, let's enable");
         EthernetUtil.enable();
       }
       break;
-      case "EthernetManager:disable": {
+      case EthernetMessage.DISABLE: {
         debug("Ok, let's disable");
         EthernetUtil.disable();
+      }
+      break;
+      case EthernetMessage.SETDHCPCD: {
+        debug(EthernetMessage.SETDHCPCD);
+        EthernetUtil.setdhcpcd(msg.data);
+      }
+      break;
+      case EthernetMessage.RECONNECT: {
+        debug(EthernetManager.RECONNECT + " We not gonna to support this !");
+      }
+      break;
+      case EthernetMessage.SETADDR: {
+        debug(EthernetMessage.SETADDR + " - " + msg.data);
+        EthernetUtil.setIpAddr(msg.data);
+      }
+      break;
+      case EthernetMessage.SETGATEWAY: {
+        debug(EthernetMessage.SETGATEWAY + " - " + msg.data);
+        EthernetUtil.setGateway(msg.data);
+      }
+      break;
+      case EthernetMessage.SETMASK: {
+        debug(EthernetMessage.SETMASK + " - " + msg.data);
+        EthernetUtil.setNetmask(msg.data);
+      }
+      break;
+      case EthernetMessage.SETDNS1: {
+        debug(EthernetMessage.SETDNS1 + " - " + msg.data);
+        EthernetUtil.setDNS1(msg.data);
+      }
+      break;
+      case EthernetMessage.SETDNS2: {
+        debug(EthernetMessage.SETDNS2 + " + " + msg.data);
+        EthernetUtil.setDNS2(msg.data);
       }
       break;
       default:
@@ -122,17 +183,18 @@ EthernetWorker.prototype = {
   onEnabledChanged: function(enabled) {
     debug("Ok, enabled is changed to: " + enabled);
     if (enabled) {
-      this._fireEvent("onEnabled", {});
+      this._fireEvent(EthernetMessage.ONENABLED, {});
     } else {
-      this._fireEvent("onDisabled", {});
+      this._fireEvent(EthernetMessage.ONDISABLED, {});
     }
   },
 
   onConnectedChanged: function(connected) {
+    debug("---- ok connected is changed to " + connected);
     if (connected) {
-      this._fireEvent("onConnected", {});
+      this._fireEvent(EthernetMessage.ONCONNECTED, {});
     } else {
-      this._fireEvent("onDisconnected", {});
+      this._fireEvent(EthernetMessage.ONDISCONNECTED, {});
     }
   }
 };

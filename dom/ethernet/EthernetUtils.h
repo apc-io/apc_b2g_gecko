@@ -27,7 +27,7 @@ public:
     mIfname = aOther.mIfname;
     mRoute = aOther.mRoute;
     mIpaddr = aOther.mIpaddr;
-    mMask = aOther.mMask;
+    mPrefixLength = aOther.mPrefixLength;
     mGateway = aOther.mGateway;
     mDns1 = aOther.mDns1;
     mDns2 = aOther.mDns2;
@@ -52,7 +52,7 @@ public:
     COPY_OPT_FIELD(mIfname, EmptyString())
     COPY_OPT_FIELD(mIpaddr, 0)
     COPY_OPT_FIELD(mRoute, 0)
-    COPY_OPT_FIELD(mMask, 0)
+    COPY_OPT_FIELD(mPrefixLength, 0)
     COPY_OPT_FIELD(mGateway, 0)
     COPY_OPT_FIELD(mDns1, 0)
     COPY_OPT_FIELD(mDns2, 0)
@@ -74,7 +74,7 @@ public:
   nsString mIfname;
   int32_t mIpaddr;
   nsString mKey;
-  int32_t mMask;
+  int32_t mPrefixLength;
   nsString mRequest;
   int32_t mRoute;
   nsString mValue;
