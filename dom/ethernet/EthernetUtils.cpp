@@ -49,6 +49,22 @@ EthernetBackend::ExecuteCommand(CommandOptions aOptions,
     aResult.mStatus = mNetUtils->do_ifc_enable(aInterface.get());
   } else if (aOptions.mCmd.EqualsLiteral("ifc_disable")) {
     aResult.mStatus = mNetUtils->do_ifc_disable(aInterface.get());
+  } else if (aOptions.mCmd.EqualsLiteral("ifc_reset_connections")) {
+    aResult.mStatus = mNetUtils->do_ifc_reset_connections(aInterface.get(), RESET_ALL_ADDRESSES);
+  } else if (aOptions.mCmd.EqualsLiteral("ifc_configure")) {
+    aResult.mStatus = mNetUtils->do_ifc_configure(aInterface.get(),
+                                                  aOptions.mIpaddr,
+                                                  aOptions.mPrefixLength,
+                                                  aOptions.mGateway,
+                                                  aOptions.mDns1,
+                                                  aOptions.mDns2);
+    aResult.mIpaddr = aOptions.mIpaddr;
+    aResult.mGateway = aOptions.mGateway;
+    // aResult.mPrefixLength = aOptions.mPrefixLength;
+    aResult.mMask = EthernetBackend::MakeMask(aOptions.mPrefixLength);
+    aResult.mDns1 = aOptions.mDns1;
+    aResult.mDns2 = aOptions.mDns2;
+    // aResult.mStatus = mNetUtils->do_ifc_configure(aInterface.get())
   } else if (aOptions.mCmd.EqualsLiteral("dhcp_do_request")) {
     char ipaddr[PROPERTY_VALUE_MAX];
     char gateway[PROPERTY_VALUE_MAX];

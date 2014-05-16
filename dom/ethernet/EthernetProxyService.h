@@ -29,7 +29,6 @@ public:
   static already_AddRefed<EthernetProxyService>
   FactoryCreate();
 
-  // void DispatchEthernetEvent(const nsAString& aEvent, const nsACString& aInterface);
   void DispatchEthernetResult(const mozilla::dom::EthernetResultOptions& aOptions,
                           const nsACString& aInterface);
 

@@ -14,16 +14,24 @@ interface nsIDOMEthernetManager : nsISupports
   void enable();
   void disable();
 
-  void connect();
-  void disconnect();
+  void setdhcp(in boolean dhcp);
+  void setstaticipconfig(in jsval config);
+  void setaddr(in string addr);
+  void setnetmask(in string mask);
+  void setgateway(in string gateway);
+  void setdns1(in string dns1);
+  void setdns2(in string dns2);
 
+  readonly attribute boolean    present;
   readonly attribute boolean    enabled;
+  readonly attribute boolean    dhcp;
   readonly attribute boolean    connected;
   readonly attribute jsval      connection;
+  readonly attribute jsval      staticconfig;
 
   attribute nsIDOMEventListener onenabledchanged;
+  attribute nsIDOMEventListener ondhcpchanged;
   attribute nsIDOMEventListener onconnectedchanged;
-  attribute nsIDOMEventListener connectionupdated;
-  /*attribute jsval onenabledchange;
-  attribute jsval onconnectedchange;*/
+  attribute nsIDOMEventListener onconnectionupdated;
+  attribute nsIDOMEventListener onstaticonfigchanged;
 };

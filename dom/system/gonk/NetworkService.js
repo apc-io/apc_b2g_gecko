@@ -178,10 +178,6 @@ NetworkService.prototype = {
     params.isAsync = true;
 
     this.controlMessage(params, function(result) {
-      debug("Got the result from net_worker for cable stats" + result);
-      for (let k in result) {
-        debug("--- result." + k + ": " + result[k]);
-      }
       let success = result.resultCode >= NETD_COMMAND_OKAY && result.resultCode < NETD_COMMAND_ERROR;
       callback.interfaceCfgAvailable(success, result);
     });
