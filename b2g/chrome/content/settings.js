@@ -158,6 +158,8 @@ Components.utils.import('resource://gre/modules/ctypes.jsm');
     product_model = libcutils.property_get('ro.product.model');
 #endif
 
+  // for VIA devices
+  os_version = libcutils.property_get('ro.via.version');
   let software = os_name + ' ' + os_version;
   let setting = {
     'deviceinfo.os': os_version,
