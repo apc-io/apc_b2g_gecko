@@ -323,7 +323,7 @@ XPCOMUtils.defineLazyGetter(this, "gProductModel", function aus_gProductModel() 
 // this is used for APC 8950 only, since Via uses buildTags for system version
 XPCOMUtils.defineLazyGetter(this, "gBuildTags", function aus_gBuildTags() {
   Cu.import("resource://gre/modules/systemlibs.js");
-  return libcutils.property_get("ro.build.tags");
+  return libcutils.property_get("ro.via.version");
 });
 #endif
 
@@ -2651,9 +2651,8 @@ UpdateService.prototype = {
 
     updates.forEach(function(aUpdate) {
       if (aUpdate.isOSUpdate) {
-        // this comparison is used for VIA APC 8950 only
-        if (vc.compare(aUpdate.displayVersion, gBuildTags) < 0 ||
-            vc.compare(aUpdate.displayVersion, gBuildTags) == 0) {
+        // this comparison is used for VIA APC 8880 only
+        if (vc.compare(aUpdate.displayVersion, gBuildTags) <= 0) {
           return;
         } else {
           // this is for the appVersion comparing, since appVersion is usless with system update, we'll fake it here.

@@ -533,7 +533,7 @@ pref("app.update.service.enabled", true);
 // The URL hosting the update manifest.
 pref("app.update.url", "http://update.boot2gecko.org/%CHANNEL%/update.xml");
 pref("app.update.channel", "@MOZ_UPDATE_CHANNEL@");
-pref("app.update.url.override", "http://apc.io/media/apc/library/8950-A/B2GOTA/update.xml");
+pref("app.update.url.override", "http://apc.io/media/apc/library/8980-A/B2GOTA/update.xml");
 
 // Interval at which update manifest is fetched.  In units of seconds.
 pref("app.update.interval", 86400); // 1 day
