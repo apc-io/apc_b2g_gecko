@@ -808,6 +808,7 @@ this.EthernetSettingsCallBack = {
   _doHandleUseDhcp: function(dhcp) {
     debug("This handle use dhcp: seem we do not need to do anything?, may be some trigger is needed!");
     debug("======= btw, dhcp = " + dhcp);
+    EthernetBackend.callbackObj.onDhcpChanged(dhcp);
   },
 
   _doHandleStaticIpConfigReady: function(config) {

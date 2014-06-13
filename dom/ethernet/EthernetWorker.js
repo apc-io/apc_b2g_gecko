@@ -100,7 +100,10 @@ EthernetWorker.prototype = {
         var stats = {
           present: true,
           enabled: EthernetUtil.getEnabled(),
-          connected: EthernetUtil.getConnected()
+          connected: EthernetUtil.getConnected(),
+          dhcp: EthernetUtil.getDhcp(),
+          connection: EthernetUtil.getConnection(),
+          staticconfig: EthernetUtil.getStaticConfig()
         };
 
         return stats;
@@ -196,6 +199,11 @@ EthernetWorker.prototype = {
     } else {
       this._fireEvent(EthernetMessage.ONDISCONNECTED, {});
     }
+  },
+
+  onDhcpChanged: function(dhcp) {
+    debug("--- ok, dhcp is changed to " + dhcp);
+    this._fireEvent(EthernetMessage.ONDHCPCHANGED, dhcp);
   }
 };
 

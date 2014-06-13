@@ -156,6 +156,20 @@ this.EthernetUtil = {
     return EthernetBackend.connected;
   },
 
+  getDhcp: function EthernetUtil_getDhcp() {
+    debug("get dhcp = " + EthernetSettings.useDhcp);
+    return EthernetSettings.useDhcp;
+  },
+
+  getConnection: function EthernetUtil_getConnection() {
+    return EthernetIfUtils.getInterface(kDefaultEthernetNetworkIface);
+  },
+
+  getStaticConfig: function EthernetUtil_getStaticConfig() {
+    debug("get static config" + StaticIPConfig);
+    return StaticIPConfig;
+  },
+
   setCallbackObject: function EthernetUtil_setCallbackObject(obj) {
     EthernetBackend.callbackObj = obj;
   },

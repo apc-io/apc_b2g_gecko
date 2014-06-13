@@ -104,6 +104,8 @@ DOMEthernetManager.prototype = {
     this._onEnabledChanged = null;
     this._onConnectedChanged = null;
     this._onConnectionUpdated = null;
+    this._onDhcpChanged = null;
+    this._onStaticConfigUpdated = null;
 
     // this is the messages we used to communicate between this DOM Element and EthernetWorker (the manager backend)
     const messages = [EthernetMessage.GETPRESENT,         EthernetMessage.GETSTATS,
@@ -142,7 +144,10 @@ DOMEthernetManager.prototype = {
     }
     this._present = stats.present;
     this._enabled = stats.enabled;
+    this._dhcp = stats.dhcp;
     this._connected = stats.connected;
+    this._connection = stats.connection;
+    this._staticconfig = stats.staticconfig;
   },
 
   uninit: function() {
@@ -182,6 +187,11 @@ DOMEthernetManager.prototype = {
         this._enabled = false;
         var evt = new this._window.Event("EthernetDisabled");
         this._onEnabledChanged.handleEvent(evt);
+        break;
+      case EthernetMessage.ONDHCPCHANGED:
+        this._dhcp = msg.data;
+        var evt = new this._window.Event("EthernetDhcpChanged");
+        this._onDhcpChanged.handleEvent(evt);
         break;
     }
   },
@@ -289,6 +299,12 @@ DOMEthernetManager.prototype = {
     // return this._enabled;
   },
 
+  get dhcp() {
+    debug("get dhcp");
+    this._checkPermission();
+    return this._dhcp;
+  },
+
   get connected() {
     debug("get connected = " + this._connected);
     if (!this._hasPrivileges)
@@ -311,6 +327,12 @@ DOMEthernetManager.prototype = {
     return this._present;
   },
 
+  get staticconfig() {
+    debug("Get staticconfig");
+    this._checkPermission();
+    return this._staticconfig;
+  },
+
   set onenabledchanged(callback) {
     if (!this._hasPrivileges)
       throw new Components.Exception("Denied", Cr.NS_ERROR_FAILURE);
@@ -330,6 +352,18 @@ DOMEthernetManager.prototype = {
       throw new Components.Exception("Denied", Cr.NS_ERROR_FAILURE);
     debug("Well, settings the callback for onconnectionupdated: " + callback);
     this._onConnectionUpdated = callback;
+  },
+
+  set ondhcpchanged(callback) {
+    debug("Setting callback for ondhcpchanged");
+    this._checkPermission();
+    this._onDhcpChanged = callback;
+  },
+
+  set onstaticconfigupdated(callback) {
+    debug("Setting callback for onstaticconfigupdated");
+    this._checkPermission();
+    this._onStaticConfigUpdated = callback;
   }
 };
 
