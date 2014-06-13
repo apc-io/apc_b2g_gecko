@@ -28,12 +28,16 @@ interface nsIDOMEthernetManager : nsISupports
 
   readonly attribute boolean    present;
   readonly attribute boolean    enabled;
+  readonly attribute boolean    dhcp;
   readonly attribute boolean    connected;
   readonly attribute jsval      connection;
+  readonly attribute jsval      staticconfig;
 
   attribute nsIDOMEventListener onenabledchanged;
+  attribute nsIDOMEventListener ondhcpchanged;
   attribute nsIDOMEventListener onconnectedchanged;
-  attribute nsIDOMEventListener connectionupdated;
+  attribute nsIDOMEventListener onconnectionupdated;
+  attribute nsIDOMEventListener onstaticonfigchanged;
   /*attribute jsval onenabledchange;
   attribute jsval onconnectedchange;*/
 };

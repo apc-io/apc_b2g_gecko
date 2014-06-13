@@ -246,7 +246,7 @@ this.EthernetBackend = {
 
     iface.needRenew = false;
 
-    if (iface.useDhcp) {
+    if (EthernetSettings.useDhcp) {
       EthernetDHCPHelper.dhcpDoRenew(ifname, NetUtilsCallbacks.onDhcpConnected);
     } else {
       EthernetDHCPHelper.dhcpStop(ifname, NetUtilsCallbacks.onStaticIpDoRenew);

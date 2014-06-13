@@ -94,8 +94,8 @@ this.EthernetUtil = {
     // EthernetBackend.useDhcpcd = enabled;
     // // EthernetIfUtils.updateUseDhcp(enabled, kDefaultEthernetNetworkIface);
     // // this.connect();
-    EthernetBackend.renewInterface(kDefaultEthernetNetworkIface);
     EthernetSettings.saveUseDhcp(enabled);
+    EthernetBackend.renewInterface(kDefaultEthernetNetworkIface);
   },
 
   setstaticipconfig: function EthernetUtil_setstaticipconfig(config) {
