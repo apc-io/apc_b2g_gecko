@@ -1,0 +1,23 @@
+# -*- Mode: python; c-basic-offset: 4; indent-tabs-mode: nil; tab-width: 40 -*-
+# vim: set filetype=python:
+
+XPIDL_SOURCES += [
+    'nsIDOMHotkeyManager.idl',
+    'nsIHotkeyService.idl'
+]
+
+XPIDL_MODULE = 'dom_hotkeymanager'
+
+EXTRA_COMPONENTS += [
+    'DOMHotkeyManager.js',
+    'DOMHotkeyManager.manifest',
+    'HotkeyService.js',
+    'HotkeyService.manifest',
+]
+
+EXTRA_JS_MODULES += [
+    'HotkeyServiceConstants.jsm',
+]
+
+FINAL_LIBRARY = 'xul'
+

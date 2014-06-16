@@ -1,0 +1,4 @@
+# DOMHotkeyManager.js
+component {f0616ef4-ee47-47d7-affe-904bcb06e381} DOMHotkeyManager.js
+contract @mozilla.org/hotkeymanager;1 {f0616ef4-ee47-47d7-affe-904bcb06e381}
+category JavaScript-navigator-property mozHotkeyManager @mozilla.org/hotkeymanager;1

@@ -78,6 +78,13 @@ XPCOMUtils.defineLazyServiceGetter(Services, 'mouseController',
                                   'nsIMouseController');
 #endif
 
+// XPCOMUtils.defineLazyServiceGetter(Services, 'hotkeyService',
+//                                   '@mozilla.org/widget/hotkeyservice;1',
+//                                   'nsIHotkeyService');
+XPCOMUtils.defineLazyServiceGetter(Services, 'hotkeyService',
+                                  '@mozilla.org/hotkeyservice;1',
+                                  'nsIHotkeyService');
+
 function getContentWindow() {
   return shell.contentBrowser.contentWindow;
 }
@@ -93,6 +100,8 @@ function debugCrashReport(aStr) {
 #else
 function debugCrashReport(aStr) {}
 #endif
+
+Services.hotkeyService.init();
 
 var shell = {
 
@@ -417,19 +426,25 @@ var shell = {
   // xxx-button-release instead.
   filterHardwareKeys: function shell_filterHardwareKeys(evt) {
     var type;
+    debug("___ keycode is " + evt.keyCode);
     switch (evt.keyCode) {
       //case evt.DOM_VK_HOME:
-      case evt.DOM_VK_META:         //Home button
+      // case evt.DOM_VK_META:         //Home button
+      case Services.hotkeyService.homeKey:
         type = 'home-button';
         break;
       case evt.DOM_VK_SLEEP:        // Sleep button
       // case evt.DOM_VK_END:          // On desktop we don't have a sleep button
         type = 'sleep-button';
         break;
-      case evt.DOM_VK_PAGE_UP:      // Volume up button
+      // case evt.DOM_VK_PAGE_UP:      // Volume up button
+      case Services.hotkeyService.volumeUpKey:
+        debug("Volume up key");
         type = 'volume-up-button';
         break;
-      case evt.DOM_VK_PAGE_DOWN:    // Volume down button
+      // case evt.DOM_VK_PAGE_DOWN:    // Volume down button
+      case Services.hotkeyService.volumeDownKey:
+        debug("Volume down key");
         type = 'volume-down-button';
         break;
       case evt.DOM_VK_ESCAPE:       // Back button (should be disabled)

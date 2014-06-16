@@ -1,0 +1,25 @@
+/* -*- Mode: IDL; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+
+[scriptable, uuid(d5b0327e-f467-4977-b66a-2ba7f966f507)]
+interface nsIHotkeyService: nsISupports
+{
+  readonly attribute long homeKey;
+  readonly attribute long muteKey;
+  readonly attribute long volumeUpKey;
+  readonly attribute long volumeDownKey;
+
+  void init();
+  void beginEditHotkey();
+  void endEditHotkey();
+
+/*  void setHomeKey(in unsigned long key);
+  void setMuteKey(in unsigned long key);
+  void setVolumeUpKey(in unsigned long key);
+  void setVolumeDownKey(in unsigned long key);*/
+};

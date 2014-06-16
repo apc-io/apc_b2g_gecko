@@ -179,6 +179,7 @@
 @BINPATH@/components/dom_media.xpt
 @BINPATH@/components/dom_network.xpt
 @BINPATH@/components/dom_ethernet.xpt
+@BINPATH@/components/dom_hotkeymanager.xpt
 #ifdef MOZ_NFC
 @BINPATH@/components/dom_nfc.xpt
 #endif
@@ -418,6 +419,10 @@
 @BINPATH@/components/DOMEthernetManager.manifest
 @BINPATH@/components/EthernetWorker.js
 @BINPATH@/components/EthernetWorker.manifest
+@BINPATH@/components/DOMHotkeyManager.js
+@BINPATH@/components/DOMHotkeyManager.manifest
+@BINPATH@/components/HotkeyService.js
+@BINPATH@/components/HotkeyService.manifest
 #endif // MOZ_WIDGET_GONK
 
 ; RIL
