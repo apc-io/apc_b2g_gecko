@@ -426,7 +426,6 @@ var shell = {
   // xxx-button-release instead.
   filterHardwareKeys: function shell_filterHardwareKeys(evt) {
     var type;
-    debug("___ keycode is " + evt.keyCode);
     switch (evt.keyCode) {
       //case evt.DOM_VK_HOME:
       // case evt.DOM_VK_META:         //Home button
@@ -446,6 +445,9 @@ var shell = {
       case Services.hotkeyService.volumeDownKey:
         debug("Volume down key");
         type = 'volume-down-button';
+        break;
+      case Services.hotkeyService.muteKey: // to trigger mute/unmute event
+        type = 'mute-button';
         break;
       case evt.DOM_VK_ESCAPE:       // Back button (should be disabled)
         type = 'back-button';
