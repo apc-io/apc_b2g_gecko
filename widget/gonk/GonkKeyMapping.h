@@ -116,8 +116,8 @@ static const unsigned long kKeyMapping[] = {
     0, // MEDIA_REWIND
     0, // MEDIA_FAST_FORWARD
     0, // MUTE
-    0, // PAGE_UP
-    0, // PAGE_DOWN
+    NS_VK_PAGE_UP, // PAGE_UP
+    NS_VK_PAGE_DOWN, // PAGE_DOWN
     0, // PICTSYMBOLS
     0, // SWITCH_CHARSET
     0, // BUTTON_A
