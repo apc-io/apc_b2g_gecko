@@ -14,7 +14,7 @@ XPCOMUtils.defineLazyServiceGetter(this, "gSettingsService",
 const DOMHOTKEYMANAGER_CONTRACTID = "@mozilla.org/hotkeymanager;1";
 const DOMHOTKEYMANAGER_CID        = Components.ID("{f0616ef4-ee47-47d7-affe-904bcb06e381}");
 
-const DEBUG = true; // set to false to suppress debug messages
+const DEBUG = false; // set to false to suppress debug messages
 
 
 function DOMHotkeyManager() {

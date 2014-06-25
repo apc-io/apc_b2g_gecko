@@ -26,7 +26,7 @@ const kMuteKey = "hotkey.mute";
 const kVolumeUpKey = "hotkey.volumeUp";
 const kVolumeDownKey = "hotkey.volumeDown";
 
-const DEBUG = true; // set to false to suppress debug messages
+const DEBUG = false; // set to false to suppress debug messages
 
 function HotkeyService() {
     // setting up message listeners

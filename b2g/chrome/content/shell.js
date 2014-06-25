@@ -438,12 +438,10 @@ var shell = {
         break;
       // case evt.DOM_VK_PAGE_UP:      // Volume up button
       case Services.hotkeyService.volumeUpKey:
-        debug("Volume up key");
         type = 'volume-up-button';
         break;
       // case evt.DOM_VK_PAGE_DOWN:    // Volume down button
       case Services.hotkeyService.volumeDownKey:
-        debug("Volume down key");
         type = 'volume-down-button';
         break;
       case Services.hotkeyService.muteKey: // to trigger mute/unmute event
