@@ -2651,8 +2651,10 @@ UpdateService.prototype = {
 
     updates.forEach(function(aUpdate) {
       if (aUpdate.isOSUpdate) {
-        // this comparison is used for VIA APC 8880 only
-        if (vc.compare(aUpdate.displayVersion, gBuildTags) <= 0) {
+        // this comparison is used for VIA APC 8880 only. Standard version comparator does not work well with VIA version rule
+        // i.e: 140Av100 &gt 140Av100-10 while we expected it should be &lt.
+        // if (vc.compare(aUpdate.displayVersion, gBuildTags) <= 0) {
+        if (aUpdate.displayVersion <= gBuildTags) {
           return;
         } else {
           // this is for the appVersion comparing, since appVersion is usless with system update, we'll fake it here.
